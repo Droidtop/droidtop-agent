@@ -363,16 +363,26 @@ pub fn connect(key: &DeviceKey, peer: &PeerId, candidates: &[SocketAddr], timeou
     if candidates.is_empty() {
         return Err(io::Error::new(io::ErrorKind::NotFound, "no endpoint is known for the computer"));
     }
-    let v6 = candidates.iter().any(SocketAddr::is_ipv6);
-    let udp = UdpSocket::bind(if v6 { "[::]:0" } else { "0.0.0.0:0" })?;
+    // A dual-stack socket when an IPv6 endpoint is among them; a network
+    // with IPv6 switched off refuses that, and then the IPv4 ones are tried.
+    let dual = candidates.iter().any(SocketAddr::is_ipv6).then(|| UdpSocket::bind("[::]:0").ok()).flatten();
+    let v6 = dual.is_some();
+    let udp = match dual {
+        Some(udp) => udp,
+        None => UdpSocket::bind("0.0.0.0:0")?,
+    };
     udp.set_read_timeout(Some(Duration::from_millis(5)))?;
     let targets: Vec<SocketAddr> = candidates
         .iter()
+        .filter(|c| v6 || c.is_ipv4())
         .map(|c| match (v6, c) {
             (true, SocketAddr::V4(a)) => SocketAddr::new(a.ip().to_ipv6_mapped().into(), a.port()),
             _ => *c,
         })
         .collect();
+    if targets.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::Unsupported, "this network has no IPv6, and the computer has only IPv6 endpoints"));
+    }
     let mut session = Session::new(tunn_for(key, peer)?, targets[0], true);
     let (stream, app) = stream_pair();
     session.app = Some(app);

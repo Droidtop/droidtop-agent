@@ -235,7 +235,16 @@ marks on a game are shared.
 - **Shared marks:** favourite, hidden, completion state, rating, notes, tags
   and collections. Each field is last-writer-wins on a hybrid logical clock
   (wall time, counter, device id), so a mark made on either side lands on both
-  and a later mark beats an earlier one.
+  and a later mark beats an earlier one. droidtop carries `favourite`,
+  `hidden` and `completed` (booleans) today.
+  - Before each exchange droidtop reports every mark it keeps on its own
+    games, unset ones included. Only a mark that differs from the shared one
+    becomes a change (`Library::note_marks`); unset, absent, false, zero and
+    empty all count as the same. So a mark that arrived from elsewhere and
+    was written into droidtop's library is not sent back with a newer stamp.
+  - After it, the core names the shared marks that differ from what droidtop
+    reported (`Library::marks_to_write`), and droidtop writes them into its
+    own library.
 - **Play time:** each device reports its own total and last played time. A
   game's total is the sum, and its last played time is the latest. Nothing
   overwrites another device's numbers.
@@ -334,6 +343,11 @@ share only ever sees ciphertext.
      once and keeps the one that answers. The computer answers only keys it
      has pinned. Hole punching through two NATs needs both sides to learn
      their public endpoint at the same moment; that waits on decision 4.
+   - droidtop keeps the endpoints from the last `hello` with the computer
+     and passes them with its LAN addresses on every call; a call tries the
+     LAN addresses, then the LAN broadcast, then the endpoints. A network
+     without IPv6 tries only the IPv4 ones. An address reached through the
+     tunnel is not remembered as a LAN address.
 3. **The person's own cloud share, store and forward.** A folder that the
    person's own sync tool already carries to both devices: Google Drive,
    OneDrive or Dropbox clients, Nextcloud, a Syncthing folder they already run,
@@ -342,7 +356,28 @@ share only ever sees ciphertext.
    is sealed with X25519 between the two identities and ChaCha20-Poly1305,
    and holds save files, library changes or context changes. The other side
    applies and deletes them when they arrive. This is the path when the two
-   are never online at the same time. A WebDAV share, reached directly by
+   are never online at the same time.
+   - **Library letters** carry the changes the recipient has not had, by the
+     same cursor as a live exchange. The agent leaves them once a minute; the
+     handheld leaves its own and opens the computer's when a library sync
+     finds the computer away.
+   - **Save letters** go one way, handheld to computer, after a game ends
+     with the computer away. A letter holds the whole save set and the set
+     it was made against: the live baseline, or the set posted before it
+     when no live sync has settled that one yet. The computer applies it only
+     while its own files still match that set (or already equal the letter),
+     and otherwise keeps it in its archive and answers with a refusal the
+     handheld shows. The handheld learns where a game's saves are only from
+     a live sync (it keeps the computer's answer beside the baseline), so a
+     game never synced live is not posted.
+   - **droidtop reaches the share through Android's document picker**, which
+     the core cannot open. It keeps two folders of its own with the share's
+     layout: one it fills from the share before the call (`inbox`) and one
+     the core writes into and droidtop empties into the share after it
+     (`outbox`). The core seals, opens and applies; droidtop only moves
+     files, and deletes from the share only letters the core has opened.
+
+   A WebDAV share, reached directly by
    both, is the next backend. Credentials for any share are the person's own,
    entered through droidtop's in-app sign-in helper and stored with
    `KeystoreSecretCipher`; nothing that authenticates ships in either program.

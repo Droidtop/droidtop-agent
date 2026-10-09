@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::channel::Channel;
+use crate::keys::{DeviceKey, PeerId};
+use crate::mailbox::{self, Envelope};
 use crate::manifest::{self, FileEntry, Manifest};
 use crate::proto::{GameRef, Request, Response, CHUNK};
 use crate::saves::{self, Roots, SaveSpec, PART_SUFFIX};
@@ -115,6 +117,18 @@ pub struct SaveSyncRequest<'a> {
     pub choice: Option<Side>,
 }
 
+/// Where the computer's save locations for a game are kept beside its
+/// baseline, so its saves can be left in the share when it is away.
+pub fn spec_path(baseline: &Path) -> PathBuf {
+    baseline.with_extension("spec.json")
+}
+
+/// The save set last left in the share for the computer, kept until a live
+/// sync settles both sides again.
+pub fn posted_path(baseline: &Path) -> PathBuf {
+    baseline.with_extension("posted.json")
+}
+
 fn load_baseline(path: &Path) -> Option<Manifest> {
     let bytes = fs::read(path).ok()?;
     let entries: Vec<FileEntry> = serde_json::from_slice(&bytes).ok()?;
@@ -146,6 +160,14 @@ pub fn sync<S: Read + Write>(ch: &mut Channel<S>, req: &SaveSyncRequest) -> Resu
         other => return Err(protocol(format!("expected a save spec, got {other:?}"))),
     };
     let Some(spec) = spec else { return Ok(Outcome::NoSpec) };
+    // Kept for a save set left in the share while the computer is away; a
+    // failure to keep it only means that path waits for the next live sync.
+    if let Ok(bytes) = serde_json::to_vec(&spec) {
+        if let Some(parent) = req.baseline_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(spec_path(req.baseline_path), bytes);
+    }
     let baseline = load_baseline(req.baseline_path);
     let here = manifest::build(saves::collect(&spec, req.roots), baseline.as_ref().unwrap_or(&Manifest::new()));
     let there = match ask(ch, &Request::SaveManifest { game: req.game.clone() })? {
@@ -177,7 +199,60 @@ pub fn sync<S: Read + Write>(ch: &mut Channel<S>, req: &SaveSyncRequest) -> Resu
         };
     }
     save_baseline(req.baseline_path, &base)?;
+    if result.is_ok() {
+        // Both sides are settled live, so a set left in the share earlier
+        // is no longer what the computer is assumed to have.
+        let _ = fs::remove_file(posted_path(req.baseline_path));
+    }
     result
+}
+
+/// What leaving a game's saves in the share did.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Posted {
+    /// No live sync with the computer has said where the game's saves are,
+    /// or settled a baseline, yet.
+    NotYet,
+    /// The saves match what the computer has or was last sent.
+    UpToDate {
+        files: usize,
+    },
+    Posted {
+        files: usize,
+        bytes: u64,
+    },
+}
+
+/// Leaves [`game`]'s saves in [`share`] for the computer [`to`] when they
+/// changed since the computer last had them (docs/DESIGN.md section 10,
+/// transport 3). The set states the files it was made against: the last
+/// live baseline, or the set posted before it when that one has not been
+/// settled live yet. The computer applies it only while its own saves still
+/// match that, so a change on both sides stays a conflict for the next live
+/// sync instead of being overwritten.
+pub fn post_to_share(share: &Path, key: &DeviceKey, to: &PeerId, game: &GameRef, roots: &Roots, baseline_path: &Path) -> Result<Posted> {
+    let spec: Option<SaveSpec> = fs::read(spec_path(baseline_path)).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let posted = posted_path(baseline_path);
+    let (Some(spec), Some(base)) = (spec, load_baseline(&posted).or_else(|| load_baseline(baseline_path))) else {
+        return Ok(Posted::NotYet);
+    };
+    let mut files = Vec::new();
+    let mut contents = Vec::new();
+    for (name, path) in saves::collect(&spec, roots) {
+        let (Ok(bytes), Ok(mtime_ms)) = (fs::read(&path), manifest::mtime_ms(&path)) else { continue };
+        files.push(FileEntry { name, size: bytes.len() as u64, mtime_ms, sha256: crate::hex::encode(&Sha256::digest(&bytes)) });
+        contents.push(bytes);
+    }
+    let here = manifest::from_entries(files.clone());
+    if manifest::same(&here, &base) {
+        return Ok(Posted::UpToDate { files: here.len() });
+    }
+    let bytes = contents.iter().map(|c| c.len() as u64).sum();
+    let envelope = Envelope::Saves { game: game.clone(), base: base.into_values().collect(), files };
+    mailbox::post(share, key, to, &mailbox::pack(&envelope, &contents)?)?;
+    save_baseline(&posted, &here)?;
+    Ok(Posted::Posted { files: here.len(), bytes })
 }
 
 #[allow(clippy::too_many_arguments)]

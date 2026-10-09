@@ -15,7 +15,8 @@ use droidtop_agent_core::channel::Channel;
 use droidtop_agent_core::context::{baseline_when_deferred, merge, ContextDecl, Records};
 use droidtop_agent_core::discovery::{self, Announce};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
-use droidtop_agent_core::library::{Cursor, Library, ScannedGame};
+use droidtop_agent_core::library::{Cursor, Library, Marks, ScannedGame};
+use droidtop_agent_core::mailbox::{self, Envelope};
 use droidtop_agent_core::pairing::{self, PairInvite};
 use droidtop_agent_core::proto::{GameRef, Request, Response};
 use droidtop_agent_core::saves::{prefix_roots, Roots};
@@ -44,6 +45,8 @@ pub fn call(op: &str, args: &str) -> String {
         "sync_saves" => sync_saves(&args),
         "sync_library" => sync_library(&args),
         "sync_context" => sync_context(&args),
+        "share_library" => share_library(&args),
+        "share_post_saves" => share_post_saves(&args),
         other => Err(Failure::Error(format!("unknown operation {other}"))),
     };
     match result {
@@ -322,17 +325,25 @@ struct SavesArgs {
     choice: Option<Side>,
 }
 
+impl SavesArgs {
+    /// This device's folder for each token, for this game.
+    fn roots(&self) -> Roots {
+        let mut roots = match (&self.prefix, &self.user) {
+            (Some(prefix), Some(user)) => prefix_roots(prefix, user),
+            _ => Roots::new(),
+        };
+        if let Some(base) = &self.base {
+            roots.insert("<base>".into(), base.clone());
+        }
+        roots.extend(self.roots.clone());
+        roots
+    }
+}
+
 fn sync_saves(args: &Value) -> Outcome {
     let key = key_of(args)?;
     let a: SavesArgs = serde_json::from_value(args.clone())?;
-    let mut roots = match (&a.prefix, &a.user) {
-        (Some(prefix), Some(user)) => prefix_roots(prefix, user),
-        _ => Roots::new(),
-    };
-    if let Some(base) = &a.base {
-        roots.insert("<base>".into(), base.clone());
-    }
-    roots.extend(a.roots.clone());
+    let roots = a.roots();
     let mut s = connect(&key, args)?;
     let request =
         SaveSyncRequest { game: a.game.clone(), roots: &roots, baseline_path: &a.baseline, archive_dir: &a.archive, choice: a.choice };
@@ -344,17 +355,45 @@ fn sync_saves(args: &Value) -> Outcome {
 
 // Library --------------------------------------------------------------------
 
+/// This device's side of a library exchange, read before anything travels:
+/// what it has installed and the marks it keeps on those games (favourite,
+/// hidden, completed), recorded in the core's library file.
+struct LocalLibrary {
+    lib: Library,
+    state: PathBuf,
+    marks: Marks,
+}
+
+impl LocalLibrary {
+    fn read(key: &DeviceKey, args: &Value) -> Result<LocalLibrary, Failure> {
+        let me = key.peer_id();
+        let state = PathBuf::from(args["state"].as_str().ok_or_else(|| Failure::Error("no library file was given".into()))?);
+        let name = args["name"].as_str().unwrap_or("droidtop").to_string();
+        let scan: Vec<ScannedGame> = serde_json::from_value(args["scan"].clone()).unwrap_or_default();
+        let marks: Marks = serde_json::from_value(args["marks"].clone()).unwrap_or_default();
+        let mut lib = Library::load(&state).map_err(|e| Failure::Error(e.to_string()))?;
+        lib.update_device(&me, &name, scan);
+        lib.note_marks(&me, &marks);
+        lib.save(&state).map_err(|e| Failure::Error(e.to_string()))?;
+        Ok(LocalLibrary { lib, state, marks })
+    }
+
+    fn save(&self) -> Result<(), Failure> {
+        self.lib.save(&self.state).map_err(|e| Failure::Error(e.to_string()))
+    }
+
+    /// The marks that arrived from elsewhere, for droidtop to write into its own library.
+    fn to_write(&self) -> Value {
+        json!(self.lib.marks_to_write(&self.marks))
+    }
+}
+
 fn sync_library(args: &Value) -> Outcome {
     let key = key_of(args)?;
-    let me = key.peer_id();
-    let state = PathBuf::from(args["state"].as_str().ok_or_else(|| Failure::Error("no library file was given".into()))?);
-    let name = args["name"].as_str().unwrap_or("droidtop").to_string();
-    let scan: Vec<ScannedGame> = serde_json::from_value(args["scan"].clone()).unwrap_or_default();
     let peer_hex = args["peer"].as_str().unwrap_or_default().to_string();
-    let mut lib = Library::load(&state).map_err(|e| Failure::Error(e.to_string()))?;
-    lib.update_device(&me, &name, scan);
-    lib.save(&state).map_err(|e| Failure::Error(e.to_string()))?;
+    let mut local = LocalLibrary::read(&key, args)?;
     let mut s = connect(&key, args)?;
+    let lib = &mut local.lib;
     let ch = &mut s.ch;
     let cursor: Cursor = lib.cursors.get(&peer_hex).copied().unwrap_or_default();
     let (outgoing, seq) = lib.changes_since(cursor.pushed);
@@ -375,10 +414,74 @@ fn sync_library(args: &Value) -> Outcome {
     };
     let pulled = incoming.iter().filter(|c| lib.apply((*c).clone())).count();
     lib.cursors.insert(peer_hex, Cursor { pulled: their, pushed: seq });
-    lib.save(&state).map_err(|e| Failure::Error(e.to_string()))?;
-    let v = located(json!({ "pushed": pushed, "pulled": pulled }), &s);
+    local.save()?;
+    let v = located(json!({ "pushed": pushed, "pulled": pulled, "marks": local.to_write() }), &s);
     bye(s.ch);
     Ok(v)
+}
+
+// The person's own cloud share ----------------------------------------------
+//
+// droidtop reaches the share through Android's document picker, which the
+// core cannot open, so it keeps two folders of its own that mirror the
+// share's layout (`droidtop-agent/<recipient id>/inbox/`): `inbox`, where it
+// copies what the share holds for this device before the call, and
+// `outbox`, which it copies into the share after it and empties. The core
+// seals, opens and applies; droidtop only moves files.
+
+fn path_arg(args: &Value, name: &str) -> Result<PathBuf, Failure> {
+    args[name].as_str().filter(|p| !p.is_empty()).map(PathBuf::from).ok_or_else(|| Failure::Error(format!("no {name} folder was given")))
+}
+
+/// The library through the share: what the computer left is applied, and
+/// what it has not had yet is left for it. Letters from anyone but this
+/// computer stay where they are.
+fn share_library(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let peer = peer_of(args["peer"].as_str().unwrap_or_default())?;
+    let inbox = path_arg(args, "inbox")?;
+    let outbox = path_arg(args, "outbox")?;
+    let mut local = LocalLibrary::read(&key, args)?;
+    let (letters, _) = mailbox::collect(&inbox, &key, |p| *p == peer).map_err(|e| Failure::Error(e.to_string()))?;
+    let mut applied = 0;
+    let mut done = Vec::new();
+    let mut refused = Vec::new();
+    for letter in letters {
+        match mailbox::unpack(&letter.payload) {
+            Ok((Envelope::Library { changes }, _)) => applied += changes.into_iter().filter(|c| local.lib.apply(c.clone())).count(),
+            Ok((Envelope::SavesRefused { game, reason }, _)) => {
+                refused.push(json!({ "key": game.key, "title": game.title, "reason": reason }))
+            }
+            // A computer leaves no save sets for the handheld: its saves come at the next live sync.
+            Ok((Envelope::Saves { .. }, _)) | Err(_) => {}
+        }
+        if let Some(name) = letter.path.file_name().and_then(|n| n.to_str()) {
+            done.push(name.to_string());
+        }
+        let _ = std::fs::remove_file(&letter.path);
+    }
+    let peer_hex = peer.to_hex();
+    let cursor = local.lib.cursors.get(&peer_hex).copied().unwrap_or_default();
+    let (outgoing, seq) = local.lib.changes_since(cursor.pushed);
+    let posted = outgoing.len();
+    if !outgoing.is_empty() {
+        let payload = mailbox::pack(&Envelope::Library { changes: outgoing }, &[])?;
+        mailbox::post(&outbox, &key, &peer, &payload)?;
+    }
+    local.lib.cursors.entry(peer_hex).or_default().pushed = seq;
+    local.save()?;
+    Ok(json!({ "applied": applied, "posted": posted, "done": done, "refused": refused, "marks": local.to_write() }))
+}
+
+/// A game's saves left in the share for the computer, when they changed
+/// since it last had them (`savesync::post_to_share`).
+fn share_post_saves(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let peer = peer_of(args["peer"].as_str().unwrap_or_default())?;
+    let outbox = path_arg(args, "outbox")?;
+    let a: SavesArgs = serde_json::from_value(args.clone())?;
+    let posted = savesync::post_to_share(&outbox, &key, &peer, &a.game, &a.roots(), &a.baseline)?;
+    Ok(serde_json::to_value(posted)?)
 }
 
 // Plugin contexts ------------------------------------------------------------
@@ -454,6 +557,115 @@ mod tests {
         assert_eq!(waited["name"], "PC");
         assert_eq!(paired.name, "Handheld");
         assert_eq!(paired.peer.to_hex(), handheld["id"].as_str().unwrap());
+    }
+
+    /// A computer reachable only through its WireGuard endpoint, as one away
+    /// from the LAN with a forwarded port or a global IPv6 address is.
+    struct AwayHost {
+        library: Mutex<Library>,
+    }
+
+    impl droidtop_agent_core::server::Host for AwayHost {
+        fn name(&self) -> String {
+            "Away PC".into()
+        }
+        fn endpoints(&self) -> Vec<String> {
+            vec!["wg:203.0.113.7:47611".into()]
+        }
+        fn saves(&self, _game: &GameRef) -> Option<(droidtop_agent_core::saves::SaveSpec, Roots)> {
+            None
+        }
+        fn archive_dir(&self, _game: &GameRef) -> PathBuf {
+            std::env::temp_dir()
+        }
+        fn library_pull(
+            &self,
+            _peer: &PeerId,
+            since: u64,
+        ) -> droidtop_agent_core::Result<(Vec<droidtop_agent_core::library::Change>, u64)> {
+            Ok(self.library.lock().unwrap().changes_since(since))
+        }
+        fn library_push(&self, _peer: &PeerId, changes: Vec<droidtop_agent_core::library::Change>) -> droidtop_agent_core::Result<()> {
+            let mut lib = self.library.lock().unwrap();
+            changes.into_iter().for_each(|c| {
+                lib.apply(c);
+            });
+            Ok(())
+        }
+        fn context_pull(&self, _context: &str) -> droidtop_agent_core::Result<Records> {
+            Ok(Records::new())
+        }
+        fn context_push(
+            &self,
+            _context: &str,
+            _changes: Vec<droidtop_agent_core::context::RecordChange>,
+        ) -> droidtop_agent_core::Result<Option<String>> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn a_computer_only_its_wireguard_endpoint_reaches_still_syncs() {
+        let handheld: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
+        let hh_id = PeerId::from_hex(handheld["id"].as_str().unwrap()).unwrap();
+        let pc = DeviceKey::generate();
+        let pc_id = pc.peer_id();
+        let mut pc_lib = Library::default();
+        pc_lib.update_device(
+            &pc_id,
+            "Away PC",
+            vec![ScannedGame { key: "steam:1".into(), title: "Game".into(), platform: None, install: Default::default() }],
+        );
+        pc_lib.mark(&pc_id, "steam:1", "favourite", json!(true));
+        let host: &'static AwayHost = Box::leak(Box::new(AwayHost { library: Mutex::new(pc_lib) }));
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = udp.local_addr().unwrap().port();
+        let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+        let pc_seed = pc.seed();
+        let server = thread::spawn(move || {
+            tunnel::serve(
+                &pc,
+                udp,
+                move || vec![hh_id],
+                move |peer, mut stream| {
+                    thread::spawn(move || {
+                        let key = DeviceKey::from_seed(&pc_seed).unwrap();
+                        stream.set_read_timeout(Some(Duration::from_secs(20)));
+                        let mut ch = Channel::accept(stream, &key, |p| *p == peer).unwrap();
+                        droidtop_agent_core::server::serve(&mut ch, host).unwrap();
+                    });
+                },
+                stop,
+            )
+            .unwrap();
+        });
+        let state = std::env::temp_dir().join(format!("dta-away-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&state);
+        let out: Value = serde_json::from_str(&call(
+            "sync_library",
+            &json!({
+                "seed": handheld["seed"],
+                "peer": pc_id.to_hex(),
+                // No LAN address answers; only the endpoint the computer gave last time.
+                "addresses": ["127.0.0.1:1", format!("wg:127.0.0.1:{port}")],
+                "state": state,
+                "scan": [{ "key": "steam:1", "title": "Game", "install": { "installed": true } }],
+                "marks": { "steam:1": { "favourite": false, "hidden": false } },
+            })
+            .to_string(),
+        ))
+        .unwrap();
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        let _ = std::fs::remove_file(&state);
+        assert!(out.get("unreachable").is_none() && out.get("error").is_none(), "{out}");
+        assert_eq!(out["computer"], "Away PC");
+        assert!(out.get("address").is_none(), "a tunnel is not a LAN address to remember: {out}");
+        assert_eq!(out["endpoints"], json!(["wg:203.0.113.7:47611"]));
+        assert_eq!(out["pulled"], 2);
+        // The computer's favourite is for droidtop to write; nothing was sent back.
+        assert_eq!(out["marks"], json!({ "steam:1": { "favourite": true } }));
+        assert_eq!(host.library.lock().unwrap().games["steam:1"].installs.len(), 2);
     }
 
     #[test]

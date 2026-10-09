@@ -34,7 +34,16 @@ droidtop-agent --help
 ```
 
 The first time the agent runs, Windows may ask whether it may use the
-network. It listens on port 47610 (TCP and UDP) on your local network.
+network. It listens on port 47610 (TCP and UDP) on your local network, and
+on UDP 47611 for WireGuard from outside it.
+
+Away from home, the handheld reaches the computer through WireGuard when
+the computer's UDP 47611 is reachable: forward it on your router and run
+`droidtop-agent endpoint set <public ip>:47611`, or let a global IPv6
+address through your firewall. The handheld learns these each time the two
+meet. When neither works, `droidtop-agent share set <folder>` names a folder
+your own sync tool carries to the handheld (pick the same folder under
+droidtop's Settings > Computers > Cloud folder).
 
 Save locations come from the [Ludusavi
 manifest](https://github.com/mtkennerly/ludusavi-manifest) (data from

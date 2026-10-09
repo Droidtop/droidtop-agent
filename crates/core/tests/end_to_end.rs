@@ -184,6 +184,75 @@ fn saves_sync_both_ways_and_conflicts_are_the_persons() {
 }
 
 #[test]
+fn saves_left_in_the_share_state_what_they_were_made_against() {
+    use droidtop_agent_core::mailbox::{self, Envelope};
+    use droidtop_agent_core::savesync::{post_to_share, Posted};
+
+    let pc_dir = temp("share-pc");
+    let hh_dir = temp("share-hh");
+    let state = temp("share-state");
+    let share = temp("share-folder");
+    let pc_roots = roots(&pc_dir);
+    let hh_roots = roots(&hh_dir);
+    let pc_game = pc_dir.join("AppData/Roaming/Game");
+    fs::create_dir_all(&pc_game).unwrap();
+    fs::write(pc_game.join("one.sav"), b"pc 1").unwrap();
+    let host: &'static TestHost = Box::leak(Box::new(TestHost {
+        roots: pc_roots,
+        archive: pc_dir.join("archive"),
+        library: Mutex::new(Library::default()),
+        records: Mutex::new(Records::new()),
+        app_running: false,
+    }));
+    let game = GameRef { key: "steam:1".into(), title: "Game".into() };
+    let baseline = state.join("baseline.json");
+    let handheld = DeviceKey::generate();
+    let pc = DeviceKey::generate();
+    let post = || post_to_share(&share, &handheld, &pc.peer_id(), &game, &hh_roots, &baseline).unwrap();
+
+    // Before any live sync the handheld does not know where the saves are.
+    assert_eq!(post(), Posted::NotYet);
+    assert!(matches!(sync(host, &hh_roots, &state, None), Outcome::Copied { from: Side::There, .. }));
+    assert_eq!(post(), Posted::UpToDate { files: 1 });
+
+    // Played while the computer is away: the set goes to the share, made
+    // against the live baseline.
+    let hh_save = hh_dir.join("AppData/Roaming/Game/one.sav");
+    fs::write(&hh_save, b"handheld 2").unwrap();
+    assert!(matches!(post(), Posted::Posted { files: 1, .. }));
+    // Played again before the computer took it: the next set is made
+    // against the one already sent.
+    fs::write(&hh_save, b"handheld 3").unwrap();
+    assert!(matches!(post(), Posted::Posted { files: 1, .. }));
+    let (letters, failed) = mailbox::collect(&share, &pc, |p| *p == handheld.peer_id()).unwrap();
+    assert!(failed.is_empty());
+    let mut sets: Vec<(Vec<String>, Vec<u8>)> = letters
+        .iter()
+        .map(|l| match mailbox::unpack(&l.payload).unwrap() {
+            (Envelope::Saves { base, files, .. }, contents) => {
+                assert_eq!(files.len(), 1);
+                (base.into_iter().map(|e| e.sha256).collect(), contents.to_vec())
+            }
+            (other, _) => panic!("{other:?}"),
+        })
+        .collect();
+    sets.sort_by_key(|(_, c)| c.clone());
+    assert_eq!(sets[0].1, b"handheld 2");
+    assert_eq!(sets[1].1, b"handheld 3");
+    // The second was made against the first.
+    let first_digest = droidtop_agent_core::hex::encode(&<sha2::Sha256 as sha2::Digest>::digest(b"handheld 2"));
+    assert_eq!(sets[1].0, vec![first_digest]);
+
+    // A live sync settles both sides and forgets what was posted.
+    assert!(matches!(sync(host, &hh_roots, &state, None), Outcome::Copied { from: Side::Here, .. }));
+    assert_eq!(post(), Posted::UpToDate { files: 1 });
+
+    for d in [pc_dir, hh_dir, state, share] {
+        let _ = fs::remove_dir_all(d);
+    }
+}
+
+#[test]
 fn library_and_context_travel_over_the_channel() {
     use droidtop_agent_core::proto::{Request, Response};
     use serde_json::json;

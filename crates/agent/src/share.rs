@@ -76,6 +76,11 @@ fn apply_saves(agent: &Agent, game: &GameRef, base: Vec<FileEntry>, files: &[Fil
         blobs.push(blob);
         offset = end;
     }
+    // Already the same here (a live sync got there first): nothing to do,
+    // and nothing to archive.
+    if manifest::same(&current, &manifest::from_entries(files.to_vec())) {
+        return Ok(());
+    }
     let archive = agent.dirs.archive().join(crate::host::file_key(&game.key));
     if !manifest::same(&current, &manifest::from_entries(base)) {
         // Both changed: the incoming set is kept, not applied.

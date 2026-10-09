@@ -309,6 +309,66 @@ impl Library {
         let at = self.tick(device_tag(device));
         self.apply(Change::Mark { game: game.to_string(), field: field.to_string(), value, at })
     }
+
+    /// Records the marks [`device`] has on its own games now (game key, then
+    /// field and value): a mark that differs from the shared one was made
+    /// there since the last exchange, so it becomes a change; one that
+    /// matches moves nothing. Returns how many changes it made.
+    ///
+    /// The device reports every mark it keeps, unset ones included, and only
+    /// a difference is a change. So a mark that arrived from another device
+    /// and was written into the device's own library is not sent back, and
+    /// a mark never set anywhere is not sent at all.
+    pub fn note_marks(&mut self, device: &PeerId, marks: &Marks) -> usize {
+        let mut count = 0;
+        for (game, fields) in marks {
+            for (field, value) in fields {
+                let shared = self.games.get(game).and_then(|r| r.marks.get(field)).map(|m| &m.value);
+                if !same_mark(shared, value) && self.mark(device, game, field, value.clone()) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// The shared marks that differ from what a device reported in
+    /// [`marks`]: what it should write into its own library.
+    pub fn marks_to_write(&self, marks: &Marks) -> Marks {
+        let mut out = Marks::new();
+        for (game, fields) in marks {
+            let Some(record) = self.games.get(game) else { continue };
+            for (field, value) in fields {
+                if let Some(shared) = record.marks.get(field).filter(|m| !same_mark(Some(&m.value), value)) {
+                    out.entry(game.clone()).or_default().insert(field.clone(), shared.value.clone());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A device's marks: game key, then field and value.
+pub type Marks = BTreeMap<String, BTreeMap<String, Value>>;
+
+/// A mark that is not set: null, false, zero or empty.
+fn unset(v: &Value) -> bool {
+    match v {
+        Value::Null => true,
+        Value::Bool(b) => !b,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        Value::String(s) => s.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+    }
+}
+
+/// Whether a device's mark says the same as the shared one (absent counts as unset).
+fn same_mark(shared: Option<&Value>, device: &Value) -> bool {
+    match shared {
+        Some(s) => s == device || (unset(s) && unset(device)),
+        None => unset(device),
+    }
 }
 
 /// The key a game without a store id goes by: its title in lower case with
@@ -366,6 +426,42 @@ mod tests {
             assert!(!a.apply(c));
         }
         assert_eq!(a.seq(), seq);
+    }
+
+    #[test]
+    fn only_marks_that_differ_travel_and_arrivals_are_not_sent_back() {
+        let pc = DeviceKey::generate().peer_id();
+        let hh = DeviceKey::generate().peer_id();
+        let mut handheld = Library::default();
+        let mut computer = Library::default();
+        let report = |fav: bool, hidden: bool| -> Marks {
+            Marks::from([(
+                "steam:1".to_string(),
+                BTreeMap::from([("favourite".to_string(), Value::Bool(fav)), ("hidden".to_string(), Value::Bool(hidden))]),
+            )])
+        };
+        // Nothing set anywhere: nothing to send.
+        assert_eq!(handheld.note_marks(&hh, &report(false, false)), 0);
+        // Favourited on the handheld: one change, and the computer gets it.
+        assert_eq!(handheld.note_marks(&hh, &report(true, false)), 1);
+        for c in handheld.changes_since(0).0 {
+            computer.apply(c);
+        }
+        assert_eq!(computer.games["steam:1"].marks["favourite"].value, Value::Bool(true));
+        // Hidden on another device and relayed here: the handheld is told to write it.
+        computer.mark(&pc, "steam:1", "hidden", Value::Bool(true));
+        for c in computer.changes_since(0).0 {
+            handheld.apply(c);
+        }
+        assert_eq!(
+            handheld.marks_to_write(&report(true, false)),
+            Marks::from([("steam:1".to_string(), BTreeMap::from([("hidden".to_string(), Value::Bool(true))]))])
+        );
+        // Once written there, reporting it changes nothing and sends nothing.
+        let seq = handheld.seq();
+        assert_eq!(handheld.note_marks(&hh, &report(true, true)), 0);
+        assert_eq!(handheld.seq(), seq);
+        assert!(handheld.marks_to_write(&report(true, true)).is_empty());
     }
 
     #[test]
