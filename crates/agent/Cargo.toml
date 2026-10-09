@@ -1,0 +1,32 @@
+[package]
+name = "droidtop-agent"
+description = "The program for your computer that keeps it in step with droidtop on a handheld: games, saves and plugin contexts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "droidtop-agent"
+path = "src/main.rs"
+
+[dependencies]
+droidtop-agent-core = { path = "../core" }
+windowcast-identity.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# The Ludusavi manifest is YAML; it is read once when it is updated and kept
+# as a compact JSON index after that.
+serde_yaml = "0.9"
+# Fetches the Ludusavi manifest when the person asks for it or a save lookup
+# needs it; nothing else in the agent goes to the network on its own.
+ureq = "2"
+# Launcher databases (itch, Amazon, Lutris) and F95Checker's db.sqlite3.
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5"
+gethostname = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"

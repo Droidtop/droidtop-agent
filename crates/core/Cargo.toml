@@ -1,0 +1,21 @@
+[package]
+name = "droidtop-agent-core"
+description = "The part of droidtop-agent both ends share: identity, pairing, the session channel, the protocol and the sync rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+windowcast-identity.workspace = true
+windowcast-pairing.workspace = true
+ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
+snow.workspace = true
+chacha20poly1305.workspace = true
+sha2.workspace = true
+rand_core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

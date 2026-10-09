@@ -1,0 +1,139 @@
+name: CI
+
+# Every push builds and tests the agent on Windows, Linux and macOS and builds
+# droidtop's library for both Android ABIs. A green push to main publishes a
+# release: the computer programs and the Android library droidtop fetches by
+# its pin (docs/DESIGN.md section 12). Releases are permanent history.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            asset: droidtop-agent-linux-x86_64
+            exe: droidtop-agent
+          - os: windows-latest
+            asset: droidtop-agent-windows-x86_64.exe
+            exe: droidtop-agent.exe
+          - os: macos-latest
+            asset: droidtop-agent-macos-arm64
+            exe: droidtop-agent
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Format check
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        if: success() || failure()
+        run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+
+      - name: Test
+        if: success() || failure()
+        run: cargo test --workspace --no-fail-fast
+
+      - name: Build the agent
+        shell: bash
+        run: |
+          cargo build --release -p droidtop-agent
+          mkdir -p dist
+          cp "target/release/${{ matrix.exe }}" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust with the Android targets
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Build libdroidtop_agent.so for arm64-v8a and x86_64
+        # The runner image ships an NDK; droidtop's minSdk is 26, so the
+        # library links against API 26.
+        shell: bash
+        run: |
+          set -eu
+          ndk="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$bin/aarch64-linux-android26-clang"
+          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$bin/x86_64-linux-android26-clang"
+          export CC_aarch64_linux_android="$bin/aarch64-linux-android26-clang"
+          export CC_x86_64_linux_android="$bin/x86_64-linux-android26-clang"
+          export AR_aarch64_linux_android="$bin/llvm-ar"
+          export AR_x86_64_linux_android="$bin/llvm-ar"
+          mkdir -p dist/jniLibs/arm64-v8a dist/jniLibs/x86_64
+          cargo build --release -p droidtop-agent-android --target aarch64-linux-android
+          cargo build --release -p droidtop-agent-android --target x86_64-linux-android
+          cp target/aarch64-linux-android/release/libdroidtop_agent.so dist/jniLibs/arm64-v8a/
+          cp target/x86_64-linux-android/release/libdroidtop_agent.so dist/jniLibs/x86_64/
+          tar -C dist -cf - jniLibs | zstd -19 -q -o dist/droidtop-agent-android.tar.zst
+          sha256sum dist/droidtop-agent-android.tar.zst | tee dist/droidtop-agent-android.tar.zst.sha256
+          ls -l dist/jniLibs/*/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: droidtop-agent-android
+          path: |
+            dist/droidtop-agent-android.tar.zst
+            dist/droidtop-agent-android.tar.zst.sha256
+
+  release:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [test, android]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish this build's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN: ${{ github.run_number }}
+        run: |
+          set -eu
+          tag="build-${RUN}"
+          ls -l dist
+          gh release create "$tag" dist/* --repo "$REPO" --target "$SHA" \
+            --title "Build ${RUN}" \
+            --notes "Built from ${SHA}. droidtop pins droidtop-agent-android.tar.zst by this tag and its SHA-256 (in the .sha256 file). See CHANGELOG.md."
