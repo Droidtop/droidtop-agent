@@ -3,8 +3,10 @@
 //! same key with an HMAC tag over the transcript (both PeerIds and both
 //! names), and pins the other's PeerId.
 //!
-//! The handheld shows the 6-digit code, so it is the SPAKE2 host; the
-//! computer, where the code is typed, is the client and speaks first.
+//! The side that shows the 6-digit code is the SPAKE2 host and listens; the
+//! side the code is typed on is the client, connects and speaks first. The
+//! handheld shows it by default; the computer shows it (`droidtop-agent pair`)
+//! for a handheld it cannot reach, such as one behind an emulator's NAT.
 
 use std::io::{Read, Write};
 
@@ -169,7 +171,7 @@ fn peer_of(hello: &Hello) -> Result<PeerId> {
     Ok(peer)
 }
 
-/// The handheld's side: it shows [`code`]; the computer connected to it.
+/// The side that shows [`code`]; the other side connected to it.
 pub fn pair_host<S: Read + Write>(stream: &mut S, key: &DeviceKey, name: &str, code: &str) -> Result<Paired> {
     let name = clip(name);
     let start = start_host(code);
@@ -187,7 +189,7 @@ pub fn pair_host<S: Read + Write>(stream: &mut S, key: &DeviceKey, name: &str, c
     Ok(Paired { peer: client, name: client_name })
 }
 
-/// The computer's side: the person typed [`code`] there.
+/// The side the person typed [`code`] on.
 pub fn pair_client<S: Read + Write>(stream: &mut S, key: &DeviceKey, name: &str, code: &str) -> Result<Paired> {
     let name = clip(name);
     let start = start_client(code);

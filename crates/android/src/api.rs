@@ -22,7 +22,7 @@ use droidtop_agent_core::proto::{GameRef, Request, Response};
 use droidtop_agent_core::saves::{prefix_roots, Roots};
 use droidtop_agent_core::savesync::{self, SaveSyncRequest, Side};
 use droidtop_agent_core::tunnel::{self, TunnelStream};
-use droidtop_agent_core::{hex, Error, PORT, PROTOCOL_VERSION};
+use droidtop_agent_core::{hex, Error, PAIR_PORT, PORT, PROTOCOL_VERSION};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -37,6 +37,7 @@ pub fn call(op: &str, args: &str) -> String {
         "identity_id" => identity_id(&args),
         "pair_start" => pair_start(&args),
         "pair_wait" => pair_wait(&args),
+        "pair_connect" => pair_connect(&args),
         "pair_cancel" => {
             CANCEL.store(true, Ordering::Relaxed);
             Ok(json!({}))
@@ -176,6 +177,32 @@ fn pair_wait(args: &Value) -> Outcome {
     }
     end(&session);
     Err(Failure::Error(if CANCEL.load(Ordering::Relaxed) { "pairing was cancelled".into() } else { "no computer paired in time".into() }))
+}
+
+/// Pairing the other way round: the computer shows its address and a code
+/// (`droidtop-agent pair` with nothing after it), and this device connects.
+/// For a handheld the computer cannot reach, such as one behind an
+/// emulator's or a guest network's NAT. The computer is then reached at the
+/// same address on the agent's port.
+fn pair_connect(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let name = args["name"].as_str().unwrap_or("droidtop").to_string();
+    let invite = PairInvite::parse(args["code"].as_str().unwrap_or_default())
+        .ok_or_else(|| Failure::Error("the code is the 6 digits the computer shows".into()))?;
+    let typed = args["address"].as_str().map(str::trim).unwrap_or_default();
+    let at = invite.at.as_deref().unwrap_or(typed);
+    let address: SocketAddr = at
+        .parse()
+        .or_else(|_| format!("{at}:{PAIR_PORT}").parse())
+        .map_err(|_| Failure::Error(format!("{at} is not an address such as 192.168.1.20 or 192.168.1.20:{PAIR_PORT}")))?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
+        .map_err(|e| Failure::Unreachable(format!("the computer did not answer at {address} ({e})")))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+    let paired = pairing::pair_client(&mut stream, &key, &name, &invite.code)?;
+    if invite.peer.is_some_and(|p| p != paired.peer) {
+        return Err(Failure::Error("the computer that answered is not the one in the invitation; nothing was paired".into()));
+    }
+    Ok(json!({ "peer": paired.peer.to_hex(), "name": paired.name, "address": SocketAddr::new(address.ip(), PORT).to_string() }))
 }
 
 // Reaching a paired computer -------------------------------------------------
@@ -555,6 +582,30 @@ mod tests {
         let waited: Value = serde_json::from_str(&call("pair_wait", r#"{"timeout_ms": 10000}"#)).unwrap();
         let paired = computer.join().unwrap();
         assert_eq!(waited["name"], "PC");
+        assert_eq!(paired.name, "Handheld");
+        assert_eq!(paired.peer.to_hex(), handheld["id"].as_str().unwrap());
+    }
+
+    #[test]
+    fn pairing_with_the_code_the_computer_shows() {
+        let handheld: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        let pc = DeviceKey::generate();
+        let pc_id = pc.peer_id();
+        let computer = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            pairing::pair_host(&mut s, &pc, "PC", "246810").unwrap()
+        });
+        let out: Value = serde_json::from_str(&call(
+            "pair_connect",
+            &json!({ "seed": handheld["seed"], "name": "Handheld", "address": at.to_string(), "code": "246 810" }).to_string(),
+        ))
+        .unwrap();
+        let paired = computer.join().unwrap();
+        assert_eq!(out["peer"], json!(pc_id.to_hex()), "{out}");
+        assert_eq!(out["name"], "PC");
+        assert_eq!(out["address"], json!(format!("127.0.0.1:{PORT}")));
         assert_eq!(paired.name, "Handheld");
         assert_eq!(paired.peer.to_hex(), handheld["id"].as_str().unwrap());
     }

@@ -28,6 +28,7 @@ The design, and what droidtop already had before it, is in
 
 ```
 droidtop-agent pair 123456      # the code droidtop shows under Settings > Computers > Pair a computer
+droidtop-agent pair             # or: this computer shows its address and a code, typed on the handheld
 droidtop-agent                  # keep it running; the handheld connects when it needs to
 droidtop-agent scan             # what it found on this computer
 droidtop-agent saves steam:440  # where a game's saves are here, and the files

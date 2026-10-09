@@ -6,6 +6,13 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Pairing the other way round: `droidtop-agent pair` with no code shows this
+  computer's addresses and a code, and the handheld connects (for a
+  handheld the computer cannot reach, such as one behind an emulator's
+  NAT). It listens on TCP 47612 while it waits.
+
+## build-10
+
 - Plugin contexts come from context adapters: separate programs a plugin
   publishes, added with `droidtop-agent contexts add <program>`, speaking
   JSON over standard input and output (docs/DESIGN.md section 8). The

@@ -29,6 +29,10 @@ pub use error::{Error, Result};
 /// The agent's TCP port (sessions) and UDP port (discovery) on the LAN.
 pub const PORT: u16 = 47610;
 
+/// The port a computer listens on while it shows a pairing code
+/// (`droidtop-agent pair`), for a handheld it cannot reach itself.
+pub const PAIR_PORT: u16 = 47612;
+
 /// The protocol version both sides state in `hello`.
 pub const PROTOCOL_VERSION: u32 = 1;
 

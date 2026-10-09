@@ -27,6 +27,9 @@ Usage:
   droidtop-agent pair <code>           Pair with a handheld showing a pairing code
                                        (droidtop: Settings > Computers > Pair a computer).
                                        <code> is the 6 digits, or the text of its QR code.
+  droidtop-agent pair                  Show this computer's address and a code to type on the handheld
+                                       (droidtop: Pair a computer > Use a code from the computer),
+                                       for a handheld this computer cannot reach
   droidtop-agent devices               List paired handhelds
   droidtop-agent unpair <id>           Forget a handheld (the start of its id is enough)
   droidtop-agent id                    Show this computer's name and id
@@ -73,6 +76,7 @@ fn main() {
     let result = match words.as_slice() {
         [] | ["run"] => serve::run(agent).map_err(|e| e.to_string()),
         ["pair", rest @ ..] if !rest.is_empty() => pair::pair(&agent, &rest.join(" ")).map(|name| println!("Paired with {name}.")),
+        ["pair"] => pair::show(&agent).map(|name| println!("Paired with {name}.")),
         ["devices"] => {
             devices(&agent);
             Ok(())

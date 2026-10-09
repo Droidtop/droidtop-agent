@@ -137,6 +137,16 @@ follow (decision 1).
   PC nor the Retroid Pocket 5 has a camera. The QR code is there for a computer
   that has one (a laptop webcam) and for a phone acting for the computer
   (decision 2).
+- **The other way round, for a handheld the computer cannot reach**
+  (coordinator, 2026-10-09): one behind an emulator's or a guest network's
+  NAT, where the computer's connection to the handheld would need a port
+  forward. `droidtop-agent pair` with no code makes the computer the SPAKE2
+  host: it listens on TCP 47612 (or any free port), prints its addresses and
+  a new code, and waits up to 10 minutes. On the handheld, Pair a computer >
+  "Use a code from the computer" takes the address and the code and
+  connects (`pair_connect`). The same tags and pins follow, and the handheld
+  keeps the computer's address with the agent's port 47610. Three wrong codes
+  end it.
 
 ## 4. The session channel
 
@@ -478,7 +488,8 @@ and skips folders it cannot read.
    GPL-3.0-only `identity` and `pairing` crates. Relicense those two crates as
    MIT/Apache-2.0 so the agent can be Apache-2.0? Default: stay GPL-3.0-only.
 2. **Pairing input.** The code is typed on the computer, and the QR code
-   serves cameras (laptop webcam, phone). Default: as described.
+   serves cameras (laptop webcam, phone). Decided (coordinator, 2026-10-09):
+   the computer can also show the code and the handheld connect (section 3).
 3. **One identity with windowcast on a computer.** Default: yes, one key file,
    one pairing, once the two share the desktop app.
 4. **Finding endpoints for WireGuard off the LAN.** Default: last-known
