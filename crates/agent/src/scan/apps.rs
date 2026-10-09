@@ -1,5 +1,6 @@
 //! Other programs' state on this computer that droidtop can sync with or
-//! learn from: F95Checker's database (a plugin context), Playnite's library,
+//! learn from: F95Checker's database (synced through a plugin's context
+//! adapter), Playnite's library,
 //! Ludusavi's own settings, launchers and emulators with their save folders.
 //! The scan only says what is there; the context adapters and the save
 //! catalog do the reading.
@@ -42,7 +43,7 @@ pub fn scan(_settings: &Settings) -> Vec<App> {
             "f95checker",
             "F95Checker",
             f95checker_dir().join("db.sqlite3"),
-            "watched threads and versions; synced as the f95checker context",
+            "watched threads; synced through the F95 plugin's context adapter",
         ),
         app("playnite", "Playnite", appdata.join("Playnite/library"), "library in LiteDB; detected only"),
         app("ludusavi", "Ludusavi", ludusavi_config(), "custom games and save paths; used for save locations"),

@@ -46,6 +46,10 @@ Usage:
                                        A folder your own sync tool carries to the handheld,
                                        used when the two are never online together
   droidtop-agent contexts              The plugin contexts this computer can sync
+  droidtop-agent contexts add <program>
+                                       Add a plugin's context adapter (a program its plugin
+                                       publishes, e.g. droidtop-agent-f95-adapter)
+  droidtop-agent contexts remove <context>
   droidtop-agent endpoint [set <ip:port> | clear]
                                        Where this computer's WireGuard port (UDP 47611) answers from
                                        the internet, if you forwarded it on your router; the handheld
@@ -126,15 +130,36 @@ fn main() {
             agent.save_settings().map_err(|e| e.to_string())
         }
         ["contexts"] => {
-            for (id, what) in contexts::KNOWN {
-                let state = match contexts::adapter(id).map(|a| a.pull()) {
+            let adapters = agent.settings.lock().unwrap().adapters.clone();
+            if adapters.is_empty() {
+                println!("No context adapter is added. A plugin that syncs with a program here publishes one: droidtop-agent contexts add <program>");
+            }
+            for id in adapters.keys() {
+                let state = match agent.adapter(id).map(|a| a.pull()) {
                     Some(Ok(records)) => format!("{} records", records.len()),
                     Some(Err(e)) => e,
                     None => "not available".into(),
                 };
-                println!("{id}: {what} ({state})");
+                println!("{id}: {} ({state})", adapters[id].display());
             }
             Ok(())
+        }
+        ["contexts", "add", rest @ ..] if !rest.is_empty() => {
+            let given = rest.join(" ");
+            std::fs::canonicalize(&given).map_err(|e| format!("{given}: {e}")).and_then(|program| {
+                let (id, what) = contexts::describe(&program)?;
+                agent.settings.lock().unwrap().adapters.insert(id.clone(), program);
+                agent.save_settings().map_err(|e| e.to_string())?;
+                println!("Added the {id} context: {what}");
+                Ok(())
+            })
+        }
+        ["contexts", "remove", id] => {
+            let removed = agent.settings.lock().unwrap().adapters.remove(*id).is_some();
+            agent
+                .save_settings()
+                .map_err(|e| e.to_string())
+                .map(|()| println!("{}", if removed { "Removed." } else { "No adapter serves that context." }))
         }
         ["endpoint"] => {
             for e in host::endpoints(agent.settings.lock().unwrap().public_endpoint.as_deref()) {

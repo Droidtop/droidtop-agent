@@ -6,6 +6,11 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Plugin contexts come from context adapters: separate programs a plugin
+  publishes, added with `droidtop-agent contexts add <program>`, speaking
+  JSON over standard input and output (docs/DESIGN.md section 8). The
+  F95Checker adapter left the agent; it is now the F95 plugin's
+  `droidtop-agent-f95-adapter` in gamegrab-sources.
 - droidtop's library carries the person's marks: only a mark that differs
   from the shared one is sent, and the marks that arrived from elsewhere are
   named for droidtop to write into its own library.

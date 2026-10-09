@@ -11,8 +11,9 @@ step with [droidtop](https://github.com/Droidtop/droidtop) on a handheld:
   folders laid out by ES-DE system name. The two libraries stay in step both
   ways.
 - **Plugin contexts.** Supporting data that droidtop's plugins share with
-  programs on the computer, synced both ways. The first is F95Checker's
-  database, for the F95 plugin.
+  programs on the computer, synced both ways. A plugin that needs one
+  publishes a small context adapter program for the computer; add it with
+  `droidtop-agent contexts add <program>`.
 
 It does not stream your screen or control the computer remotely: that is
 [windowcast](https://github.com/Droidtop/windowcast)'s job. It never needs

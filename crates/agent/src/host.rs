@@ -154,16 +154,18 @@ impl Host for Agent {
     }
 
     fn context_pull(&self, context: &str) -> Result<Records> {
-        let adapter =
-            crate::contexts::adapter(context).ok_or_else(|| Error::Protocol(format!("this computer has no {context} context")))?;
-        adapter.pull().map_err(Error::Protocol)
+        self.adapter(context).ok_or_else(|| no_adapter(context))?.pull().map_err(Error::Protocol)
     }
 
     fn context_push(&self, context: &str, changes: Vec<RecordChange>) -> Result<Option<String>> {
-        let adapter =
-            crate::contexts::adapter(context).ok_or_else(|| Error::Protocol(format!("this computer has no {context} context")))?;
-        adapter.push(changes).map_err(Error::Protocol)
+        self.adapter(context).ok_or_else(|| no_adapter(context))?.push(changes).map_err(Error::Protocol)
     }
+}
+
+fn no_adapter(context: &str) -> Error {
+    Error::Protocol(format!(
+        "this computer has no adapter for the {context} context; add the plugin's adapter with droidtop-agent contexts add"
+    ))
 }
 
 #[cfg(test)]

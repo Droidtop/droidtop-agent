@@ -23,7 +23,7 @@ serde_yaml = "0.9"
 # Fetches the Ludusavi manifest when the person asks for it or a save lookup
 # needs it; nothing else in the agent goes to the network on its own.
 ureq = "2"
-# Launcher databases (itch, Amazon, Lutris) and F95Checker's db.sqlite3.
+# Launcher databases (itch, Amazon, Lutris).
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "5"
 gethostname = "0.5"

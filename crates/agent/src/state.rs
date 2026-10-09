@@ -91,6 +91,10 @@ pub struct Settings {
     /// the person forwarded it on their router (`203.0.113.7:47611`).
     #[serde(default)]
     pub public_endpoint: Option<String>,
+    /// Context adapters the person added (`contexts add`): the context each
+    /// serves, and the program (docs/DESIGN.md section 8).
+    #[serde(default)]
+    pub adapters: BTreeMap<String, PathBuf>,
 }
 
 /// A paired device as this computer remembers it.

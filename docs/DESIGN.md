@@ -269,21 +269,47 @@ droidtop's `docs/plugin-api.md` ("Context sync"). The shape:
   declaration from the plugin: which fields exist, whether each is two-way,
   computer-to-device or device-to-computer, and its conflict rule (`device`,
   `computer`, or `ask`).
-- **The computer side is an adapter in the agent**, one per kind of
-  third-party store. The first one, `f95checker`, finds F95Checker's
-  `db.sqlite3` (Windows `%APPDATA%\f95checker`, Linux `~/.config/f95checker`,
-  macOS `~/Library/Application Support/f95checker`). It reads only the
-  declared columns of the `games` table. It never reads or carries the
-  `cookies` table or the settings table's passwords and tokens.
+- **The computer side is a context adapter: a separate program the plugin
+  publishes**, one per kind of third-party store. The agent carries no
+  third-party format itself (coordinator decision, 2026-10-09: the F95Checker
+  adapter belongs with the F95 plugin, in gamegrab-sources). The person adds
+  one with `droidtop-agent contexts add <program>`; the agent asks it which
+  context it serves and keeps the pair in its settings.
+- **The adapter contract (protocol 1)**, JSON over standard input and output,
+  one run per pull or push:
+  - `<adapter> describe` prints `{"protocol": 1, "id": "<context>",
+    "description": "..."}`;
+  - `<adapter> pull` prints `{"records": {<key>: {<field>: <value>}}}`;
+  - `<adapter> push` reads `{"changes": [...]}` (the core's `RecordChange`:
+    `{"op": "upsert", "key", "fields"}` or `{"op": "remove", "key"}`) and
+    prints `{"deferred": null}`, or `{"deferred": "<why>"}` when the changes
+    must wait;
+  - any of them may print `{"error": "<words a screen can show>"}`; a
+    non-zero exit is an error too, with what it wrote to standard error. A
+    run is stopped after 120 s.
+- **Why a program and not a loadable module.** Rust has no stable ABI, so a
+  dynamic module would need a C interface, `unsafe` on both sides and a build
+  per system matching the agent's own; a crash in it would take the agent
+  down with it. A program needs none of that: it can be written in any
+  language (F95Checker itself is Python), it is built and released by the
+  plugin's own repository on the plugin's own schedule, a fault ends only
+  that run, and it is a plain process boundary between two separately
+  licensed works. A run costs a process start per sync, which a sync that
+  happens around a game's launch or on request can afford.
 - **Merge is three-way per field**, against the baseline the handheld keeps
   per computer and context. If only one side changed a field, that change
   wins. If both changed it differently, the field's rule decides; `ask` puts
   the record in the context's conflict list for the person.
 - **Writing a third-party app's store** happens only while that app is closed.
   F95Checker keeps its database in memory and writes it back, so a change made
-  under it would be lost. While it runs, the agent replies `deferred` and
-  applies the change at the next sync after it closes.
-- **F95Checker's fields:**
+  under it would be lost. While it runs, the adapter replies `deferred` and
+  the change is made at the next sync after it closes.
+- **The F95 plugin's adapter** is gamegrab-sources/droidtop-agent-f95-adapter.
+  It finds F95Checker's `db.sqlite3` (Windows `%APPDATA%\f95checker`, Linux
+  `~/.config/f95checker`, macOS `~/Library/Application Support/f95checker`),
+  reads only the declared columns of the `games` table, and never reads or
+  carries the `cookies` table or the settings table's passwords and tokens.
+  Its fields:
   - two-way: `installed`, `finished`, `archived`, `rating`, `notes`, and the
     record's presence (watching a thread);
   - computer to device: `name`, `url`, `version`, `developer`, `status`,
