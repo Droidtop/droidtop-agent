@@ -197,7 +197,7 @@ fn main() {
             println!("Rendezvous: {}", if s.rendezvous { "on" } else { "off" });
             println!("Discovery servers: {}", s.discovery_servers.join(" "));
             println!("STUN servers: {}", s.stun_servers.join(" "));
-            if let Ok(cert) = droidtop_agent_core::rendezvous::DiscoveryCert::of(&agent.key) {
+            if let Ok(cert) = droidtop_agent_core::rendezvous::certificate(&agent.key) {
                 println!("This computer's discovery ID: {}", cert.device_id());
             }
             match state::read_json::<rendezvous::Status>(&agent.dirs.rendezvous()) {

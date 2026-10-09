@@ -291,7 +291,7 @@ struct Session {
 fn hello(mut ch: Channel<Link>, address: String, path: Path, key: &DeviceKey, args: &Value) -> Result<Session, Failure> {
     let name = args["name"].as_str().unwrap_or("droidtop").to_string();
     let features = droidtop_agent_core::FEATURES.iter().map(|f| f.to_string()).collect();
-    let disco = rendezvous::DiscoveryCert::of(key).ok().map(|c| c.device_id());
+    let disco = rendezvous::certificate(key).ok().map(|c| c.device_id());
     ch.send_json(&Request::Hello { name, version: PROTOCOL_VERSION, features, disco })?;
     let (computer, endpoints, disco) = match ch.recv_json::<Response>()? {
         Response::Hello { name, endpoints, disco, .. } => (name, endpoints, disco),
@@ -372,7 +372,7 @@ fn rendezvous(key: &DeviceKey, peer: &PeerId, computer: &str, settings: &Rendezv
     };
     // Tell the computer where to punch from: the address the NAT gave this
     // socket, announced again only when it changed or the server asked.
-    if let (Some(mine), Ok(cert)) = (mine, rendezvous::DiscoveryCert::of(key)) {
+    if let (Some(mine), Ok(cert)) = (mine, rendezvous::certificate(key)) {
         let address = format!("{}{mine}", rendezvous::SCHEME);
         if state.announced.as_deref() != Some(address.as_str()) || state.announce_after_ms <= now {
             match rendezvous::announce(&servers, &cert, std::slice::from_ref(&address)) {

@@ -22,8 +22,5 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # Rendezvous away from the LAN (src/rendezvous.rs): Syncthing's global
-# discovery over https with a client certificate made from the device key.
-ureq = { version = "2", default-features = false, features = ["tls", "json"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-webpki-roots = "0.26"
-rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
+# discovery and STUN, in the crate windowcast and droidtop-agent share.
+windowcast-rendezvous.workspace = true

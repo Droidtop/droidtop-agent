@@ -140,7 +140,7 @@ impl Host for Agent {
         if !self.settings.lock().unwrap().rendezvous {
             return None;
         }
-        droidtop_agent_core::rendezvous::DiscoveryCert::of(&self.key).ok().map(|c| c.device_id())
+        droidtop_agent_core::rendezvous::certificate(&self.key).ok().map(|c| c.device_id())
     }
 
     fn hello(&self, peer: &PeerId, disco: Option<&str>) {

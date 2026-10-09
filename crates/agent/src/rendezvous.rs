@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use droidtop_agent_core::rendezvous::{self, Answer, DiscoveryCert, Server, StunKeeper};
+use droidtop_agent_core::rendezvous::{self, Answer, Server, StunKeeper};
 use droidtop_agent_core::tunnel::Hooks;
 use serde::{Deserialize, Serialize};
 
@@ -104,7 +104,7 @@ pub struct Status {
 /// (names, https) happens here, never in the WireGuard loop.
 pub fn run(agent: Arc<Agent>) {
     thread::spawn(move || {
-        let Ok(cert) = DiscoveryCert::of(&agent.key) else {
+        let Ok(cert) = rendezvous::certificate(&agent.key) else {
             eprintln!("Rendezvous is off: this computer's discovery certificate could not be made.");
             return;
         };

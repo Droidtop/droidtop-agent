@@ -15,6 +15,9 @@ rust-version = "1.85"
 # this workspace is too.
 windowcast-identity = { git = "https://github.com/Droidtop/windowcast", rev = "9481e55ae5f4265b3420e95e0f0a69bd5ad4904b" }
 windowcast-pairing = { git = "https://github.com/Droidtop/windowcast", rev = "9481e55ae5f4265b3420e95e0f0a69bd5ad4904b" }
+# Rendezvous away from the LAN (Syncthing's global discovery, STUN, hole
+# punching), shared with windowcast rather than copied. windowcast 0.15.0.
+windowcast-rendezvous = { git = "https://github.com/Droidtop/windowcast", rev = "da060ccef595a8dad76deb3113db0a5b394e1210" }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 # Userspace WireGuard (BSD-3-Clause) and a userspace TCP stack to carry the
