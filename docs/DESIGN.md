@@ -1,0 +1,428 @@
+# droidtop-agent: design
+
+droidtop-agent is a small program for the user's own computers (Windows,
+Linux, macOS). It pairs with droidtop on a handheld and keeps the two in step:
+the games each side has, their saves, and the supporting state of droidtop's
+plugins (for example an F95Checker database). The aim, in the owner's words:
+"Droidtop's sync system needs to allow the droidtop device to be a full
+functioned computer. If I already have a gaming computer or a game library, I
+should be able to sync to and from it."
+
+What it is not: it never streams a screen or remote-controls anything (that is
+windowcast's job), it never runs a Syncthing instance, and it never needs
+Tailscale or any other VPN. It is meant to be light: one process on the
+computer, no resident process on the handheld.
+
+Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
+#224 for saves, #364 for the server VM).
+
+## Contents
+
+1. What droidtop already has (audit, droidtop main c5dd7d8d, 2026-10-08)
+2. Language and licence
+3. Identity and pairing
+4. The session channel
+5. The protocol
+6. Saves
+7. Library
+8. Plugin contexts
+9. Conflicts
+10. Transports, in order
+11. The computer's scanner
+12. The droidtop side
+13. Repository layout and builds
+14. Decisions for the owner
+
+## 1. What droidtop already has
+
+Read from droidtop main at c5dd7d8d.
+
+- **Store cloud saves (Droidtop/tracker#224).** Steam Cloud is built:
+  `StoreSaves` (`library-core/.../stores/StoreSaves.kt`) is the launch seam.
+  `PcGameProvider` calls `StoreSaves.beforeLaunch` (waits at most 45 s), and
+  `WineGameActivity` calls `StoreSaves.afterExit`, which runs the upload as a
+  job in the Downloads place. `SteamCloudSync` and `SteamSaveFiles` in
+  `:stores` do the work. Steam's `ufs` product info says where the saves are,
+  and `SaveLayout.windowsDirs` maps Windows roots into the game's Wine prefix.
+  The decision (`SteamCloudPlan.decide`) is Steam's client rule, made per game:
+  compare both sides with the files as they were at the last sync. If one side
+  changed, it wins. If both changed, it is a conflict.
+- **Conflict UI.** The conflict question is the person's: `SaveConflictPrompts`
+  feeds the Gaming shell's `SaveConflictDialog` ("Cloud saves differ", each
+  side's last change, file count, which is newer). `SaveConflict.cloudLabel`
+  already lets the other side be named.
+- **GOG and Epic cloud saves are not reached.** The vendored GameNative code
+  for them resolves save folders inside its own containers. Amazon has none.
+  That part of #224 is still open.
+- **No save-location data beyond the stores.** droidtop has no Ludusavi or
+  PCGamingWiki data. #373's "Ludusavi data, same as droidtop" is not true
+  today: the only save locations droidtop knows are Steam's `ufs` lists.
+- **The `saves.sync` extension point** is declared (`ExtensionPoints.kt`,
+  high risk) and documented as A7 in `docs/plugin-api.md`. Nothing provides
+  it or calls it (#284).
+- **F95Checker** is a one-time core import (`F95CheckerImport`, Settings >
+  Library > "Import from F95Checker"). It opens the picked `db.sqlite3`
+  read-only and offers thread links to confirm. Nothing syncs (#380).
+- **Secrets at rest** use one mechanism: `KeystoreSecretCipher` in
+  `:net-core` (AES-256-GCM under a non-exportable Android Keystore key).
+- **QR codes** are made on the device (`app/ui/QrCode.kt`, zxing).
+- **SPEC 7a, "No PC-side helper in droidtop"**, says anything that runs on
+  the PC belongs to windowcast. The owner has since decided (#373, 2026-10-08)
+  that the desktop client is droidtop's agent and later becomes windowcast's
+  interface on the PC too ("one desktop app, not two"). Its network layer is
+  a shared module that windowcast bakes in. droidtop itself still carries no
+  PC program: the agent is this separate repository.
+
+## 2. Language and licence
+
+**Rust.** Three reasons:
+
+1. windowcast is Rust. The owner wants this network layer to be "a shared
+   module that windowcast bakes in", and windowcast's `identity` and `pairing`
+   crates are exactly what the agent needs. The agent uses them as they are,
+   with no second implementation.
+2. The same crate builds for Windows, Linux and macOS, and also as an
+   Android library (`cdylib`, arm64-v8a and x86_64). droidtop calls it through
+   JNI, so both ends of the protocol, the merge rules and the crypto are one
+   piece of code. Writing SPAKE2 or WireGuard a second time in Kotlin would be
+   two mechanisms for one job, and the riskier one.
+3. Userspace WireGuard exists as a Rust library (boringtun, BSD-3-Clause),
+   and so does a userspace TCP stack to carry a stream inside the tunnel
+   (smoltcp, 0BSD). Both are the parts `onetun` is built from.
+
+Go was the other candidate: wireguard-go is the reference implementation, and
+droidtop's CI already cross-compiles Go (crane). It lost on point 1: windowcast
+cannot bake in a Go module.
+
+**Licence: GPL-3.0-only, because a dependency forces it.** windowcast and its
+`identity` and `pairing` crates are GPL-3.0-only, and the agent links them.
+droidtop is GPL-3.0 too, so nothing downstream is affected. If the owner
+relicenses those two windowcast crates under MIT or Apache-2.0, the agent can
+follow (decision 1).
+
+## 3. Identity and pairing
+
+- **One identity per device:** a persistent Ed25519 key pair, the windowcast
+  `Identity` (`windowcast-identity`). Its public key is the device's `PeerId`.
+  The same key, converted to X25519 (the standard birational map, as
+  libsodium's `crypto_sign_ed25519_*_to_curve25519` does), is the device's
+  Noise and WireGuard static key. One key, one trust decision, for every
+  transport. On a computer the identity file lives in the agent's config
+  folder. windowcast can read the same file when the two become one desktop
+  app (decision 3). On the handheld, droidtop keeps the key sealed with
+  `KeystoreSecretCipher` and passes it to the library for each call.
+- **Trust** is windowcast's `TrustStore`: the set of pinned peers. The agent
+  keeps a separate peers file for names and last-known addresses, so no
+  trust decision is ever made from it.
+- **Pairing** is windowcast's SPAKE2 run (`windowcast-pairing`), unchanged:
+  6 digits from `generate_pin`, HKDF to a session key, and HMAC tags that both
+  sides check.
+  1. On the handheld: Settings > Computers > "Pair a computer". droidtop opens
+     a short-lived listener (only while that screen is open), shows the 6-digit
+     code in large type, and shows a QR code of
+     `droidtop-pair:1?code=<code>&id=<PeerId hex>&name=<name>&at=<ip>:<port>`.
+     The handheld is the SPAKE2 host (it shows the code).
+  2. On the computer: `droidtop-agent pair 123456`. The agent finds the
+     handheld on the LAN by a UDP broadcast query that only a handheld in
+     pairing mode answers. `droidtop-agent pair 'droidtop-pair:1?...'` (the
+     QR's text, from a phone or webcam) goes straight to the address in it.
+  3. The two run SPAKE2 over TCP. Each side then sends
+     `authenticate_fingerprint(key, transcript)` over the transcript
+     `"droidtop-agent pair v1" || host PeerId || client PeerId || host name ||
+     client name`, and checks the other's tag. A wrong code or a substituted
+     key fails here. Each side then pins the other's PeerId.
+  The pairing listener accepts one attempt per code. Three wrong attempts end
+  the pairing screen's session.
+- **Why the code is typed on the computer and not scanned:** neither a desktop
+  PC nor the Retroid Pocket 5 has a camera. The QR code is there for a computer
+  that has one (a laptop webcam) and for a phone acting for the computer
+  (decision 2).
+
+## 4. The session channel
+
+Every live connection is the same channel, whatever carries it:
+**Noise_IK_25519_ChaChaPoly_BLAKE2s** (the `snow` crate) with the prologue
+`droidtop-agent/1`. Noise_IK is the handshake family WireGuard uses.
+
+- The handheld is always the initiator: it knows the computer's static key
+  from pairing. The computer learns the handheld's static key from the first
+  handshake message and refuses it unless that key's PeerId is pinned.
+- Framing: each Noise message is sent as a 2-byte big-endian length followed
+  by the ciphertext (at most 65535 bytes). An application message is a 4-byte
+  length followed by its bytes, split across as many Noise messages as it
+  needs.
+- Application messages are JSON objects (`serde`, internally tagged by `t`).
+  File contents travel as separate binary messages after the JSON header
+  that announces them, in 1 MiB pieces.
+
+Over the WireGuard path (section 10) this channel runs inside the tunnel as
+well. That is two layers of ChaCha20-Poly1305, which costs little on the
+handheld's CPU, and it keeps one authentication path for every transport.
+
+## 5. The protocol
+
+Requests come from the handheld, and the computer answers. Each request gets
+exactly one reply (`{"t":"error","message":...}` on failure).
+
+| Request | Reply | Purpose |
+|---|---|---|
+| `hello {name, version, features}` | `hello {...}` | names, versions, what each side supports |
+| `library_pull {since}` | `library_changes {changes, cursor}` | the computer's library changes since a cursor |
+| `library_push {changes}` | `ok {cursor}` | the handheld's library changes |
+| `save_spec {game}` | `save_spec {spec}` or `unknown` | where this game keeps its saves, as templates |
+| `save_manifest {game}` | `manifest {files}` | the computer's save files: name, size, mtime, SHA-256 |
+| `file_get {game, name}` | `file {name, size, sha256}` + data | one save file, computer to handheld |
+| `file_put {game, name, size, sha256, mtime}` + data | `ok` | one save file, handheld to computer |
+| `save_apply {game, remove, archive}` | `ok` | removals, and archiving the computer's side first when it lost a conflict |
+| `context_pull {context}` | `context {records}` | a plugin context's records on the computer |
+| `context_push {context, changes}` | `ok` or `deferred` | record changes to apply on the computer |
+
+Names inside a save set are canonical: a root token and a path with forward
+slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
+
+## 6. Saves
+
+- **Where saves are.** A save set is a list of templates in Ludusavi's
+  vocabulary: `<base>` (the game's folder), `<home>`, `<winAppData>`,
+  `<winLocalAppData>`, `<winLocalAppDataLow>`, `<winDocuments>`,
+  `<winPublic>`, `<winProgramData>`, `<winDir>`, `<xdgData>`, `<xdgConfig>`,
+  `<storeUserId>`, plus globs. The computer side gets them from the Ludusavi
+  manifest (fetched by the agent at run time from the ludusavi-manifest
+  repository, never bundled; its data comes from PCGamingWiki) and from the
+  user's own entries (`droidtop-agent saves add`). The handheld does not carry
+  the manifest. It asks for the spec (`save_spec`) and resolves each token in
+  its own copy of the game:
+  - a Windows game resolves tokens inside the game's Wine prefix, through
+    the `WinePrefixLocator` droidtop already has;
+  - an engine game resolves `<base>` to its folder (Ren'Py and RPG Maker keep
+    saves there, per the standing save policy).
+- **The decision is the same rule droidtop's Steam Cloud sync uses**
+  (`SteamCloudPlan.decide`), now in the shared core so it is one
+  implementation. The handheld keeps a baseline per paired computer and game:
+  the files as they were after the last sync (name, SHA-256, size, mtime).
+  - If only one side changed since the baseline, that side wins: its changed
+    files are copied over, and files it deleted are deleted on the other side.
+  - If both changed and still differ, it is a conflict (section 9).
+  - A first sync with differing files on both sides is a conflict too.
+  - A file whose size and mtime match its baseline entry is not re-hashed.
+- **When it runs:** before a game starts and after it ends, on the same seam
+  as `StoreSaves` (one launch path, two save sources). A computer that cannot
+  be reached is skipped once and said once. A game whose store already syncs
+  its saves (Steam Cloud) is left to the store by default, so two syncs never
+  fight over the same files (decision 5).
+- **Writes are safe:** each file is written beside its target as
+  `.<name>.dtpart` and renamed over the target only when its SHA-256 matches.
+  A failure keeps the baseline entry as it was, so the next sync retries the
+  file instead of reading the failure as a change.
+- **No versioning.** The owner ruled it out for storage reasons. The one
+  exception is a conflict loser, which is archived (section 9).
+
+## 7. Library
+
+The aim: a game on the computer shows up on the handheld, and the other way
+round. Each device is the authority on what it has installed. The person's own
+marks on a game are shared.
+
+- **A game's identity across devices** is its store key where it has one
+  (`steam:<appid>`, `gog:<id>`, `epic:<app name>`, `amazon:<id>`,
+  `itch:<game id>`, `battlenet:<product>`). A game without one uses
+  `title:<normalised title>`. A ROM uses
+  `rom:<es-de system>/<normalised file stem>`. droidtop already names
+  platforms with ES-DE's system names (SPEC 7b).
+- **Facts per device:** installed, where it is (path), size, version, and
+  which launcher owns it. Only the device that has the game writes these, so
+  they never conflict. A removed game is a tombstone.
+- **Shared marks:** favourite, hidden, completion state, rating, notes, tags
+  and collections. Each field is last-writer-wins on a hybrid logical clock
+  (wall time, counter, device id), so a mark made on either side lands on both
+  and a later mark beats an earlier one.
+- **Play time:** each device reports its own total and last played time. A
+  game's total is the sum, and its last played time is the latest. Nothing
+  overwrites another device's numbers.
+- **Change tracking both ways:** each side keeps an append-only change log
+  with a sequence number. A peer asks for changes "since" the last cursor it
+  saw, so a sync costs as much as what changed, not the size of the library.
+- **What droidtop does with the computer's games:** they are listed under the
+  computer's name ("On DESKTOP-PC"). The actions are copying a game to the
+  handheld (a per-game transfer over the same channel, on request) and, later,
+  streaming it with windowcast. How far they merge into droidtop's main
+  library is decision 6.
+
+## 8. Plugin contexts
+
+The owner (#380): "It's context SYNC. It's meant to allow you to do things on
+the computer and have them synced." A context is a plugin's supporting state,
+and it syncs both ways between the device and the computer. The first context
+is F95Checker's database for the F95 plugin. The plugin API side is in
+droidtop's `docs/plugin-api.md` ("Context sync"). The shape:
+
+- **A context is a set of records**, `key -> {field -> JSON value}`, plus a
+  declaration from the plugin: which fields exist, whether each is two-way,
+  computer-to-device or device-to-computer, and its conflict rule (`device`,
+  `computer`, or `ask`).
+- **The computer side is an adapter in the agent**, one per kind of
+  third-party store. The first one, `f95checker`, finds F95Checker's
+  `db.sqlite3` (Windows `%APPDATA%\f95checker`, Linux `~/.config/f95checker`,
+  macOS `~/Library/Application Support/f95checker`). It reads only the
+  declared columns of the `games` table. It never reads or carries the
+  `cookies` table or the settings table's passwords and tokens.
+- **Merge is three-way per field**, against the baseline the handheld keeps
+  per computer and context. If only one side changed a field, that change
+  wins. If both changed it differently, the field's rule decides; `ask` puts
+  the record in the context's conflict list for the person.
+- **Writing a third-party app's store** happens only while that app is closed.
+  F95Checker keeps its database in memory and writes it back, so a change made
+  under it would be lost. While it runs, the agent replies `deferred` and
+  applies the change at the next sync after it closes.
+- **F95Checker's fields:**
+  - two-way: `installed`, `finished`, `archived`, `rating`, `notes`, and the
+    record's presence (watching a thread);
+  - computer to device: `name`, `url`, `version`, `developer`, `status`,
+    `type`, `last_updated`.
+  A thread watched on the device is inserted with its id, name and url, and
+  F95Checker's own refresh fills in the rest.
+
+## 9. Conflicts
+
+One question, everywhere: droidtop's existing "Saves differ" dialog
+(`SaveConflictPrompts`). It names the computer instead of "Cloud" and shows
+each side's last change, file count and which is newer. The person picks a
+side. "Later" (B) changes nothing, and the game starts on this device's files.
+
+**Losers are archived, not deleted.** Before the losing side is overwritten,
+its files are moved to an archive:
+- on the computer: `<agent data>/archive/<game>/<UTC time>/`;
+- on the handheld: droidtop's `files/agent/archive/<computer>/<game>/<UTC time>/`.
+
+Only the most recent loser per game is kept, because the owner ruled out
+versioning for storage reasons (decision 8). A context's conflicts are per
+record and per field, never per file, so nothing there is overwritten without
+a rule or an answer.
+
+## 10. Transports, in order
+
+All of them carry the same Noise channel between paired keys. A relay or
+share only ever sees ciphertext.
+
+1. **LAN direct.** TCP to the agent's port (47610). The handheld finds the
+   agent by a UDP broadcast query on the same port, which only paired agents
+   answer (the reply is signed with the agent's key), and also tries the last
+   address that worked. Tailscale, ZeroTier or a plain WireGuard VPN, when the
+   person has one, is just another address to try, never a requirement.
+2. **Direct WireGuard.** A userspace WireGuard tunnel (boringtun) between the
+   two paired keys over UDP, with UDP hole punching for NAT. The tunnel's
+   addresses come from the PeerIds (a `fd64:` ULA per device). Inside it, a
+   userspace TCP stack (smoltcp) carries the Noise channel, so nothing on
+   either device needs a TUN interface, root or a VPN slot. The tunnel exists
+   only while a sync runs.
+   - **Finding each other's public endpoint:** endpoints are learned
+     - from the last direct connection;
+     - from small signed announcements (endpoint and key, a few hundred bytes)
+       left in the person's own cloud share (transport 3);
+     - optionally, from a STUN server the person configures.
+   - No community server is contacted by default (decision 4). A
+     droidtop-run discovery service on the server VM (#364) is the planned
+     default later.
+3. **The person's own cloud share, store and forward.** A folder that the
+   person's own sync tool already carries to both devices: Google Drive,
+   OneDrive or Dropbox clients, Nextcloud, a Syncthing folder they already run,
+   or Syncthing-Fork or FolderSync on the handheld. Each device writes sealed
+   messages for a peer into `droidtop-agent/<peer id>/inbox/`. Each message
+   is sealed with X25519 between the two identities and ChaCha20-Poly1305,
+   and holds save files, library changes or context changes. The other side
+   applies and deletes them when they arrive. This is the path when the two
+   are never online at the same time. A WebDAV share, reached directly by
+   both, is the next backend. Credentials for any share are the person's own,
+   entered through droidtop's in-app sign-in helper and stored with
+   `KeystoreSecretCipher`; nothing that authenticates ships in either program.
+4. **A droidtop-run relay, later**, on the server VM (#364): a DERP-style
+   relay that forwards ciphertext between two keys. Only as a fallback, and
+   never a community-run one.
+
+Bulk traffic never goes through anyone else's relay.
+
+## 11. The computer's scanner
+
+`droidtop-agent scan` (and the running agent, on a timer and when asked)
+builds the computer's library from what is installed. It reads files only:
+no store APIs and no network.
+
+| Source | Windows | Linux | macOS |
+|---|---|---|---|
+| Steam | registry `HKCU\Software\Valve\Steam\SteamPath`; `steamapps/libraryfolders.vdf`, `appmanifest_*.acf` | `~/.steam/steam`, `~/.local/share/Steam`, Flatpak | `~/Library/Application Support/Steam` |
+| GOG | registry `HKLM\SOFTWARE\WOW6432Node\GOG.com\Games\*` | Heroic `gog_store/installed.json` | Heroic, registry-less GOG Galaxy installs under `/Applications` |
+| Epic | `%ProgramData%\Epic\EpicGamesLauncher\Data\Manifests\*.item` | Heroic and legendary `installed.json` | same as Linux |
+| Amazon | `%LOCALAPPDATA%\Amazon Games\Data\Games\Sql\GameInstallInfo.sqlite` | Heroic nile `installed.json` | none |
+| itch | butler's `db/butler.db` (caves joined with games) | same | same |
+| Battle.net | uninstall registry entries published by Blizzard | Lutris | none |
+| Lutris | none | `pga.db` | none |
+| Folders | user-chosen roots; a folder with a program in it is a game | same | `.app` bundles too |
+| ROMs | user-chosen roots laid out by ES-DE system name; ES-DE's own `es_settings.xml` ROM folder and `gamelists/` | same | same |
+| Emulators | RetroArch, Dolphin, PCSX2, DuckStation, PPSSPP, RPCS3, Cemu, Ryujinx and others, detected for their save folders | same | same |
+
+**Third-party app state:** F95Checker (`db.sqlite3`), Lutris (`pga.db`), Heroic
+(JSON), ES-DE (gamelists), and Ludusavi's own config if present (custom games
+and paths the person already set up). Playnite keeps its library in LiteDB, for
+which there is no maintained Rust reader, so v1 only detects it.
+
+The scan runs in the agent's own process, off any UI. It keeps no handles open
+and skips folders it cannot read.
+
+## 12. The droidtop side
+
+- **No resident process.** droidtop connects only:
+  - before a game launches and after it exits (the `StoreSaves` seam);
+  - when the person starts a sync or a transfer (Settings > Computers >
+    "Sync now", or a game's menu);
+  - while the pairing screen is open.
+  Nothing polls, and nothing listens in the background.
+- **Where the code is:**
+  - `:net-core`, `dev.droidtop.net.peer`: the JNI binding to the agent core
+    (`libdroidtop_agent.so`) and the sealed identity;
+  - `:library-core`, `dev.droidtop.library.computers`: paired computers, the
+    save sync beside `StoreSaves`, and library and context sync;
+  - `:app`: the Computers settings catalog and the pairing screen (code and QR).
+- **The native library is built here**, in this repository's CI, for
+  arm64-v8a and x86_64, and published with each release. droidtop fetches it
+  against a pin file (tag and SHA-256), the way it fetches the lsfg-vk layer.
+  So droidtop's CI needs no Rust toolchain, and the core has one build.
+
+## 13. Repository layout and builds
+
+- `crates/core` (`droidtop-agent-core`): identity, pairing, channel,
+  protocol, sync rules, transports. It has no UI and no platform-specific code.
+- `crates/agent` (`droidtop-agent`): the program for the computer, with the
+  scanner, adapters and CLI.
+- `crates/android` (`droidtop-agent-android`): the `cdylib` with droidtop's
+  JNI surface.
+- CI (`.github/workflows/ci.yml`): build and test on ubuntu, windows and
+  macos, plus the Android library for both ABIs. Each green build on `main`
+  publishes a release (the computer binaries and the Android library) and adds
+  a CHANGELOG entry. Releases are permanent history.
+
+## 14. Decisions for the owner
+
+1. **Licence.** The agent is GPL-3.0-only because it links windowcast's
+   GPL-3.0-only `identity` and `pairing` crates. Relicense those two crates as
+   MIT/Apache-2.0 so the agent can be Apache-2.0? Default: stay GPL-3.0-only.
+2. **Pairing input.** The code is typed on the computer, and the QR code
+   serves cameras (laptop webcam, phone). Default: as described.
+3. **One identity with windowcast on a computer.** Default: yes, one key file,
+   one pairing, once the two share the desktop app.
+4. **Finding endpoints for WireGuard off the LAN.** Default: last-known
+   endpoints, plus signed announcements in the person's own cloud share. Should
+   a STUN server or Syncthing's global discovery also be used (each needs its
+   usage policy read first), or should we wait for droidtop's own discovery on
+   #364?
+5. **Store cloud and agent on the same game.** Default: the store's cloud wins
+   and the agent skips that game's saves.
+6. **The computer's games in droidtop's library.** Default: listed under the
+   computer in Settings > Computers and on its own Places row. Should they
+   also merge into the main library as "on <computer>" entries next to local
+   copies?
+7. **Writing F95Checker's database.** Default: only while F95Checker is
+   closed; changes wait until then.
+8. **Conflict archive depth.** Default: the most recent loser per game.
+9. **Autostart on the computer.** Default: off. `droidtop-agent service
+   install` adds a per-user autostart (Task Scheduler, a systemd user unit,
+   launchd) when the person asks for it.
