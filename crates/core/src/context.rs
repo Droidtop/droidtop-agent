@@ -52,6 +52,44 @@ pub struct ContextDecl {
     pub presence: Direction,
 }
 
+/// The adapter program a plugin offers for a context (docs/DESIGN.md
+/// section 8), as its signed manifest declares it: one download per system,
+/// each pinned by SHA-256. The computer fetches it only after the person
+/// approved that plugin's adapter for that context there.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AdapterOffer {
+    /// The plugin that offers it (its id in droidtop).
+    pub plugin: String,
+    /// What the plugin calls the program it offers, for the person.
+    #[serde(default)]
+    pub label: String,
+    /// By system: `windows-x86_64`, `linux-x86_64`, `macos-aarch64` (Rust's
+    /// `std::env::consts::OS` and `ARCH`).
+    pub programs: BTreeMap<String, AdapterProgram>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AdapterProgram {
+    /// An https address of the program itself.
+    pub url: String,
+    pub sha256: String,
+}
+
+impl AdapterOffer {
+    /// This system's key in [`programs`].
+    pub fn system() -> String {
+        format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+    }
+
+    /// The program for this system, when the offer has one with an https
+    /// address and a well-formed digest.
+    pub fn for_this_system(&self) -> Option<&AdapterProgram> {
+        self.programs
+            .get(&Self::system())
+            .filter(|p| p.url.starts_with("https://") && p.sha256.len() == 64 && p.sha256.chars().all(|c| c.is_ascii_hexdigit()))
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum RecordChange {
@@ -324,5 +362,24 @@ mod tests {
         let kept = baseline_when_deferred(&m, &computer);
         let again = merge(&decl(), &m.device, &computer, &kept);
         assert_eq!(again.to_computer, m.to_computer);
+    }
+
+    #[test]
+    fn an_offer_names_a_program_only_for_this_system_and_only_over_https() {
+        let program = |url: &str| AdapterProgram { url: url.into(), sha256: "ab".repeat(32) };
+        let offer = AdapterOffer {
+            plugin: "gamegrab.f95".into(),
+            label: String::new(),
+            programs: BTreeMap::from([(AdapterOffer::system(), program("https://example.org/adapter"))]),
+        };
+        assert!(offer.for_this_system().is_some());
+        let plain =
+            AdapterOffer { programs: BTreeMap::from([(AdapterOffer::system(), program("http://example.org/adapter"))]), ..offer.clone() };
+        assert!(plain.for_this_system().is_none());
+        let elsewhere = AdapterOffer { programs: BTreeMap::from([("plan9-mips".to_string(), program("https://example.org/a"))]), ..offer };
+        assert!(elsewhere.for_this_system().is_none());
+        // Absent from the request, it reads as no offer (an older handheld).
+        let pull: crate::proto::Request = serde_json::from_value(json!({ "t": "context_pull", "context": "f95checker" })).unwrap();
+        assert!(matches!(pull, crate::proto::Request::ContextPull { adapter: None, .. }));
     }
 }

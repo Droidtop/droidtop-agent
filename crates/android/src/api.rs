@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use droidtop_agent_core::channel::Channel;
-use droidtop_agent_core::context::{baseline_when_deferred, merge, ContextDecl, Records};
+use droidtop_agent_core::context::{baseline_when_deferred, merge, AdapterOffer, ContextDecl, Records};
 use droidtop_agent_core::discovery::{self, Announce};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::{Cursor, Library, Marks, ScannedGame};
@@ -520,7 +520,9 @@ fn sync_context(args: &Value) -> Outcome {
     let baseline: Records = serde_json::from_value(args["baseline"].clone()).unwrap_or_default();
     let mut s = connect(&key, args)?;
     let ch = &mut s.ch;
-    ch.send_json(&Request::ContextPull { context: decl.id.clone() })?;
+    // The adapter the plugin offers, for a computer that has none for this context yet.
+    let adapter: Option<AdapterOffer> = serde_json::from_value(args["adapter"].clone()).ok();
+    ch.send_json(&Request::ContextPull { context: decl.id.clone(), adapter })?;
     let theirs = match ch.recv_json::<Response>()? {
         Response::Context { records } => records,
         Response::Error { message } => return Err(Failure::Error(message)),
@@ -643,7 +645,11 @@ mod tests {
             });
             Ok(())
         }
-        fn context_pull(&self, _context: &str) -> droidtop_agent_core::Result<Records> {
+        fn context_pull(
+            &self,
+            _context: &str,
+            _offer: Option<&droidtop_agent_core::context::AdapterOffer>,
+        ) -> droidtop_agent_core::Result<Records> {
             Ok(Records::new())
         }
         fn context_push(

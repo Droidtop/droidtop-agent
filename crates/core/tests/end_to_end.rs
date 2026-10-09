@@ -46,7 +46,7 @@ impl Host for TestHost {
         }
         Ok(())
     }
-    fn context_pull(&self, _context: &str) -> Result<Records> {
+    fn context_pull(&self, _context: &str, _offer: Option<&droidtop_agent_core::context::AdapterOffer>) -> Result<Records> {
         Ok(self.records.lock().unwrap().clone())
     }
     fn context_push(&self, _context: &str, changes: Vec<RecordChange>) -> Result<Option<String>> {

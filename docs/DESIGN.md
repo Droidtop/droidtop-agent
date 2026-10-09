@@ -282,9 +282,28 @@ droidtop's `docs/plugin-api.md` ("Context sync"). The shape:
 - **The computer side is a context adapter: a separate program the plugin
   publishes**, one per kind of third-party store. The agent carries no
   third-party format itself (coordinator decision, 2026-10-09: the F95Checker
-  adapter belongs with the F95 plugin, in gamegrab-sources). The person adds
-  one with `droidtop-agent contexts add <program>`; the agent asks it which
-  context it serves and keeps the pair in its settings.
+  adapter belongs with the F95 plugin, in gamegrab-sources). The agent asks
+  an adapter which context it serves and keeps the pair in its settings.
+- **How an adapter gets onto the computer** (coordinator, 2026-10-09):
+  - **Offered by the plugin.** The plugin's signed manifest declares the
+    program in droidtop's `computers.context_adapter` point: the context, and
+    one https download per system (`windows-x86_64`, `linux-x86_64`,
+    `macos-aarch64`, Rust's OS and arch names), each pinned by SHA-256.
+    droidtop sends that offer with the context's `context_pull`.
+  - **Approved once, on the computer.** A computer with no adapter for that
+    context keeps the offer, says on its console what to run, and answers
+    the handheld that it waits for the person. `droidtop-agent contexts
+    approve <context>` shows the plugin, the address and the digest, fetches
+    the program (64 MiB at most), checks the digest, checks that the program
+    says it serves that context, and installs it under the agent's data
+    folder (`adapters/<context>/`). Nothing is fetched or run before that.
+  - **Later versions follow.** The approval is for that plugin and context:
+    an offer from the same plugin with a different digest is fetched and
+    checked the same way at the next sync, without asking again. An offer
+    from another plugin for that context, or for a context the person set up
+    by hand, changes nothing.
+  - **By hand.** `droidtop-agent contexts add <program>` still installs one
+    the person downloaded; it is never replaced by an offer.
 - **The adapter contract (protocol 1)**, JSON over standard input and output,
   one run per pull or push:
   - `<adapter> describe` prints `{"protocol": 1, "id": "<context>",

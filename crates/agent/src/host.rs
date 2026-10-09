@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use droidtop_agent_core::context::{RecordChange, Records};
+use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
 use droidtop_agent_core::keys::PeerId;
 use droidtop_agent_core::library::{title_key, Change};
 use droidtop_agent_core::proto::GameRef;
@@ -153,19 +153,28 @@ impl Host for Agent {
         Ok(())
     }
 
-    fn context_pull(&self, context: &str) -> Result<Records> {
-        self.adapter(context).ok_or_else(|| no_adapter(context))?.pull().map_err(Error::Protocol)
+    fn context_pull(&self, context: &str, offer: Option<&AdapterOffer>) -> Result<Records> {
+        if let Some(offer) = offer {
+            self.consider_offer(context, offer).map_err(Error::Protocol)?;
+        }
+        self.adapter(context)
+            .ok_or_else(|| no_adapter(context, offer.is_some_and(|o| o.for_this_system().is_some())))?
+            .pull()
+            .map_err(Error::Protocol)
     }
 
     fn context_push(&self, context: &str, changes: Vec<RecordChange>) -> Result<Option<String>> {
-        self.adapter(context).ok_or_else(|| no_adapter(context))?.push(changes).map_err(Error::Protocol)
+        self.adapter(context).ok_or_else(|| no_adapter(context, false))?.push(changes).map_err(Error::Protocol)
     }
 }
 
-fn no_adapter(context: &str) -> Error {
-    Error::Protocol(format!(
-        "this computer has no adapter for the {context} context; add the plugin's adapter with droidtop-agent contexts add"
-    ))
+/// Why a context cannot sync here; [`offered`] when the plugin offered its adapter.
+fn no_adapter(context: &str, offered: bool) -> Error {
+    Error::Protocol(if offered {
+        format!("the computer waits for your OK to install the plugin's adapter for {context}: on the computer run droidtop-agent contexts approve {context}")
+    } else {
+        format!("this computer has no adapter for the {context} context; add the plugin's adapter with droidtop-agent contexts add")
+    })
 }
 
 #[cfg(test)]

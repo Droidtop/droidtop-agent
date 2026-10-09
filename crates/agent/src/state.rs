@@ -57,6 +57,13 @@ impl Dirs {
     pub fn saves(&self) -> PathBuf {
         self.config.join("saves.json")
     }
+    /// Adapters plugins offered that wait for the person's approval.
+    pub fn adapter_offers(&self) -> PathBuf {
+        self.data.join("adapter-offers.json")
+    }
+    pub fn adapters(&self) -> PathBuf {
+        self.data.join("adapters")
+    }
     pub fn library(&self) -> PathBuf {
         self.data.join("library.json")
     }
@@ -95,6 +102,17 @@ pub struct Settings {
     /// serves, and the program (docs/DESIGN.md section 8).
     #[serde(default)]
     pub adapters: BTreeMap<String, PathBuf>,
+    /// The contexts whose adapter the person approved a plugin to supply
+    /// (`contexts approve`): the plugin and the digest of the program in place.
+    #[serde(default)]
+    pub approved: BTreeMap<String, Approval>,
+}
+
+/// A plugin the person let supply a context's adapter, and what is installed.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct Approval {
+    pub plugin: String,
+    pub sha256: String,
 }
 
 /// A paired device as this computer remembers it.

@@ -53,6 +53,9 @@ Usage:
                                        Add a plugin's context adapter (a program its plugin
                                        publishes, e.g. droidtop-agent-f95-adapter)
   droidtop-agent contexts remove <context>
+  droidtop-agent contexts approve <context>
+                                       Install the adapter a plugin on the handheld offers for
+                                       <context> (asked for once; later versions follow)
   droidtop-agent endpoint [set <ip:port> | clear]
                                        Where this computer's WireGuard port (UDP 47611) answers from
                                        the internet, if you forwarded it on your router; the handheld
@@ -135,7 +138,7 @@ fn main() {
         }
         ["contexts"] => {
             let adapters = agent.settings.lock().unwrap().adapters.clone();
-            if adapters.is_empty() {
+            if adapters.is_empty() && agent.adapter_offers().is_empty() {
                 println!("No context adapter is added. A plugin that syncs with a program here publishes one: droidtop-agent contexts add <program>");
             }
             for id in adapters.keys() {
@@ -145,6 +148,9 @@ fn main() {
                     None => "not available".into(),
                 };
                 println!("{id}: {} ({state})", adapters[id].display());
+            }
+            for (id, offer) in agent.adapter_offers() {
+                println!("{id}: offered by the plugin {}, waiting for: droidtop-agent contexts approve {id}", offer.plugin);
             }
             Ok(())
         }
@@ -158,6 +164,7 @@ fn main() {
                 Ok(())
             })
         }
+        ["contexts", "approve", id] => agent.approve(id).map(|line| println!("{line}")),
         ["contexts", "remove", id] => {
             let removed = agent.settings.lock().unwrap().adapters.remove(*id).is_some();
             agent

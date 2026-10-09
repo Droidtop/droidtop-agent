@@ -10,6 +10,11 @@ release carries until its number is written in.
   computer's addresses and a code, and the handheld connects (for a
   handheld the computer cannot reach, such as one behind an emulator's
   NAT). It listens on TCP 47612 while it waits.
+- A plugin can offer its context adapter: droidtop sends the program's
+  address and SHA-256 from the plugin's signed manifest, the computer keeps
+  the offer, and `droidtop-agent contexts approve <context>` fetches,
+  checks and installs it. Later versions from the same plugin follow
+  without asking again.
 
 ## build-10
 

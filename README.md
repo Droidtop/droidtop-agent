@@ -12,8 +12,10 @@ step with [droidtop](https://github.com/Droidtop/droidtop) on a handheld:
   ways.
 - **Plugin contexts.** Supporting data that droidtop's plugins share with
   programs on the computer, synced both ways. A plugin that needs one
-  publishes a small context adapter program for the computer; add it with
-  `droidtop-agent contexts add <program>`.
+  publishes a small context adapter program for the computer. When the
+  plugin asks for it, the agent says so; `droidtop-agent contexts approve
+  <context>` installs it, checked against the digest the plugin names.
+  `droidtop-agent contexts add <program>` adds one by hand.
 
 It does not stream your screen or control the computer remotely: that is
 [windowcast](https://github.com/Droidtop/windowcast)'s job. It never needs

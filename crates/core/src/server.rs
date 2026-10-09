@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use crate::channel::Channel;
-use crate::context::{RecordChange, Records};
+use crate::context::{AdapterOffer, RecordChange, Records};
 use crate::keys::PeerId;
 use crate::library::Change;
 use crate::manifest::{self, Manifest};
@@ -30,7 +30,9 @@ pub trait Host: Send + Sync {
     fn archive_dir(&self, game: &GameRef) -> PathBuf;
     fn library_pull(&self, peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)>;
     fn library_push(&self, peer: &PeerId, changes: Vec<Change>) -> Result<()>;
-    fn context_pull(&self, context: &str) -> Result<Records>;
+    /// A context's records here. [`offer`] is the adapter the plugin offers,
+    /// for a computer that has none for [`context`] yet.
+    fn context_pull(&self, context: &str, offer: Option<&AdapterOffer>) -> Result<Records>;
     /// Applies the changes; Ok(Some(reason)) when they must wait (the app that
     /// owns the data is running).
     fn context_push(&self, context: &str, changes: Vec<RecordChange>) -> Result<Option<String>>;
@@ -108,7 +110,9 @@ pub fn serve<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host) -> Result<()
                 Some((spec, roots)) => apply(host, &game, &spec, &roots, &remove, archive).map(|()| Response::Ok),
                 None => Err(Error::Protocol("this computer knows no saves for that game".into())),
             },
-            Request::ContextPull { context } => host.context_pull(&context).map(|records| Response::Context { records }),
+            Request::ContextPull { context, adapter } => {
+                host.context_pull(&context, adapter.as_ref()).map(|records| Response::Context { records })
+            }
             Request::ContextPush { context, changes } => host
                 .context_push(&context, changes)
                 .map(|deferred| Response::ContextApplied { deferred: deferred.is_some(), message: deferred }),
