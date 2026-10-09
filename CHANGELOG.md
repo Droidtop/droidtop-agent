@@ -14,6 +14,9 @@ release carries until its number is written in.
   never its relays. `droidtop-agent rendezvous` shows and sets it.
 - droidtop learns which way a sync went (`path`: lan, wireguard,
   rendezvous) and the computer's discovery ID from each session.
+- Rendezvous now runs on the windowcast-rendezvous crate that windowcast
+  shares, in place of this repository's own copy; behaviour and device IDs
+  are unchanged (a test pins the ID derivation).
 
 ## build-12
 
