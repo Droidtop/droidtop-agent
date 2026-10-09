@@ -15,6 +15,9 @@ release carries until its number is written in.
   the offer, and `droidtop-agent contexts approve <context>` fetches,
   checks and installs it. Later versions from the same plugin follow
   without asking again.
+- Off-LAN rendezvous through Syncthing's global discovery and public STUN
+  was not built: neither publishes terms that let another program use it
+  (docs/DESIGN.md section 10).
 
 ## build-10
 

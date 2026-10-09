@@ -387,6 +387,28 @@ share only ever sees ciphertext.
    - No community server is contacted by default (decision 4). A
      droidtop-run discovery service on the server VM (#364) is the planned
      default later.
+   - **Syncthing's global discovery and public STUN, read 2026-10-09**
+     (reference material only, nothing contacted). The coordinator's plan was
+     STUN for the reflexive address, Syncthing's global discovery for the
+     announcements and hole punching between the two, if their policies let
+     a third-party client use them. Neither publishes one that does:
+     - Syncthing's discovery server documentation says "The Syncthing project
+       also maintains a global cluster for public use", for Syncthing
+       installations, and says nothing of other programs. Its maintainer
+       wrote on the Syncthing forum (2026-06-18, "Discovery server security
+       concerns") that the servers are run by the Syncthing Foundation or in
+       practice by him alone, and "We have not written terms or conditions."
+       Asked earlier whether outside discovery servers could join the
+       default list, he answered that in practice they could not, as more
+       maintenance work. That is no permission for another program.
+     - Cloudflare's Realtime documentation lists `stun.cloudflare.com` but
+       states terms only for its TURN service; Google's STUN servers publish
+       none. Free public STUN servers are commonly described as having no
+       service commitment.
+     So the rendezvous is not built on them. It waits for the owner: ask
+     the Syncthing project for permission, or run droidtop's own discovery
+     and STUN on the server VM (#364), which the design already names as the
+     default to come.
    - **How it works now.** Each time they meet, the computer's `hello` reply
      tells the handheld its WireGuard endpoints (`wg:<ip>:<port>`):
      - the endpoint the person forwarded on their router
@@ -515,7 +537,9 @@ and skips folders it cannot read.
    endpoints, plus signed announcements in the person's own cloud share. Should
    a STUN server or Syncthing's global discovery also be used (each needs its
    usage policy read first), or should we wait for droidtop's own discovery on
-   #364?
+   #364? Read 2026-10-09 (section 10): neither publishes terms that let a
+   third-party program use it, so nothing was built on them; asking the
+   Syncthing project, or #364, is the owner's call.
 5. **Store cloud and agent on the same game.** Default: the store's cloud wins
    and the agent skips that game's saves.
 6. **The computer's games in droidtop's library.** Default: listed under the
