@@ -323,6 +323,17 @@ share only ever sees ciphertext.
    - No community server is contacted by default (decision 4). A
      droidtop-run discovery service on the server VM (#364) is the planned
      default later.
+   - **How it works now.** Each time they meet, the computer's `hello` reply
+     tells the handheld its WireGuard endpoints (`wg:<ip>:<port>`):
+     - the endpoint the person forwarded on their router
+       (`droidtop-agent endpoint set`);
+     - the computer's global IPv6 addresses (no NAT in the way, only a
+       firewall that has to let UDP 47611 in).
+
+     Away from the LAN, the handheld sends the handshake to all of them at
+     once and keeps the one that answers. The computer answers only keys it
+     has pinned. Hole punching through two NATs needs both sides to learn
+     their public endpoint at the same moment; that waits on decision 4.
 3. **The person's own cloud share, store and forward.** A folder that the
    person's own sync tool already carries to both devices: Google Drive,
    OneDrive or Dropbox clients, Nextcloud, a Syncthing folder they already run,

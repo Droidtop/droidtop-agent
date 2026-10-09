@@ -87,6 +87,10 @@ pub struct Settings {
     pub share: Option<PathBuf>,
     #[serde(default = "scan_minutes")]
     pub scan_minutes: u64,
+    /// Where this computer's WireGuard port answers from the internet, when
+    /// the person forwarded it on their router (`203.0.113.7:47611`).
+    #[serde(default)]
+    pub public_endpoint: Option<String>,
 }
 
 /// A paired device as this computer remembers it.

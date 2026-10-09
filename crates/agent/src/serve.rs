@@ -12,8 +12,9 @@ use std::time::Duration;
 
 use droidtop_agent_core::channel::Channel;
 use droidtop_agent_core::discovery;
-use droidtop_agent_core::keys::short;
+use droidtop_agent_core::keys::{short, PeerId};
 use droidtop_agent_core::server::serve;
+use droidtop_agent_core::tunnel;
 use droidtop_agent_core::PORT;
 
 use crate::state::Agent;
@@ -56,6 +57,38 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
                 eprintln!("Cloud share: {e}");
             }
             thread::sleep(Duration::from_secs(60));
+        });
+    }
+
+    // Direct WireGuard for a paired handheld away from the LAN: dual-stack
+    // where the system allows it, and IPv4 beside it where it does not
+    // (Windows binds [::] to IPv6 only).
+    for bind in ["[::]", "0.0.0.0"] {
+        let Ok(udp) = UdpSocket::bind(format!("{bind}:{}", tunnel::WG_PORT)) else { continue };
+        let a = agent.clone();
+        let stop = stop.clone();
+        thread::spawn(move || {
+            let peers = || -> Vec<PeerId> {
+                a.devices.lock().unwrap().iter().filter_map(|d| PeerId::from_hex(&d.id).ok()).filter(|p| a.is_trusted(p)).collect()
+            };
+            let on_stream = |peer: PeerId, mut stream: tunnel::TunnelStream| {
+                let a = a.clone();
+                thread::spawn(move || {
+                    stream.set_read_timeout(Some(Duration::from_secs(120)));
+                    match Channel::accept(stream, &a.key, |p| *p == peer && a.is_trusted(p)) {
+                        Ok(mut ch) => {
+                            a.seen(&peer, None);
+                            if let Err(e) = serve(&mut ch, &*a) {
+                                eprintln!("Session with {} through WireGuard ended: {e}", short(&peer));
+                            }
+                        }
+                        Err(e) => eprintln!("Refused a WireGuard session from {}: {e}", short(&peer)),
+                    }
+                });
+            };
+            if let Err(e) = tunnel::serve(&a.key, udp, peers, on_stream, &stop) {
+                eprintln!("WireGuard stopped: {e}");
+            }
         });
     }
 

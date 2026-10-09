@@ -22,6 +22,7 @@ pub mod proto;
 pub mod saves;
 pub mod savesync;
 pub mod server;
+pub mod tunnel;
 
 pub use error::{Error, Result};
 
@@ -32,4 +33,4 @@ pub const PORT: u16 = 47610;
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// What this build of the core can do, stated in `hello`.
-pub const FEATURES: &[&str] = &["saves", "library", "contexts"];
+pub const FEATURES: &[&str] = &["saves", "library", "contexts", "wireguard"];

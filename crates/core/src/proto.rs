@@ -40,13 +40,38 @@ pub enum Request {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Response {
-    Hello { name: String, version: u32, features: Vec<String> },
+    /// The computer's name and what it supports, and where its WireGuard
+    /// answers from outside the LAN (`wg:<ip>:<port>`), for the handheld
+    /// to keep for when it is away.
+    Hello {
+        name: String,
+        version: u32,
+        features: Vec<String>,
+        #[serde(default)]
+        endpoints: Vec<String>,
+    },
     Ok,
-    Error { message: String },
-    LibraryChanges { changes: Vec<Change>, cursor: u64 },
-    SaveSpec { spec: Option<SaveSpec> },
-    Manifest { files: Vec<FileEntry> },
-    File { file: FileEntry },
-    Context { records: Records },
-    ContextApplied { deferred: bool, message: Option<String> },
+    Error {
+        message: String,
+    },
+    LibraryChanges {
+        changes: Vec<Change>,
+        cursor: u64,
+    },
+    SaveSpec {
+        spec: Option<SaveSpec>,
+    },
+    Manifest {
+        files: Vec<FileEntry>,
+    },
+    File {
+        file: FileEntry,
+    },
+    Context {
+        records: Records,
+    },
+    ContextApplied {
+        deferred: bool,
+        message: Option<String>,
+    },
 }

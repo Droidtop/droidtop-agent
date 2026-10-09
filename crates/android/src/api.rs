@@ -3,6 +3,7 @@
 //! as `{"error": "..."}` in words the screens can show; a computer that
 //! could not be reached as `{"unreachable": "..."}`.
 
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +20,7 @@ use droidtop_agent_core::pairing::{self, PairInvite};
 use droidtop_agent_core::proto::{GameRef, Request, Response};
 use droidtop_agent_core::saves::{prefix_roots, Roots};
 use droidtop_agent_core::savesync::{self, SaveSyncRequest, Side};
+use droidtop_agent_core::tunnel::{self, TunnelStream};
 use droidtop_agent_core::{hex, Error, PORT, PROTOCOL_VERSION};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -192,11 +194,65 @@ fn parse_address(text: &str) -> Option<SocketAddr> {
     text.parse().ok().or_else(|| format!("{text}:{PORT}").parse().ok())
 }
 
-/// A channel to the computer, trying its known addresses, then the LAN.
-fn connect(key: &DeviceKey, args: &Value) -> Result<(Channel<TcpStream>, String, String), Failure> {
+/// The stream a session runs on: TCP on the LAN, or TCP inside a WireGuard tunnel.
+pub enum Link {
+    Tcp(TcpStream),
+    Tunnel(TunnelStream),
+}
+
+impl Read for Link {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Link::Tcp(s) => s.read(buf),
+            Link::Tunnel(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for Link {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Link::Tcp(s) => s.write(buf),
+            Link::Tunnel(s) => s.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Link::Tcp(s) => s.flush(),
+            Link::Tunnel(s) => s.flush(),
+        }
+    }
+}
+
+/// A session with the computer: where it answered, its name and its WireGuard endpoints.
+struct Session {
+    ch: Channel<Link>,
+    address: String,
+    computer: String,
+    endpoints: Vec<String>,
+}
+
+fn hello(mut ch: Channel<Link>, address: String, args: &Value) -> Result<Session, Failure> {
+    let name = args["name"].as_str().unwrap_or("droidtop").to_string();
+    let features = droidtop_agent_core::FEATURES.iter().map(|f| f.to_string()).collect();
+    ch.send_json(&Request::Hello { name, version: PROTOCOL_VERSION, features })?;
+    let (computer, endpoints) = match ch.recv_json::<Response>()? {
+        Response::Hello { name, endpoints, .. } => (name, endpoints),
+        _ => (String::new(), Vec::new()),
+    };
+    Ok(Session { ch, address, computer, endpoints })
+}
+
+/// A session with the computer, in the design's order (docs/DESIGN.md
+/// section 10): its known LAN addresses, then the LAN by broadcast, then its
+/// WireGuard endpoints (`wg:<ip>:<port>`).
+fn connect(key: &DeviceKey, args: &Value) -> Result<Session, Failure> {
     let peer = peer_of(args["peer"].as_str().unwrap_or_default())?;
-    let mut candidates: Vec<SocketAddr> =
-        args["addresses"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).filter_map(parse_address).collect()).unwrap_or_default();
+    let known: Vec<String> =
+        args["addresses"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let mut candidates: Vec<SocketAddr> = known.iter().filter(|a| !a.starts_with("wg:")).filter_map(|a| parse_address(a)).collect();
+    let tunnels: Vec<SocketAddr> = known.iter().filter_map(|a| a.strip_prefix("wg:")).filter_map(|a| a.parse().ok()).collect();
     let mut tried_lan = false;
     let mut last = String::from("it did not answer on this network");
     loop {
@@ -204,35 +260,44 @@ fn connect(key: &DeviceKey, args: &Value) -> Result<(Channel<TcpStream>, String,
             let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(3)) else { continue };
             let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
-            match Channel::connect(stream, key, &peer) {
-                Ok(mut ch) => {
-                    let name = args["name"].as_str().unwrap_or("droidtop").to_string();
-                    ch.send_json(&Request::Hello {
-                        name,
-                        version: PROTOCOL_VERSION,
-                        features: droidtop_agent_core::FEATURES.iter().map(|f| f.to_string()).collect(),
-                    })?;
-                    let computer = match ch.recv_json::<Response>()? {
-                        Response::Hello { name, .. } => name,
-                        _ => String::new(),
-                    };
-                    return Ok((ch, addr.to_string(), computer));
-                }
+            match Channel::connect(Link::Tcp(stream), key, &peer) {
+                Ok(ch) => return hello(ch, addr.to_string(), args),
                 Err(e) => last = e.to_string(),
             }
         }
         if tried_lan {
-            return Err(Failure::Unreachable(last));
+            break;
         }
         tried_lan = true;
         if let Ok(found) = discovery::find_agents(&key.peer_id(), &[peer], Duration::from_millis(1500)) {
             candidates = found.into_iter().map(|f| f.addr).collect();
         }
     }
+    if !tunnels.is_empty() {
+        match tunnel::connect(key, &peer, &tunnels, Duration::from_secs(8)) {
+            Ok(mut stream) => {
+                stream.set_read_timeout(Some(Duration::from_secs(120)));
+                let ch = Channel::connect(Link::Tunnel(stream), key, &peer)?;
+                return hello(ch, String::new(), args);
+            }
+            Err(e) => last = format!("{last}; through WireGuard: {e}"),
+        }
+    }
+    Err(Failure::Unreachable(last))
 }
 
-fn bye(mut ch: Channel<TcpStream>) {
+fn bye(mut ch: Channel<Link>) {
     let _ = ch.send_json(&Request::Bye);
+}
+
+/// Adds where the computer answered, its name and its endpoints to a reply.
+fn located(mut v: Value, s: &Session) -> Value {
+    if !s.address.is_empty() {
+        v["address"] = json!(s.address);
+    }
+    v["computer"] = json!(s.computer);
+    v["endpoints"] = json!(s.endpoints);
+    v
 }
 
 // Saves ----------------------------------------------------------------------
@@ -268,14 +333,12 @@ fn sync_saves(args: &Value) -> Outcome {
         roots.insert("<base>".into(), base.clone());
     }
     roots.extend(a.roots.clone());
-    let (mut ch, address, computer) = connect(&key, args)?;
+    let mut s = connect(&key, args)?;
     let request =
         SaveSyncRequest { game: a.game.clone(), roots: &roots, baseline_path: &a.baseline, archive_dir: &a.archive, choice: a.choice };
-    let outcome = savesync::sync(&mut ch, &request);
-    bye(ch);
-    let mut v = serde_json::to_value(outcome?)?;
-    v["address"] = json!(address);
-    v["computer"] = json!(computer);
+    let outcome = savesync::sync(&mut s.ch, &request);
+    let v = located(serde_json::to_value(outcome?)?, &s);
+    bye(s.ch);
     Ok(v)
 }
 
@@ -291,7 +354,8 @@ fn sync_library(args: &Value) -> Outcome {
     let mut lib = Library::load(&state).map_err(|e| Failure::Error(e.to_string()))?;
     lib.update_device(&me, &name, scan);
     lib.save(&state).map_err(|e| Failure::Error(e.to_string()))?;
-    let (mut ch, address, computer) = connect(&key, args)?;
+    let mut s = connect(&key, args)?;
+    let ch = &mut s.ch;
     let cursor: Cursor = lib.cursors.get(&peer_hex).copied().unwrap_or_default();
     let (outgoing, seq) = lib.changes_since(cursor.pushed);
     let pushed = outgoing.len();
@@ -309,11 +373,12 @@ fn sync_library(args: &Value) -> Outcome {
         Response::Error { message } => return Err(Failure::Error(message)),
         other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
     };
-    bye(ch);
     let pulled = incoming.iter().filter(|c| lib.apply((*c).clone())).count();
     lib.cursors.insert(peer_hex, Cursor { pulled: their, pushed: seq });
     lib.save(&state).map_err(|e| Failure::Error(e.to_string()))?;
-    Ok(json!({ "pushed": pushed, "pulled": pulled, "address": address, "computer": computer }))
+    let v = located(json!({ "pushed": pushed, "pulled": pulled }), &s);
+    bye(s.ch);
+    Ok(v)
 }
 
 // Plugin contexts ------------------------------------------------------------
@@ -323,7 +388,8 @@ fn sync_context(args: &Value) -> Outcome {
     let decl: ContextDecl = serde_json::from_value(args["decl"].clone())?;
     let device: Records = serde_json::from_value(args["device"].clone()).unwrap_or_default();
     let baseline: Records = serde_json::from_value(args["baseline"].clone()).unwrap_or_default();
-    let (mut ch, address, computer) = connect(&key, args)?;
+    let mut s = connect(&key, args)?;
+    let ch = &mut s.ch;
     ch.send_json(&Request::ContextPull { context: decl.id.clone() })?;
     let theirs = match ch.recv_json::<Response>()? {
         Response::Context { records } => records,
@@ -341,18 +407,20 @@ fn sync_context(args: &Value) -> Outcome {
             other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
         }
     };
-    bye(ch);
     let kept = if deferred { baseline_when_deferred(&m, &theirs) } else { m.baseline.clone() };
-    Ok(json!({
-        "device": m.device,
-        "baseline": kept,
-        "conflicts": m.conflicts,
-        "sent": m.to_computer.len(),
-        "deferred": deferred,
-        "message": message,
-        "address": address,
-        "computer": computer,
-    }))
+    let v = located(
+        json!({
+            "device": m.device,
+            "baseline": kept,
+            "conflicts": m.conflicts,
+            "sent": m.to_computer.len(),
+            "deferred": deferred,
+            "message": message,
+        }),
+        &s,
+    );
+    bye(s.ch);
+    Ok(v)
 }
 
 #[cfg(test)]

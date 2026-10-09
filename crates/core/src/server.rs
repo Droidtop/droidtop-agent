@@ -20,6 +20,10 @@ use crate::{Error, Result, FEATURES, PROTOCOL_VERSION};
 pub trait Host: Send + Sync {
     /// This computer's name, as the handheld shows it.
     fn name(&self) -> String;
+    /// Where this computer's WireGuard answers from outside the LAN, as `wg:<ip>:<port>`.
+    fn endpoints(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// Where [`game`] keeps its saves, and this computer's folder for each token.
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)>;
     /// Where this computer's conflict loser for [`game`] goes.
@@ -50,6 +54,7 @@ pub fn serve<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host) -> Result<()
                 name: host.name(),
                 version: PROTOCOL_VERSION,
                 features: FEATURES.iter().map(|f| f.to_string()).collect(),
+                endpoints: host.endpoints(),
             }),
             Request::LibraryPull { since } => {
                 host.library_pull(&peer, since).map(|(changes, cursor)| Response::LibraryChanges { changes, cursor })

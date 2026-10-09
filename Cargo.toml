@@ -16,7 +16,11 @@ rust-version = "1.85"
 windowcast-identity = { git = "https://github.com/Droidtop/windowcast", rev = "9481e55ae5f4265b3420e95e0f0a69bd5ad4904b" }
 windowcast-pairing = { git = "https://github.com/Droidtop/windowcast", rev = "9481e55ae5f4265b3420e95e0f0a69bd5ad4904b" }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-x25519-dalek = "2"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+# Userspace WireGuard (BSD-3-Clause) and a userspace TCP stack to carry the
+# session channel inside it (0BSD): docs/DESIGN.md section 10.
+boringtun = { version = "0.7", default-features = false }
+smoltcp = { version = "=0.11.0", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "socket-tcp"] }
 snow = "=0.9.6"
 chacha20poly1305 = "0.10"
 sha2 = "0.10"

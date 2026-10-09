@@ -102,9 +102,31 @@ impl Agent {
     }
 }
 
+/// Where this computer's WireGuard answers from outside the LAN: the
+/// endpoint the person forwarded, and every global IPv6 address it has
+/// (no NAT in the way, only a firewall that lets the port in).
+pub fn endpoints(public: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = public.into_iter().map(|p| format!("wg:{p}")).collect();
+    if let Ok(interfaces) = if_addrs::get_if_addrs() {
+        for interface in interfaces {
+            if let std::net::IpAddr::V6(ip) = interface.ip() {
+                if !ip.is_loopback() && ip.segments()[0] & 0xe000 == 0x2000 {
+                    out.push(format!("wg:[{ip}]:{}", droidtop_agent_core::tunnel::WG_PORT));
+                }
+            }
+        }
+    }
+    out.dedup();
+    out
+}
+
 impl Host for Agent {
     fn name(&self) -> String {
         Agent::name(self)
+    }
+
+    fn endpoints(&self) -> Vec<String> {
+        endpoints(self.settings.lock().unwrap().public_endpoint.as_deref())
     }
 
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)> {

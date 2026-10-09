@@ -17,3 +17,8 @@ records what each change brought.
   - Plugin context sync, with F95Checker's database as the first context.
   - Store and forward through a cloud folder of the person's own.
   - droidtop's Android library behind one JNI call.
+  - Direct WireGuard between paired devices: boringtun and smoltcp in
+    userspace.
+    - The computer listens on UDP 47611 and states its endpoints (a
+      forwarded port, global IPv6 addresses) in `hello`.
+    - The handheld tries them all when the LAN does not answer.

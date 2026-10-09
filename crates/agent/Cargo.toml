@@ -27,6 +27,8 @@ ureq = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "5"
 gethostname = "0.5"
+# This computer's addresses, for the WireGuard endpoints it tells the handheld.
+if-addrs = "0.13"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

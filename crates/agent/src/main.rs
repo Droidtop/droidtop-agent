@@ -46,6 +46,10 @@ Usage:
                                        A folder your own sync tool carries to the handheld,
                                        used when the two are never online together
   droidtop-agent contexts              The plugin contexts this computer can sync
+  droidtop-agent endpoint [set <ip:port> | clear]
+                                       Where this computer's WireGuard port (UDP 47611) answers from
+                                       the internet, if you forwarded it on your router; the handheld
+                                       uses it, and this computer's global IPv6 addresses, when away
 ";
 
 fn main() {
@@ -131,6 +135,23 @@ fn main() {
                 println!("{id}: {what} ({state})");
             }
             Ok(())
+        }
+        ["endpoint"] => {
+            for e in host::endpoints(agent.settings.lock().unwrap().public_endpoint.as_deref()) {
+                println!("{e}");
+            }
+            Ok(())
+        }
+        ["endpoint", "set", at] => match at.parse::<std::net::SocketAddr>() {
+            Ok(_) => {
+                agent.settings.lock().unwrap().public_endpoint = Some(at.to_string());
+                agent.save_settings().map_err(|e| e.to_string())
+            }
+            Err(_) => Err(format!("{at} is not an address and port, such as 203.0.113.7:47611.")),
+        },
+        ["endpoint", "clear"] => {
+            agent.settings.lock().unwrap().public_endpoint = None;
+            agent.save_settings().map_err(|e| e.to_string())
         }
         _ => Err(format!("Unknown command.\n\n{HELP}")),
     };
