@@ -6,6 +6,17 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Rendezvous away from home, the way Syncthing does it: STUN from the
+  WireGuard socket, Syncthing's global discovery protocol to announce and
+  look up addresses (a discovery ID per device, from a certificate made from
+  its key), and UDP hole punching between paired devices. Syncthing's
+  servers by default, at Syncthing's own client's pace; addresses only,
+  never its relays. `droidtop-agent rendezvous` shows and sets it.
+- droidtop learns which way a sync went (`path`: lan, wireguard,
+  rendezvous) and the computer's discovery ID from each session.
+
+## build-12
+
 - Pairing the other way round: `droidtop-agent pair` with no code shows this
   computer's addresses and a code, and the handheld connects (for a
   handheld the computer cannot reach, such as one behind an emulator's

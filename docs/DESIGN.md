@@ -384,31 +384,48 @@ share only ever sees ciphertext.
      - from small signed announcements (endpoint and key, a few hundred bytes)
        left in the person's own cloud share (transport 3);
      - optionally, from a STUN server the person configures.
-   - No community server is contacted by default (decision 4). A
-     droidtop-run discovery service on the server VM (#364) is the planned
-     default later.
-   - **Syncthing's global discovery and public STUN, read 2026-10-09**
-     (reference material only, nothing contacted). The coordinator's plan was
-     STUN for the reflexive address, Syncthing's global discovery for the
-     announcements and hole punching between the two, if their policies let
-     a third-party client use them. Neither publishes one that does:
-     - Syncthing's discovery server documentation says "The Syncthing project
-       also maintains a global cluster for public use", for Syncthing
-       installations, and says nothing of other programs. Its maintainer
-       wrote on the Syncthing forum (2026-06-18, "Discovery server security
-       concerns") that the servers are run by the Syncthing Foundation or in
-       practice by him alone, and "We have not written terms or conditions."
-       Asked earlier whether outside discovery servers could join the
-       default list, he answered that in practice they could not, as more
-       maintenance work. That is no permission for another program.
-     - Cloudflare's Realtime documentation lists `stun.cloudflare.com` but
-       states terms only for its TURN service; Google's STUN servers publish
-       none. Free public STUN servers are commonly described as having no
-       service commitment.
-     So the rendezvous is not built on them. It waits for the owner: ask
-     the Syncthing project for permission, or run droidtop's own discovery
-     and STUN on the server VM (#364), which the design already names as the
-     default to come.
+   - Syncthing's global discovery and STUN servers carry addresses only
+     (decision 4, below); no relay carries data. A droidtop-run discovery
+     service on the server VM (#364) can take their place in the settings.
+   - **Rendezvous, the way Syncthing does it** (owner, 2026-10-09: "We ARE
+     using syncthing's detection and routing implementation"; "there's a
+     reason we aren't passing DATA over it"). Syncthing's global discovery
+     protocol (v3) and STUN, with Syncthing's default servers as the default
+     and a setting for droidtop's own on #364 later; Syncthing's relays are
+     never used, and every byte of a sync goes through the direct tunnel.
+     - **Discovery ID.** Global discovery names a device by the SHA-256 of
+       the TLS client certificate it announces with (Syncthing's device ID,
+       base32 with Luhn check characters). Each device's certificate is made
+       from a key derived from its seed, with fixed fields and a
+       deterministic Ed25519 signature, so the ID never changes and nothing
+       more is stored. The two sides tell each other their IDs in `hello`.
+     - **The computer** sends STUN binding requests from the WireGuard
+       socket itself (Syncthing's STUN list; keepalive every 180 s, down to
+       20 s when the NAT forgets sooner, Syncthing's figures). It announces
+       `{"addresses": ["wg://<mapped>", forwarded port, global IPv6]}` when
+       that changes (after a 5 s settle) and then when `Reannounce-After`
+       says (30 minutes by default), never before a `Retry-After`, and 5
+       minutes after a failure: Syncthing's own client's pace. It looks its
+       paired handhelds up on Syncthing's schedule (a found address is kept
+       5 minutes; not found, asked again after a minute or the server's
+       `Retry-After`) and sends a one-byte punch to each address found every
+       2 seconds while it is fresh.
+     - **The handheld**, only when the LAN and the stated endpoints did not
+       answer: from one new socket it asks STUN for its own mapped address,
+       looks the computer up (a found address kept 5 minutes, a miss not
+       asked again before the server's `Retry-After` or a minute; kept in a
+       small state file), announces its own address when it changed or the
+       server asked, and sends WireGuard handshakes from that socket to the
+       computer's addresses for up to 75 s, long enough for the computer's
+       next lookup and punches.
+     - **What it cannot do:** two NATs that change the port for every
+       destination (symmetric NAT) cannot be punched, and a handheld the
+       discovery server has never seen may be asked about only after the
+       server's adaptive `Retry-After`, so a first contact can take longer
+       than one sync; the next one finds the cached address.
+     - Settings on the computer: `droidtop-agent rendezvous on|off`,
+       `rendezvous servers default|<url>...`, `rendezvous stun
+       default|<host:port>...`; on droidtop, Settings > Computers.
    - **How it works now.** Each time they meet, the computer's `hello` reply
      tells the handheld its WireGuard endpoints (`wg:<ip>:<port>`):
      - the endpoint the person forwarded on their router
@@ -418,8 +435,7 @@ share only ever sees ciphertext.
 
      Away from the LAN, the handheld sends the handshake to all of them at
      once and keeps the one that answers. The computer answers only keys it
-     has pinned. Hole punching through two NATs needs both sides to learn
-     their public endpoint at the same moment; that waits on decision 4.
+     has pinned. Through two NATs, the rendezvous below punches the hole.
    - droidtop keeps the endpoints from the last `hello` with the computer
      and passes them with its LAN addresses on every call; a call tries the
      LAN addresses, then the LAN broadcast, then the endpoints. A network
@@ -537,9 +553,9 @@ and skips folders it cannot read.
    endpoints, plus signed announcements in the person's own cloud share. Should
    a STUN server or Syncthing's global discovery also be used (each needs its
    usage policy read first), or should we wait for droidtop's own discovery on
-   #364? Read 2026-10-09 (section 10): neither publishes terms that let a
-   third-party program use it, so nothing was built on them; asking the
-   Syncthing project, or #364, is the owner's call.
+   #364? Decided (owner, 2026-10-09): Syncthing's global discovery and STUN
+   servers by default, addresses only, at Syncthing's own client's pace;
+   droidtop's own server (#364) can replace them in the settings (section 10).
 5. **Store cloud and agent on the same game.** Default: the store's cloud wins
    and the agent skips that game's saves.
 6. **The computer's games in droidtop's library.** Default: listed under the

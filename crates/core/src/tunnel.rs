@@ -366,11 +366,23 @@ pub fn connect(key: &DeviceKey, peer: &PeerId, candidates: &[SocketAddr], timeou
     // A dual-stack socket when an IPv6 endpoint is among them; a network
     // with IPv6 switched off refuses that, and then the IPv4 ones are tried.
     let dual = candidates.iter().any(SocketAddr::is_ipv6).then(|| UdpSocket::bind("[::]:0").ok()).flatten();
-    let v6 = dual.is_some();
     let udp = match dual {
         Some(udp) => udp,
         None => UdpSocket::bind("0.0.0.0:0")?,
     };
+    connect_on(udp, key, peer, candidates, timeout)
+}
+
+/// [`connect`] from a socket the caller already has: the one whose NAT
+/// mapping a rendezvous announced, so the computer's punches reach it.
+pub fn connect_on(
+    udp: UdpSocket,
+    key: &DeviceKey,
+    peer: &PeerId,
+    candidates: &[SocketAddr],
+    timeout: Duration,
+) -> io::Result<TunnelStream> {
+    let v6 = udp.local_addr()?.is_ipv6();
     udp.set_read_timeout(Some(Duration::from_millis(5)))?;
     let targets: Vec<SocketAddr> = candidates
         .iter()
@@ -437,15 +449,32 @@ pub fn connect(key: &DeviceKey, peer: &PeerId, candidates: &[SocketAddr], timeou
     }
 }
 
+/// Other traffic on the WireGuard socket: STUN replies and hole punching
+/// (crate::rendezvous), which have to use the very socket WireGuard answers on.
+pub trait Hooks {
+    /// A datagram the loop received; true when it was the hook's, not WireGuard's.
+    fn datagram(&mut self, _udp: &UdpSocket, _from: SocketAddr, _data: &[u8]) -> bool {
+        false
+    }
+    /// Called on every turn of the loop (at least every few milliseconds).
+    fn tick(&mut self, _udp: &UdpSocket) {}
+}
+
+/// No other traffic.
+pub struct NoHooks;
+impl Hooks for NoHooks {}
+
 /// The computer's side: answers WireGuard from [`peers`] (the paired
 /// devices, asked afresh for each new handshake) on [`udp`], and hands each
 /// inner connection to [`on_stream`]. Runs until [`stop`].
+/// [`hooks`] sees the socket's other traffic.
 pub fn serve(
     key: &DeviceKey,
     udp: UdpSocket,
     peers: impl Fn() -> Vec<PeerId>,
     on_stream: impl Fn(PeerId, TunnelStream),
     stop: &AtomicBool,
+    hooks: &mut dyn Hooks,
 ) -> io::Result<()> {
     udp.set_read_timeout(Some(Duration::from_millis(5)))?;
     let mut sessions: HashMap<PeerId, Session> = HashMap::new();
@@ -453,6 +482,7 @@ pub fn serve(
     let mut out = vec![0u8; WIRE];
     while !stop.load(Ordering::Relaxed) {
         match udp.recv_from(&mut buf) {
+            Ok((n, from)) if hooks.datagram(&udp, from, &buf[..n]) => {}
             Ok((n, from)) => {
                 let data = &buf[..n];
                 let known = sessions.iter_mut().find(|(_, s)| s.endpoint == from).map(|(p, _)| *p);
@@ -491,6 +521,7 @@ pub fn serve(
             Err(e) if quiet(&e) => {}
             Err(e) => return Err(e),
         }
+        hooks.tick(&udp);
         for (peer, session) in sessions.iter_mut() {
             if let Some(stream) = session.pump(&udp, &mut out) {
                 on_stream(*peer, stream);
@@ -535,6 +566,7 @@ mod tests {
                     });
                 },
                 &stop_server,
+                &mut NoHooks,
             )
             .unwrap();
         });
@@ -561,7 +593,7 @@ mod tests {
         let stop_server = stop.clone();
         let paired = DeviceKey::generate().peer_id();
         let server = thread::spawn(move || {
-            serve(&pc, udp, move || vec![paired], |_, _| panic!("a stranger got a stream"), &stop_server).unwrap();
+            serve(&pc, udp, move || vec![paired], |_, _| panic!("a stranger got a stream"), &stop_server, &mut NoHooks).unwrap();
         });
         let stranger = DeviceKey::generate();
         let result = connect(&stranger, &pc_id, &[SocketAddr::from(([127, 0, 0, 1], port))], Duration::from_secs(3));

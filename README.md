@@ -41,8 +41,14 @@ The first time the agent runs, Windows may ask whether it may use the
 network. It listens on port 47610 (TCP and UDP) on your local network, and
 on UDP 47611 for WireGuard from outside it.
 
-Away from home, the handheld reaches the computer through WireGuard when
-the computer's UDP 47611 is reachable: forward it on your router and run
+Away from home, the two find each other the way Syncthing does: the agent
+learns its public address by STUN and announces it to Syncthing's global
+discovery servers, the handheld looks it up, and the two punch through both
+routers with WireGuard. Only addresses go to those servers; the sync itself
+goes through the direct WireGuard tunnel. `droidtop-agent rendezvous` shows
+it, and turns it off or points it at other servers. When the routers do not
+allow punching, the handheld still reaches the computer when its UDP 47611 is
+reachable: forward it on your router and run
 `droidtop-agent endpoint set <public ip>:47611`, or let a global IPv6
 address through your firewall. The handheld learns these each time the two
 meet. When neither works, `droidtop-agent share set <folder>` names a folder

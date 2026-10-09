@@ -63,10 +63,22 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
     // Direct WireGuard for a paired handheld away from the LAN: dual-stack
     // where the system allows it, and IPv4 beside it where it does not
     // (Windows binds [::] to IPv6 only).
-    for bind in ["[::]", "0.0.0.0"] {
-        let Ok(udp) = UdpSocket::bind(format!("{bind}:{}", tunnel::WG_PORT)) else { continue };
+    let sockets: Vec<UdpSocket> =
+        ["[::]", "0.0.0.0"].iter().filter_map(|b| UdpSocket::bind(format!("{b}:{}", tunnel::WG_PORT)).ok()).collect();
+    // STUN and hole punching need the socket that speaks IPv4: the IPv4 one
+    // where there are two (Windows), else the dual-stack one.
+    let rendezvous_on = sockets.iter().rposition(|s| s.local_addr().is_ok());
+    if rendezvous_on.is_some() {
+        crate::rendezvous::run(agent.clone());
+    }
+    for (i, udp) in sockets.into_iter().enumerate() {
         let a = agent.clone();
         let stop = stop.clone();
+        let mut hooks: Box<dyn tunnel::Hooks + Send> = if Some(i) == rendezvous_on {
+            Box::new(crate::rendezvous::WgHooks::new(agent.rendezvous.clone()))
+        } else {
+            Box::new(tunnel::NoHooks)
+        };
         thread::spawn(move || {
             let peers = || -> Vec<PeerId> {
                 a.devices.lock().unwrap().iter().filter_map(|d| PeerId::from_hex(&d.id).ok()).filter(|p| a.is_trusted(p)).collect()
@@ -86,7 +98,7 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
                     }
                 });
             };
-            if let Err(e) = tunnel::serve(&a.key, udp, peers, on_stream, &stop) {
+            if let Err(e) = tunnel::serve(&a.key, udp, peers, on_stream, &stop, hooks.as_mut()) {
                 eprintln!("WireGuard stopped: {e}");
             }
         });

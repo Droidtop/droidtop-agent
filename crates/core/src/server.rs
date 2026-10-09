@@ -24,6 +24,12 @@ pub trait Host: Send + Sync {
     fn endpoints(&self) -> Vec<String> {
         Vec::new()
     }
+    /// This computer's global discovery ID, when it takes part in rendezvous.
+    fn disco_id(&self) -> Option<String> {
+        None
+    }
+    /// A handheld said hello, with its global discovery ID when it has one.
+    fn hello(&self, _peer: &PeerId, _disco: Option<&str>) {}
     /// Where [`game`] keeps its saves, and this computer's folder for each token.
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)>;
     /// Where this computer's conflict loser for [`game`] goes.
@@ -52,12 +58,16 @@ pub fn serve<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host) -> Result<()
         let mut spec_of = |game: &GameRef| specs.entry(game.clone()).or_insert_with(|| host.saves(game)).clone();
         let reply = match request {
             Request::Bye => return Ok(()),
-            Request::Hello { .. } => Ok(Response::Hello {
-                name: host.name(),
-                version: PROTOCOL_VERSION,
-                features: FEATURES.iter().map(|f| f.to_string()).collect(),
-                endpoints: host.endpoints(),
-            }),
+            Request::Hello { disco, .. } => {
+                host.hello(&peer, disco.as_deref());
+                Ok(Response::Hello {
+                    name: host.name(),
+                    version: PROTOCOL_VERSION,
+                    features: FEATURES.iter().map(|f| f.to_string()).collect(),
+                    endpoints: host.endpoints(),
+                    disco: host.disco_id(),
+                })
+            }
             Request::LibraryPull { since } => {
                 host.library_pull(&peer, since).map(|(changes, cursor)| Response::LibraryChanges { changes, cursor })
             }

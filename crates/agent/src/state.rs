@@ -64,6 +64,10 @@ impl Dirs {
     pub fn adapters(&self) -> PathBuf {
         self.data.join("adapters")
     }
+    /// The rendezvous's state, for `droidtop-agent rendezvous` to show.
+    pub fn rendezvous(&self) -> PathBuf {
+        self.data.join("rendezvous.json")
+    }
     pub fn library(&self) -> PathBuf {
         self.data.join("library.json")
     }
@@ -76,8 +80,16 @@ fn scan_minutes() -> u64 {
     30
 }
 
+fn yes() -> bool {
+    true
+}
+
+fn default_list() -> Vec<String> {
+    vec!["default".into()]
+}
+
 /// The person's settings for this agent.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
     /// This computer's name on the handheld; the host name when unset.
     #[serde(default)]
@@ -106,6 +118,23 @@ pub struct Settings {
     /// (`contexts approve`): the plugin and the digest of the program in place.
     #[serde(default)]
     pub approved: BTreeMap<String, Approval>,
+    /// Rendezvous away from the LAN through global discovery and STUN
+    /// (`rendezvous on|off`; on unless the person turned it off).
+    #[serde(default = "yes")]
+    pub rendezvous: bool,
+    /// Discovery servers in Syncthing's notation; `default` is Syncthing's.
+    #[serde(default = "default_list")]
+    pub discovery_servers: Vec<String>,
+    /// STUN servers (`host:port`); `default` is the list Syncthing uses.
+    #[serde(default = "default_list")]
+    pub stun_servers: Vec<String>,
+}
+
+/// A fresh install's settings are the serde defaults (rendezvous on, Syncthing's servers).
+impl Default for Settings {
+    fn default() -> Self {
+        serde_json::from_str("{}").expect("every setting has a default")
+    }
 }
 
 /// A plugin the person let supply a context's adapter, and what is installed.
@@ -125,6 +154,9 @@ pub struct Device {
     pub last_address: Option<String>,
     #[serde(default)]
     pub last_seen_ms: i64,
+    /// Its global discovery ID, as it said in its last hello.
+    #[serde(default)]
+    pub disco: Option<String>,
 }
 
 /// Save locations the person states for a game, ahead of the Ludusavi manifest.
@@ -166,6 +198,9 @@ pub struct Agent {
     pub library: Mutex<Library>,
     pub scan: Mutex<Option<(Instant, Scan)>>,
     pub ludusavi: Mutex<Option<crate::ludusavi::Index>>,
+    /// What the rendezvous knows now: the address the NAT gives the WireGuard
+    /// socket, and where to punch (crate::rendezvous).
+    pub rendezvous: std::sync::Arc<Mutex<crate::rendezvous::Shared>>,
 }
 
 impl Agent {
@@ -185,6 +220,7 @@ impl Agent {
             library: Mutex::new(library),
             scan: Mutex::new(None),
             ludusavi: Mutex::new(None),
+            rendezvous: Default::default(),
             key,
             dirs,
         })
@@ -234,6 +270,7 @@ impl Agent {
                 paired_ms: droidtop_agent_core::library::now_ms(),
                 last_address: None,
                 last_seen_ms: 0,
+                disco: None,
             });
         }
         self.save_devices()
@@ -248,6 +285,21 @@ impl Agent {
         }
         self.devices.lock().unwrap().retain(|d| d.id != peer.to_hex());
         self.save_devices()
+    }
+
+    /// Records the global discovery ID a paired device stated in its hello.
+    pub fn device_disco(&self, peer: &PeerId, disco: &str) {
+        if !droidtop_agent_core::rendezvous::valid_device_id(disco) {
+            return;
+        }
+        let mut devices = self.devices.lock().unwrap();
+        let Some(d) = devices.iter_mut().find(|d| d.id == peer.to_hex()) else { return };
+        if d.disco.as_deref() == Some(disco) {
+            return;
+        }
+        d.disco = Some(disco.to_string());
+        drop(devices);
+        let _ = self.save_devices();
     }
 
     pub fn seen(&self, peer: &PeerId, address: Option<String>) {

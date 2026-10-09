@@ -24,10 +24,13 @@ pub struct GameRef {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Request {
+    /// [`disco`] is the device's global discovery ID (crate::rendezvous).
     Hello {
         name: String,
         version: u32,
         features: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        disco: Option<String>,
     },
     LibraryPull {
         since: u64,
@@ -80,6 +83,9 @@ pub enum Response {
         features: Vec<String>,
         #[serde(default)]
         endpoints: Vec<String>,
+        /// The computer's global discovery ID, to find it away from the LAN.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        disco: Option<String>,
     },
     Ok,
     Error {

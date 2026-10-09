@@ -126,7 +126,27 @@ impl Host for Agent {
     }
 
     fn endpoints(&self) -> Vec<String> {
-        endpoints(self.settings.lock().unwrap().public_endpoint.as_deref())
+        let mut out = endpoints(self.settings.lock().unwrap().public_endpoint.as_deref());
+        // The address STUN found for the WireGuard socket: enough on its own
+        // when this side's NAT lets a known peer's packets in.
+        if let Some(mapped) = self.rendezvous.lock().unwrap().mapped {
+            out.push(format!("wg:{mapped}"));
+        }
+        out.dedup();
+        out
+    }
+
+    fn disco_id(&self) -> Option<String> {
+        if !self.settings.lock().unwrap().rendezvous {
+            return None;
+        }
+        droidtop_agent_core::rendezvous::DiscoveryCert::of(&self.key).ok().map(|c| c.device_id())
+    }
+
+    fn hello(&self, peer: &PeerId, disco: Option<&str>) {
+        if let Some(disco) = disco {
+            self.device_disco(peer, disco);
+        }
     }
 
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)> {

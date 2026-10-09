@@ -13,6 +13,7 @@ mod contexts;
 mod host;
 mod ludusavi;
 mod pair;
+mod rendezvous;
 mod scan;
 mod serve;
 mod share;
@@ -60,6 +61,12 @@ Usage:
                                        Where this computer's WireGuard port (UDP 47611) answers from
                                        the internet, if you forwarded it on your router; the handheld
                                        uses it, and this computer's global IPv6 addresses, when away
+  droidtop-agent rendezvous [on | off] Finding each other away from home the way Syncthing does: STUN for
+                                       this computer's address, Syncthing's global discovery to announce it
+                                       (addresses only; syncs go through the direct WireGuard tunnel)
+  droidtop-agent rendezvous servers default | <url>...
+                                       Discovery servers, in Syncthing's notation (default: Syncthing's)
+  droidtop-agent rendezvous stun default | <host:port>...
 ";
 
 fn main() {
@@ -185,6 +192,37 @@ fn main() {
             }
             Err(_) => Err(format!("{at} is not an address and port, such as 203.0.113.7:47611.")),
         },
+        ["rendezvous"] => {
+            let s = agent.settings.lock().unwrap().clone();
+            println!("Rendezvous: {}", if s.rendezvous { "on" } else { "off" });
+            println!("Discovery servers: {}", s.discovery_servers.join(" "));
+            println!("STUN servers: {}", s.stun_servers.join(" "));
+            if let Ok(cert) = droidtop_agent_core::rendezvous::DiscoveryCert::of(&agent.key) {
+                println!("This computer's discovery ID: {}", cert.device_id());
+            }
+            match state::read_json::<rendezvous::Status>(&agent.dirs.rendezvous()) {
+                Ok(st) if st.disco.is_some() => println!("{st:#?}"),
+                _ => println!("No rendezvous state yet: it is kept while droidtop-agent runs."),
+            }
+            Ok(())
+        }
+        ["rendezvous", on @ ("on" | "off")] => {
+            agent.settings.lock().unwrap().rendezvous = *on == "on";
+            agent.save_settings().map_err(|e| e.to_string())
+        }
+        ["rendezvous", "servers", list @ ..] if !list.is_empty() => {
+            match list.iter().find(|s| **s != "default" && droidtop_agent_core::rendezvous::Server::parse(s).is_none()) {
+                Some(bad) => Err(format!("{bad} is not an https discovery server address (or default).")),
+                None => {
+                    agent.settings.lock().unwrap().discovery_servers = list.iter().map(|s| s.to_string()).collect();
+                    agent.save_settings().map_err(|e| e.to_string())
+                }
+            }
+        }
+        ["rendezvous", "stun", list @ ..] if !list.is_empty() => {
+            agent.settings.lock().unwrap().stun_servers = list.iter().map(|s| s.to_string()).collect();
+            agent.save_settings().map_err(|e| e.to_string())
+        }
         ["endpoint", "clear"] => {
             agent.settings.lock().unwrap().public_endpoint = None;
             agent.save_settings().map_err(|e| e.to_string())
