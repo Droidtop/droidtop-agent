@@ -205,6 +205,7 @@ impl Agent {
             }
             Some(_) => Ok(()),
             None if installed => Ok(()),
+            None if self.settings.lock().unwrap().declined.get(context) == Some(&offer.plugin) => Ok(()),
             None => {
                 let mut offers = self.adapter_offers();
                 if offers.get(context) != Some(offer) {
@@ -280,6 +281,17 @@ impl Agent {
         offers.remove(context);
         crate::state::write_json(&self.dirs.adapter_offers(), &offers).map_err(|e| e.to_string())?;
         Ok(format!("Installed the {context} adapter from {}. The handheld's next sync of that context uses it.", offer.plugin))
+    }
+
+    /// The person said no to the adapter a plugin offered for [`context`]:
+    /// the offer goes, and that plugin's offers for it are not kept again.
+    /// `contexts add`, or approving another plugin's offer, still works.
+    pub fn decline(&self, context: &str) -> Result<(), String> {
+        let mut offers = self.adapter_offers();
+        let Some(offer) = offers.remove(context) else { return Ok(()) };
+        crate::state::write_json(&self.dirs.adapter_offers(), &offers).map_err(|e| e.to_string())?;
+        self.settings.lock().unwrap().declined.insert(context.to_string(), offer.plugin);
+        self.save_settings().map_err(|e| e.to_string())
     }
 }
 

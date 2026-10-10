@@ -6,6 +6,14 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- droidtop-agent-app: the agent with a window and a tray icon on Windows,
+  Linux and macOS. Its pages are status, pairing (it shows or takes a code,
+  with a QR code), the library it found, kept saves, plugin data (install
+  or decline offered adapters) and settings, so nobody needs the command
+  line. It is egui with tray-icon, or a StatusNotifierItem on Linux. The
+  agent is now a library both programs share.
+- Releases carry Linux aarch64 and macOS x86_64 builds too, and a
+  `droidtop-agent.app` for macOS.
 - Linux and macOS hosts:
   - the Steam Snap is found;
   - Lutris Wine games, and Heroic's GOG, Epic and Amazon games, now carry

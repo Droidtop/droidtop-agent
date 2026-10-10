@@ -20,7 +20,8 @@ pub fn command() -> std::io::Result<(PathBuf, Vec<String>)> {
     let me = std::env::current_exe()?;
     let app = me.with_file_name(if cfg!(windows) { "droidtop-agent-app.exe" } else { "droidtop-agent-app" });
     if app.is_file() || me == app {
-        Ok((app, Vec::new()))
+        // In the tray only: the person opens the window when they want it.
+        Ok((app, vec!["--hidden".into()]))
     } else {
         Ok((me, vec!["run".into()]))
     }

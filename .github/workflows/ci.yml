@@ -1,6 +1,7 @@
 name: CI
 
-# Every push builds and tests the agent on Windows, Linux and macOS and builds
+# Every push builds and tests the agent and its window-and-tray app on Windows,
+# Linux (x86_64 and aarch64) and macOS (arm64, and x86_64 built beside it), and builds
 # droidtop's library for both Android ABIs. A green push to main publishes a
 # release: the computer programs and the Android library droidtop fetches by
 # its pin (docs/DESIGN.md section 12). Releases are permanent history.
@@ -23,14 +24,17 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            asset: droidtop-agent-linux-x86_64
-            exe: droidtop-agent
+            system: linux-x86_64
+          - os: ubuntu-24.04-arm
+            system: linux-aarch64
           - os: windows-latest
-            asset: droidtop-agent-windows-x86_64.exe
-            exe: droidtop-agent.exe
+            system: windows-x86_64
+            ext: .exe
           - os: macos-latest
-            asset: droidtop-agent-macos-arm64
-            exe: droidtop-agent
+            system: macos-arm64
+            # The Intel build is made on the same runner.
+            also: x86_64-apple-darwin
+            also_system: macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -56,17 +60,44 @@ jobs:
         if: success() || failure()
         run: cargo test --workspace --no-fail-fast
 
-      - name: Build the agent
+      - name: Build the agent and the app
         shell: bash
+        env:
+          SYSTEM: ${{ matrix.system }}
+          EXT: ${{ matrix.ext }}
+          ALSO: ${{ matrix.also }}
+          ALSO_SYSTEM: ${{ matrix.also_system }}
+          RUN: ${{ github.run_number }}
         run: |
-          cargo build --release -p droidtop-agent
+          set -eu
           mkdir -p dist
-          cp "target/release/${{ matrix.exe }}" "dist/${{ matrix.asset }}"
+          # dist/<program>-<system>[.exe]; on macOS the app is also a .app
+          # bundle (a tray app: no Dock icon), zipped.
+          place() {
+            local dir="$1" system="$2"
+            cp "$dir/droidtop-agent$EXT" "dist/droidtop-agent-$system$EXT"
+            cp "$dir/droidtop-agent-app$EXT" "dist/droidtop-agent-app-$system$EXT"
+            if [ "${system%%-*}" = macos ]; then
+              local app="bundle-$system/droidtop-agent.app"
+              mkdir -p "$app/Contents/MacOS"
+              cp "$dir/droidtop-agent-app" "$dir/droidtop-agent" "$app/Contents/MacOS/"
+              sed "s/@VERSION@/$RUN/" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+              (cd "bundle-$system" && ditto -c -k --keepParent droidtop-agent.app "../dist/droidtop-agent-$system.app.zip")
+            fi
+          }
+          cargo build --release -p droidtop-agent -p droidtop-agent-app
+          place target/release "$SYSTEM"
+          if [ -n "$ALSO" ]; then
+            rustup target add "$ALSO"
+            cargo build --release -p droidtop-agent -p droidtop-agent-app --target "$ALSO"
+            place "target/$ALSO/release" "$ALSO_SYSTEM"
+          fi
+          ls -l dist
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          name: droidtop-agent-${{ matrix.system }}
+          path: dist/
 
   android:
     runs-on: ubuntu-24.04

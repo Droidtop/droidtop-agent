@@ -31,6 +31,14 @@ The design, and what droidtop already had before it, is in
 
 ## Use
 
+Run **droidtop-agent-app**. It sits in the tray and has a window for
+everything below: pairing (it shows or takes a code), the paired handhelds,
+the games and apps it found, kept saves, plugin data and settings. On macOS
+it is `droidtop-agent.app`. It is not signed yet, so the first time you open
+it, use Open from its right-click menu.
+
+The command line does the same for headless machines and scripts:
+
 ```
 droidtop-agent pair 123456      # the code droidtop shows under Settings > Computers > Pair a computer
 droidtop-agent pair             # or: this computer shows its address and a code, typed on the handheld
@@ -68,10 +76,10 @@ and `droidtop-agent saves add` covers anything else.
 ## Build
 
 ```
-cargo build --release -p droidtop-agent
+cargo build --release -p droidtop-agent -p droidtop-agent-app
 ```
 
-CI builds the agent for all three systems, and droidtop's Android library
+CI builds both programs for Linux (x86_64, aarch64), Windows and macOS (arm64, x86_64), and droidtop's Android library
 (`libdroidtop_agent.so`, arm64-v8a and x86_64), on every push. Each green
 build on `main` is published as a release.
 

@@ -89,7 +89,7 @@ fn default_list() -> Vec<String> {
 }
 
 /// The person's settings for this agent.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Settings {
     /// This computer's name on the handheld; the host name when unset.
     #[serde(default)]
@@ -118,6 +118,9 @@ pub struct Settings {
     /// (`contexts approve`): the plugin and the digest of the program in place.
     #[serde(default)]
     pub approved: BTreeMap<String, Approval>,
+    /// The contexts whose offered adapter the person declined, and the plugin.
+    #[serde(default)]
+    pub declined: BTreeMap<String, String>,
     /// Rendezvous away from the LAN through global discovery and STUN
     /// (`rendezvous on|off`; on unless the person turned it off).
     #[serde(default = "yes")]

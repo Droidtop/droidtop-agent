@@ -32,6 +32,7 @@ Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
 12. The droidtop side
 13. Repository layout and builds
 14. Decisions for the owner
+15. The window and the tray
 
 ## 1. What droidtop already has
 
@@ -560,12 +561,17 @@ and skips folders it cannot read.
 
 - `crates/core` (`droidtop-agent-core`): identity, pairing, channel,
   protocol, sync rules, transports. It has no UI and no platform-specific code.
-- `crates/agent` (`droidtop-agent`): the program for the computer, with the
-  scanner, adapters and CLI.
+- `crates/agent` (`droidtop-agent`): the agent as a library (scanner,
+  adapters, pairing, serving, settings), plus the command-line program.
+- `crates/app` (`droidtop-agent-app`): the same agent with a window and a
+  tray icon (section 15). It is what people run; the command line stays for
+  headless machines and scripts.
 - `crates/android` (`droidtop-agent-android`): the `cdylib` with droidtop's
   JNI surface.
-- CI (`.github/workflows/ci.yml`): build and test on ubuntu, windows and
-  macos, plus the Android library for both ABIs. Each green build on `main`
+- CI (`.github/workflows/ci.yml`): build and test on Linux (x86_64 and
+  aarch64), Windows and macOS (arm64, with the x86_64 build made beside it),
+  plus the Android library for both ABIs. Each system's release has both
+  programs; macOS also gets `droidtop-agent.app` (`packaging/macos`). Each green build on `main`
   publishes a release (the computer binaries and the Android library) and adds
   a CHANGELOG entry. Releases are permanent history.
 
@@ -602,3 +608,43 @@ and skips folders it cannot read.
    instance, a LaunchAgent on macOS, and the per-user Run key on Windows.
    None needs an administrator. It starts `droidtop-agent-app` when that is
    installed beside the agent, else `droidtop-agent run`.
+
+## 15. The window and the tray
+
+The owner's ask (2026-10-10): a tray app and window on Windows, Linux and
+macOS, so nobody needs the command line.
+
+- **One agent, two front ends.** `droidtop-agent-app` runs the same service as
+  `droidtop-agent run`, in its own process, and shows it. If another copy of
+  the agent already listens, the window says so and does not serve.
+- **The stack is windowcast's reference app's:** egui through eframe (OpenGL
+  via glow). The tray uses `tray-icon` on Windows and macOS. On Linux it is
+  a StatusNotifierItem over D-Bus (`ksni`, pure Rust), so the Linux build
+  needs no GTK. KDE, most other desktops, and GNOME with the AppIndicator
+  extension show it. Where no tray answers, closing the window quits, so
+  the agent is never left running out of reach. The folder picker is the
+  system's own (`rfd`; the XDG portal on Linux).
+- **Pages:**
+  - **Status:** whether it serves, the firewall hint (TCP and UDP 47610 at
+    home, UDP 47611 away), the paired handhelds with when each was last seen
+    (each can be forgotten), and how it is reached away from home.
+  - **Pair a handheld:** type the code the handheld shows, or "Show a code":
+    this computer listens (TCP 47612) and shows its addresses, the code and
+    a QR code of the same invitation. Stop ends it.
+  - **Library:** what the last scan found (games, installed apps, programs
+    it can sync with, sources it could not read), a filter, and Scan now.
+  - **Saves:** the copies the agent kept: this computer's side when it lost
+    a conflict, and save letters it refused. Each opens in the file manager.
+    The conflict question itself is asked on the handheld, where the game
+    is about to run (section 9).
+  - **Plugin data:** adapters plugins offered (Install or Decline; a declined
+    plugin's offer for that context is not kept again) and the ones
+    installed (Remove).
+  - **Settings:** name, rescan interval, away from home, forwarded port,
+    cloud folder, game and ROM folders, and starting at sign-in.
+- **Behaviour.** Closing the window leaves the agent in the tray. The tray
+  menu offers Open, Pair a handheld and Quit. Autostart starts it with
+  `--hidden`, in the tray only. Slow work (scanning, pairing, fetching an
+  adapter) runs on threads of its own. Files are read when a page opens and
+  every few seconds after that, never on every frame.
+

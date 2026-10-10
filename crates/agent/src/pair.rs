@@ -8,6 +8,7 @@
 //!   guest network's NAT.
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use droidtop_agent_core::pairing::{new_code, pair_client, pair_host, PairInvite};
@@ -21,24 +22,60 @@ const SHOW_FOR: Duration = Duration::from_secs(10 * 60);
 /// Wrong codes accepted before the code is dropped.
 const MAX_ATTEMPTS: u32 = 3;
 
-/// Shows this computer's addresses and a new code, and waits for a handheld.
-pub fn show(agent: &Agent) -> Result<String, String> {
+/// This computer showing a code: the port it listens on, its addresses and
+/// the code, until a handheld pairs or the time runs out.
+pub struct Showing {
+    listener: TcpListener,
+    pub port: u16,
+    pub code: String,
+    /// `ip:port` for each of this computer's IPv4 addresses.
+    pub addresses: Vec<String>,
+    pub until: Instant,
+}
+
+impl Showing {
+    /// The invitation as text, with this computer's first address: what a
+    /// QR code of it carries.
+    pub fn invite(&self, agent: &Agent) -> String {
+        PairInvite { code: self.code.clone(), peer: Some(agent.peer_id()), name: Some(agent.name()), at: self.addresses.first().cloned() }
+            .to_uri()
+    }
+}
+
+/// Opens the pairing port and makes a new code.
+pub fn listen() -> Result<Showing, String> {
     let listener = TcpListener::bind(("0.0.0.0", PAIR_PORT))
         .or_else(|_| TcpListener::bind(("0.0.0.0", 0)))
         .map_err(|e| format!("Could not open a port for pairing: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let code = new_code();
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let addresses: Vec<String> = if_addrs::get_if_addrs()
         .map(|all| all.into_iter().filter(|i| !i.is_loopback() && i.ip().is_ipv4()).map(|i| format!("{}:{port}", i.ip())).collect())
         .unwrap_or_default();
+    Ok(Showing { listener, port, code: new_code(), addresses, until: Instant::now() + SHOW_FOR })
+}
+
+/// Shows this computer's addresses and a new code on the console, and waits for a handheld.
+pub fn show(agent: &Agent) -> Result<String, String> {
+    let showing = listen()?;
+    let (port, code) = (showing.port, &showing.code);
     println!("On droidtop: Settings > Computers > Pair a computer > Use a code from the computer.");
+    let addresses = &showing.addresses;
     println!("Address: {}", if addresses.is_empty() { format!("this computer's address, port {port}") } else { addresses.join("  or  ") });
     println!("Code:    {} {}", &code[..3], &code[3..]);
     println!("(An Android emulator reaches this computer at 10.0.2.2:{port}.) Waiting up to 10 minutes; Ctrl+C stops.");
-    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let deadline = Instant::now() + SHOW_FOR;
+    wait(agent, showing, &AtomicBool::new(false))
+}
+
+/// Waits for a handheld to pair with the code [`showing`] shows, until it
+/// pairs, three codes were wrong, the time runs out or [`cancel`] is set.
+pub fn wait(agent: &Agent, showing: Showing, cancel: &AtomicBool) -> Result<String, String> {
+    let Showing { listener, code, until: deadline, .. } = showing;
     let mut attempts = 0;
     while Instant::now() < deadline {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Pairing stopped.".into());
+        }
         match listener.accept() {
             Ok((mut stream, from)) => {
                 let _ = stream.set_nonblocking(false);

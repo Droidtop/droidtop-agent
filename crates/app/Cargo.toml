@@ -1,0 +1,32 @@
+[package]
+name = "droidtop-agent-app"
+description = "droidtop-agent with a window and a tray icon: pairing, status, the library it found, saves, plugin data and settings, without the command line"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "droidtop-agent-app"
+path = "src/main.rs"
+
+[dependencies]
+droidtop-agent = { path = "../agent" }
+droidtop-agent-core = { path = "../core" }
+serde_json.workspace = true
+# The window: egui through eframe, drawn with OpenGL (glow), the stack of
+# windowcast's reference app.
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+# QR codes of the pairing invitation, drawn as squares.
+qrcode = { version = "0.14", default-features = false }
+# The system's own folder picker (the XDG portal on Linux, no GTK).
+rfd = "0.15"
+
+# The tray icon: tray-icon on Windows and macOS; on Linux a StatusNotifierItem
+# over D-Bus (ksni, pure Rust), so the Linux build needs no GTK.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tray-icon = { version = "0.21", default-features = false }
+
+[target.'cfg(not(any(windows, target_os = "macos")))'.dependencies]
+ksni = { version = "0.3", features = ["blocking"] }
