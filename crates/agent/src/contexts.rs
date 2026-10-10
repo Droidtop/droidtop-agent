@@ -49,13 +49,28 @@ pub struct Adapter {
 /// JSON object it prints.
 fn run(program: &Path, verb: &str, input: Option<Value>) -> Result<Value, String> {
     let name = program.display();
-    let mut child = Command::new(program)
-        .arg(verb)
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("the context adapter {name} could not start ({e})"))?;
+    let start = || {
+        Command::new(program)
+            .arg(verb)
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    };
+    // A program written a moment ago (an adapter just installed) can still be
+    // open for writing in a process another thread is starting, and Linux then
+    // refuses to run it ("text file busy") until that process has started.
+    let mut started = start();
+    for _ in 0..20 {
+        match &started {
+            Err(e) if e.raw_os_error() == Some(26) && cfg!(unix) => {
+                std::thread::sleep(Duration::from_millis(50));
+                started = start();
+            }
+            _ => break,
+        }
+    }
+    let mut child = started.map_err(|e| format!("the context adapter {name} could not start ({e})"))?;
     if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
         let mut bytes = serde_json::to_vec(&input).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
