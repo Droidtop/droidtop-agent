@@ -275,7 +275,11 @@ fn scan(agent: &Agent, json: bool) -> Result<(), String> {
     }
     println!("{} games.", scan.games.len());
     for a in &scan.apps {
-        println!("app: {} ({}) {}", a.name, a.note, a.path.display());
+        println!("{:<40} {:<28} {}", a.name, a.source_label(), a.version.clone().unwrap_or_default());
+    }
+    println!("{} applications.", scan.apps.len());
+    for p in &scan.programs {
+        println!("syncs with: {} ({}) {}", p.name, p.note, p.path.display());
     }
     for p in &scan.problems {
         println!("could not read {p}");

@@ -19,6 +19,7 @@ mod battlenet;
 mod epic;
 mod folders;
 mod gog;
+pub mod installed;
 mod itch;
 mod lutris;
 mod roms;
@@ -44,10 +45,10 @@ pub struct Found {
     pub prefix: Option<Prefix>,
 }
 
-/// Another program's state the agent can read: launchers, emulators,
-/// F95Checker, Playnite.
+/// A program whose state the agent can read or sync with: launchers,
+/// emulators, F95Checker, Playnite.
 #[derive(Debug, Clone, Serialize)]
-pub struct App {
+pub struct Program {
     pub id: String,
     pub name: String,
     pub path: PathBuf,
@@ -57,7 +58,10 @@ pub struct App {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Scan {
     pub games: Vec<Found>,
-    pub apps: Vec<App>,
+    /// The applications installed here, games aside (`installed`).
+    pub apps: Vec<installed::InstalledApp>,
+    /// Programs droidtop can sync with or learn from (`apps`).
+    pub programs: Vec<Program>,
     /// Sources that failed, and why: shown by `scan`, never fatal.
     pub problems: Vec<String>,
 }
@@ -70,6 +74,12 @@ impl Scan {
     pub fn find_title(&self, title: &str) -> Option<&Found> {
         let wanted = droidtop_agent_core::library::title_key(title);
         self.games.iter().find(|f| droidtop_agent_core::library::title_key(&f.game.title) == wanted)
+    }
+
+    /// Everything the library records for this computer: its games and its
+    /// installed applications.
+    pub fn library(&self) -> Vec<ScannedGame> {
+        self.games.iter().map(|g| g.game.clone()).chain(self.apps.iter().map(|a| a.to_library())).collect()
     }
 }
 
@@ -103,7 +113,9 @@ pub fn scan(settings: &Settings, dirs: &Dirs) -> Scan {
         }
     }
     out.games = by_key.into_values().collect();
-    out.apps = apps::scan(settings);
+    let game_folders: Vec<PathBuf> = out.games.iter().filter_map(|f| f.base.clone()).collect();
+    out.apps = installed::scan(&game_folders);
+    out.programs = apps::scan(settings);
     let _ = dirs;
     out
 }

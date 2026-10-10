@@ -10,6 +10,9 @@ step with [droidtop](https://github.com/Droidtop/droidtop) on a handheld:
   Amazon, itch, Battle.net, Heroic, Lutris, your own game folders, and ROM
   folders laid out by ES-DE system name. The two libraries stay in step both
   ways.
+- **Apps.** Everything else installed on the computer is listed too: Windows
+  programs and Store apps, Linux desktop apps (Flatpak and Snap included),
+  and macOS applications, so droidtop shows what each computer has.
 - **Plugin contexts.** Supporting data that droidtop's plugins share with
   programs on the computer, synced both ways. A plugin that needs one
   publishes a small context adapter program for the computer. When the

@@ -27,6 +27,10 @@ ureq = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "5"
 gethostname = "0.5"
+# Installed applications: Store package manifests (Windows) and bundles'
+# Info.plist (macOS, XML or binary). Both parsers are tested on every system.
+roxmltree = "0.20"
+plist = "1"
 # This computer's addresses, for the WireGuard endpoints it tells the handheld.
 if-addrs = "0.13"
 

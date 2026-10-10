@@ -6,6 +6,12 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Installed applications, not only games: the Windows uninstall registry and
+  Store packages, Linux desktop entries (with Flatpak and Snap), and macOS
+  application bundles. They are synced to droidtop as library entries of
+  the platform `app` (`app:<source>:<id>`). `droidtop-agent scan` lists
+  them. The programs droidtop can sync with are listed apart, as "syncs
+  with".
 - Rendezvous away from home, the way Syncthing does it: STUN from the
   WireGuard socket, Syncthing's global discovery protocol to announce and
   look up addresses (a discovery ID per device, from a certificate made from

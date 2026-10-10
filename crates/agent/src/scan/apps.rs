@@ -7,11 +7,11 @@
 
 use std::path::PathBuf;
 
-use super::{env_dir, home, App};
+use super::{env_dir, home, Program};
 use crate::state::Settings;
 
-fn app(id: &str, name: &str, path: PathBuf, note: &str) -> Option<App> {
-    path.exists().then(|| App { id: id.into(), name: name.into(), path, note: note.into() })
+fn app(id: &str, name: &str, path: PathBuf, note: &str) -> Option<Program> {
+    path.exists().then(|| Program { id: id.into(), name: name.into(), path, note: note.into() })
 }
 
 /// F95Checker's data folder, the same place F95Checker itself uses
@@ -32,7 +32,7 @@ pub fn ludusavi_config() -> PathBuf {
     dirs::config_dir().unwrap_or_default().join("ludusavi/config.yaml")
 }
 
-pub fn scan(_settings: &Settings) -> Vec<App> {
+pub fn scan(_settings: &Settings) -> Vec<Program> {
     let h = home();
     let appdata = env_dir("APPDATA").unwrap_or_else(|| h.join("AppData/Roaming"));
     let docs = dirs::document_dir().unwrap_or_else(|| h.join("Documents"));

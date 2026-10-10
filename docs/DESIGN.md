@@ -499,7 +499,26 @@ no store APIs and no network.
 | ROMs | user-chosen roots laid out by ES-DE system name; ES-DE's own `es_settings.xml` ROM folder and `gamelists/` | same | same |
 | Emulators | RetroArch, Dolphin, PCSX2, DuckStation, PPSSPP, RPCS3, Cemu, Ryujinx and others, detected for their save folders | same | same |
 
-**Third-party app state:** F95Checker (`db.sqlite3`), Lutris (`pga.db`), Heroic
+**Installed applications** (owner, 2026-10-08: "we need to track third party
+apps and stuff too"). Everything installed on the computer, games or not, is
+in the library too, as entries of the platform `app` keyed
+`app:<source>:<id>`. It travels in the same change log as the games, with
+the same marks. The agent reads only what each system keeps about its
+installs:
+
+| System | Read from | Key |
+|---|---|---|
+| Windows | the uninstall registry: HKLM in both views, and HKCU. It leaves out system components, entries with a parent, updates, runtimes and redistributables, and "Steam App <id>" | `app:win:<entry key>` |
+| Windows | Store (MSIX/AppX) packages registered for the user: each package's `AppxManifest.xml`, leaving out frameworks, resource packages, packages with no Start entry, and Windows' own `SystemApps` | `app:msix:<package name>` |
+| Linux | XDG desktop entries in `$XDG_DATA_HOME` and `$XDG_DATA_DIRS`, plus Flatpak's and Snap's exports. The first file with a desktop id wins, and `NoDisplay`, `Hidden` and launchers' game shortcuts are left out | `app:flatpak:<app id>`, `app:snap:<snap>`, `app:desktop:<desktop id>` |
+| macOS | `.app` bundles in `/Applications` (and its subfolders one level down), `/System/Applications` and `~/Applications`, from `Info.plist` | `app:mac:<bundle id>` |
+
+An application inside a game folder the scan found is that game, and is left
+out. droidtop lists a computer's applications beside its games ("Apps on
+<computer>"). Whether they also join the handheld's own Apps place is
+decision 6.
+
+**Programs droidtop syncs with:** F95Checker (`db.sqlite3`), Lutris (`pga.db`), Heroic
 (JSON), ES-DE (gamelists), and Ludusavi's own config if present (custom games
 and paths the person already set up). Playnite keeps its library in LiteDB, for
 which there is no maintained Rust reader, so v1 only detects it.

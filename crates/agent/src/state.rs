@@ -321,7 +321,7 @@ impl Agent {
         let scan = crate::scan::scan(&settings, &self.dirs);
         let changes = {
             let mut lib = self.library.lock().unwrap();
-            lib.update_device(&self.peer_id(), &self.name(), scan.games.iter().map(|g| g.game.clone()).collect())
+            lib.update_device(&self.peer_id(), &self.name(), scan.library())
         };
         if changes > 0 {
             let _ = self.save_library();
