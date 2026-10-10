@@ -24,7 +24,7 @@ mod gog;
 pub mod installed;
 mod itch;
 mod linux_launchers;
-mod lutris;
+pub mod lutris;
 pub mod prefixes;
 mod roms;
 mod steam;

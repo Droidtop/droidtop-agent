@@ -6,6 +6,16 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Lutris's favourites and hidden games ("favorite" and ".hidden"
+  categories) travel as the person's marks. Only a change made in Lutris
+  since the last scan counts, so a mark set on a handheld is not undone, and
+  the agent never writes Lutris's database. The organization droidtop
+  carries in marks grows to rating, its own title, sort title, kid game and
+  collections (Droidtop/tracker#469 part 1); the core needed no change for
+  that.
+
+## build-26
+
 - The scanner walks game folders with droidtop's rules and its engines
   database (`crates/agent/data/engines-database.json`): engine games of every
   engine the database knows, PC games whose programs sit in sub-folders,

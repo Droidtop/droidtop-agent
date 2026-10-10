@@ -10,7 +10,7 @@
 //! ```
 //!
 //! It covers the library relaying across the mesh (one entry per game, with
-//! an install per device), saves edited on two devices at once (the newest
+//! an install per device, and the person's organization of it), saves edited on two devices at once (the newest
 //! copy wins and the other device keeps its own), a preferred computer
 //! beating a newer copy, and saves reaching a handheld through a computer it
 //! shares with another.
@@ -141,9 +141,15 @@ impl Handheld {
         json!({ "seed": self.seed, "peer": pc.1.to_hex(), "addresses": [pc.2.to_string()], "name": self.name })
     }
     fn library(&self, pc: &(&'static Computer, PeerId, SocketAddr)) -> Value {
+        self.library_with(pc, json!({}))
+    }
+    /// A library exchange reporting [`marks`], the person's organization of
+    /// games as droidtop keeps it.
+    fn library_with(&self, pc: &(&'static Computer, PeerId, SocketAddr), marks: Value) -> Value {
         let mut args = self.args(pc);
         args["state"] = json!(self.dir.join("library.json"));
         args["scan"] = json!([]);
+        args["marks"] = marks;
         let out: Value = serde_json::from_str(&call("sync_library", &args.to_string())).unwrap();
         assert!(out.get("error").is_none() && out.get("unreachable").is_none(), "{} with {}: {out}", self.name, pc.0.name);
         out
@@ -206,6 +212,17 @@ fn three_handhelds_and_three_computers_in_a_partial_mesh() {
     h2.library(&c2);
     h1.library(&c2);
     assert!(Library::load(&h1.dir.join("library.json")).unwrap().games.contains_key("gog:5"));
+
+    // Organization travels too, newest change per field (Droidtop/tracker#469):
+    // H1 rates a game and puts it in a collection; H3, three hops away,
+    // is told to write both.
+    let unset = json!({ "steam:1": { "rating": 0.0, "collections": [], "title": "" } });
+    h1.library_with(&c2, json!({ "steam:1": { "rating": 0.8, "collections": ["Done", "Platformers"], "title": "" } }));
+    // H2 does not have the game, so it reports no marks on it and only relays.
+    h2.library(&c2);
+    h2.library(&c3);
+    let told = h3.library_with(&c3, unset.clone());
+    assert_eq!(told["marks"], json!({ "steam:1": { "rating": 0.8, "collections": ["Done", "Platformers"] } }), "{told}");
 
     // Saves: PC-1's reach H1, then PC-2, then H2.
     write_at(&c1.0.save(), "pc-1 v1", 1_000);

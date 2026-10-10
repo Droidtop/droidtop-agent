@@ -299,7 +299,14 @@ marks on a game are shared.
   and collections. Each field is last-writer-wins on a hybrid logical clock
   (wall time, counter, device id), so a mark made on either side lands on both
   and a later mark beats an earlier one. droidtop carries `favourite`,
-  `hidden` and `completed` (booleans) today.
+  `hidden`, `completed` and `kid_game` (booleans), `rating` (0 to 1),
+  `title` (the person's own name for the game), `sort_name`, and
+  `collections` (a sorted list of collection names, made where missing).
+  Per-device choices (emulator, launch screen, media paths) do not travel
+  (Droidtop/tracker#469 part 1). On a computer, Lutris's "favorite" and
+  ".hidden" categories are read as marks, but only when Lutris changed them
+  since the last scan, so a mark set elsewhere is not undone. The agent never
+  writes a launcher's store.
   - Before each exchange droidtop reports every mark it keeps on its own
     games, unset ones included. Only a mark that differs from the shared one
     becomes a change (`Library::note_marks`); unset, absent, false, zero and

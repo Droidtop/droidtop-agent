@@ -417,15 +417,37 @@ impl Agent {
     pub fn rescan(&self) -> usize {
         let settings = self.settings.lock().unwrap().clone();
         let scan = crate::scan::scan(&settings, &self.dirs);
+        let launcher_marks = crate::scan::lutris::marks();
         let changes = {
             let mut lib = self.library.lock().unwrap();
-            lib.update_device(&self.peer_id(), &self.name(), scan.library())
+            lib.update_device(&self.peer_id(), &self.name(), scan.library()) + self.note_launcher_marks(&mut lib, launcher_marks)
         };
         if changes > 0 {
             let _ = self.save_library();
         }
         *self.scan.lock().unwrap() = Some((Instant::now(), scan));
         changes
+    }
+
+    /// The person's marks in launchers on this computer (Lutris's favourites
+    /// and hidden games) that changed there since the last scan, as this
+    /// computer's marks (docs/DESIGN.md section 7). Only a change the launcher
+    /// made counts: a mark set on a handheld is not undone because the
+    /// launcher still says the old thing, and the agent never writes the
+    /// launcher's store.
+    fn note_launcher_marks(&self, lib: &mut Library, now: droidtop_agent_core::library::Marks) -> usize {
+        let path = self.dirs.data.join("launcher-marks.json");
+        let before: droidtop_agent_core::library::Marks = read_json(&path).unwrap_or_default();
+        let mut changed = droidtop_agent_core::library::Marks::new();
+        for (game, fields) in &now {
+            for (field, value) in fields {
+                if before.get(game).and_then(|f| f.get(field)) != Some(value) {
+                    changed.entry(game.clone()).or_default().insert(field.clone(), value.clone());
+                }
+            }
+        }
+        let _ = write_json(&path, &now);
+        lib.note_marks(&self.peer_id(), &changed)
     }
 
     /// The last scan, made now when there is none or it is older than [`max_age_s`].
