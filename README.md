@@ -7,7 +7,7 @@ step with [droidtop](https://github.com/Droidtop/droidtop) on a handheld:
   are brought up to date with the computer's copy. If both sides changed,
   droidtop asks which to keep, and the other copy is archived, not deleted.
 - **Library.** The agent scans the computer for games: Steam, GOG, Epic,
-  Amazon, itch, Battle.net, Heroic, Lutris, your own game folders, and ROM
+  Amazon, itch, Battle.net, Heroic, Lutris, Bottles, Minigalaxy, your own game folders, and ROM
   folders laid out by ES-DE system name. The two libraries stay in step both
   ways.
 - **Apps.** Everything else installed on the computer is listed too: Windows
@@ -37,6 +37,7 @@ droidtop-agent pair             # or: this computer shows its address and a code
 droidtop-agent                  # keep it running; the handheld connects when it needs to
 droidtop-agent scan             # what it found on this computer
 droidtop-agent saves steam:440  # where a game's saves are here, and the files
+droidtop-agent autostart on     # start when you sign in (off unless you turn it on)
 droidtop-agent --help
 ```
 

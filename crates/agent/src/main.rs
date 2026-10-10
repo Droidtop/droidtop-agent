@@ -9,6 +9,7 @@ use droidtop_agent_core::library::title_key;
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 
+mod autostart;
 mod contexts;
 mod host;
 mod ludusavi;
@@ -67,6 +68,9 @@ Usage:
   droidtop-agent rendezvous servers default | <url>...
                                        Discovery servers, in Syncthing's notation (default: Syncthing's)
   droidtop-agent rendezvous stun default | <host:port>...
+  droidtop-agent autostart [on | off]  Start when you sign in (a systemd user unit or autostart entry on
+                                       Linux, a LaunchAgent on macOS, the Run key on Windows); off unless
+                                       you turn it on
 ";
 
 fn main() {
@@ -223,6 +227,11 @@ fn main() {
             agent.settings.lock().unwrap().stun_servers = list.iter().map(|s| s.to_string()).collect();
             agent.save_settings().map_err(|e| e.to_string())
         }
+        ["autostart"] => {
+            println!("Starting when you sign in: {}", if autostart::enabled() { "on" } else { "off" });
+            Ok(())
+        }
+        ["autostart", on @ ("on" | "off")] => autostart::set(*on == "on").map(|said| println!("{said}")),
         ["endpoint", "clear"] => {
             agent.settings.lock().unwrap().public_endpoint = None;
             agent.save_settings().map_err(|e| e.to_string())

@@ -21,7 +21,9 @@ mod folders;
 mod gog;
 pub mod installed;
 mod itch;
+mod linux_launchers;
 mod lutris;
+pub mod prefixes;
 mod roms;
 mod steam;
 pub mod vdf;
@@ -96,6 +98,7 @@ pub fn scan(settings: &Settings, dirs: &Dirs) -> Scan {
         ("itch", itch::scan),
         ("Battle.net", battlenet::scan),
         ("Lutris", lutris::scan),
+        ("Bottles and Minigalaxy", linux_launchers::scan),
         ("game folders", folders::scan),
         ("ROM folders", roms::scan),
     ];
@@ -113,6 +116,16 @@ pub fn scan(settings: &Settings, dirs: &Dirs) -> Scan {
         }
     }
     out.games = by_key.into_values().collect();
+    // Heroic keeps a Wine or Proton prefix per game outside the game's
+    // folder; elsewhere than Windows that is where its Windows saves are.
+    if !cfg!(windows) {
+        let heroic = prefixes::heroic_dirs();
+        for f in out.games.iter_mut().filter(|f| f.prefix.is_none() && f.game.install.launcher.as_deref() == Some("heroic")) {
+            if let Some((_, app)) = f.game.key.split_once(':') {
+                f.prefix = prefixes::heroic(&heroic, app);
+            }
+        }
+    }
     let game_folders: Vec<PathBuf> = out.games.iter().filter_map(|f| f.base.clone()).collect();
     out.apps = installed::scan(&game_folders);
     out.programs = apps::scan(settings);

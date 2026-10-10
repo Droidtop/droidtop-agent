@@ -30,6 +30,7 @@ pub fn roots() -> Vec<PathBuf> {
         out.push(h.join(".steam/steam"));
         out.push(h.join(".local/share/Steam"));
         out.push(h.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"));
+        out.push(h.join("snap/steam/common/.local/share/Steam"));
         if let Some(d) = env_dir("XDG_DATA_HOME") {
             out.push(d.join("Steam"));
         }

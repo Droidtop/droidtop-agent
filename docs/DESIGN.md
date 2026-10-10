@@ -206,6 +206,14 @@ slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
     the `WinePrefixLocator` droidtop already has;
   - an engine game resolves `<base>` to its folder (Ren'Py and RPG Maker keep
     saves there, per the standing save policy).
+- **On a Linux or macOS computer** the Windows templates are resolved in the
+  prefix the game runs in there: Steam's Proton prefix, Heroic's per-game
+  `winePrefix`, a Lutris Wine game's `prefix`, a Bottles bottle, or a
+  Minigalaxy game's own prefix. Both sides then hold the Windows build's
+  saves. A game the computer runs as a native Linux or macOS build keeps its
+  saves elsewhere, often in another format. Those saves are not matched to
+  the handheld's Windows copy, and only the person's own `saves add` entries
+  cover such a game.
 - **The decision is the same rule droidtop's Steam Cloud sync uses**
   (`SteamCloudPlan.decide`), now in the shared core so it is one
   implementation. The handheld keeps a baseline per paired computer and game:
@@ -488,13 +496,16 @@ no store APIs and no network.
 
 | Source | Windows | Linux | macOS |
 |---|---|---|---|
-| Steam | registry `HKCU\Software\Valve\Steam\SteamPath`; `steamapps/libraryfolders.vdf`, `appmanifest_*.acf` | `~/.steam/steam`, `~/.local/share/Steam`, Flatpak | `~/Library/Application Support/Steam` |
+| Steam | registry `HKCU\Software\Valve\Steam\SteamPath`; `steamapps/libraryfolders.vdf`, `appmanifest_*.acf` | `~/.steam/steam`, `~/.local/share/Steam`, Flatpak, Snap; a game's Proton prefix | `~/Library/Application Support/Steam` |
 | GOG | registry `HKLM\SOFTWARE\WOW6432Node\GOG.com\Games\*` | Heroic `gog_store/installed.json` | Heroic, registry-less GOG Galaxy installs under `/Applications` |
 | Epic | `%ProgramData%\Epic\EpicGamesLauncher\Data\Manifests\*.item` | Heroic and legendary `installed.json` | same as Linux |
 | Amazon | `%LOCALAPPDATA%\Amazon Games\Data\Games\Sql\GameInstallInfo.sqlite` | Heroic nile `installed.json` | none |
 | itch | butler's `db/butler.db` (caves joined with games) | same | same |
 | Battle.net | uninstall registry entries published by Blizzard | Lutris | none |
-| Lutris | none | `pga.db` | none |
+| Lutris | none | `pga.db` (native and Flatpak); a Wine game's prefix from `games/<configpath>.yml` | none |
+| Heroic prefixes | none | `GamesConfig/<app>.json` `winePrefix`, for its GOG, Epic and Amazon games | same |
+| Bottles | none | `library.yml`: each program the person put in the library, with its bottle as the prefix (native and Flatpak) | none |
+| Minigalaxy | none | `config.json` `install_dir`; each game's `gameinfo` (title, version) or `goggame-<id>.info` | none |
 | Folders | user-chosen roots; a folder with a program in it is a game | same | `.app` bundles too |
 | ROMs | user-chosen roots laid out by ES-DE system name; ES-DE's own `es_settings.xml` ROM folder and `gamelists/` | same | same |
 | Emulators | RetroArch, Dolphin, PCSX2, DuckStation, PPSSPP, RPCS3, Cemu, Ryujinx and others, detected for their save folders | same | same |
@@ -584,6 +595,10 @@ and skips folders it cannot read.
 7. **Writing F95Checker's database.** Default: only while F95Checker is
    closed; changes wait until then.
 8. **Conflict archive depth.** Default: the most recent loser per game.
-9. **Autostart on the computer.** Default: off. `droidtop-agent service
-   install` adds a per-user autostart (Task Scheduler, a systemd user unit,
-   launchd) when the person asks for it.
+9. **Autostart on the computer.** Default: off. `droidtop-agent autostart
+   on` (or the checkbox in the window) adds a per-user autostart: a systemd
+   user unit on Linux (tied to the graphical session for the window
+   program), an XDG autostart entry where the session has no systemd user
+   instance, a LaunchAgent on macOS, and the per-user Run key on Windows.
+   None needs an administrator. It starts `droidtop-agent-app` when that is
+   installed beside the agent, else `droidtop-agent run`.

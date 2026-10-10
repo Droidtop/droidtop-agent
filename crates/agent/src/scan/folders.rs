@@ -53,7 +53,7 @@ fn is_game(dir: &Path) -> bool {
 }
 
 /// The store key a game's own files state, when they state one.
-fn store_key(dir: &Path) -> Option<String> {
+pub(super) fn store_key(dir: &Path) -> Option<String> {
     if let Ok(read) = fs::read_dir(dir) {
         for entry in read.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();

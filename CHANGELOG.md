@@ -6,6 +6,14 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Linux and macOS hosts:
+  - the Steam Snap is found;
+  - Lutris Wine games, and Heroic's GOG, Epic and Amazon games, now carry
+    their Wine or Proton prefix, so their Windows saves sync;
+  - Bottles' library and Minigalaxy's games are scanned.
+- `droidtop-agent autostart on|off`: start at sign-in through a systemd user
+  unit (or an XDG autostart entry) on Linux, a LaunchAgent on macOS, or the
+  per-user Run key on Windows. It stays off unless the person turns it on.
 - Installed applications, not only games: the Windows uninstall registry and
   Store packages, Linux desktop entries (with Flatpak and Snap), and macOS
   application bundles. They are synced to droidtop as library entries of
