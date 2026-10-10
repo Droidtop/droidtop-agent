@@ -112,6 +112,20 @@ pub struct MarkValue {
     pub at: Hlc,
 }
 
+/// A version of a game a device had, and when this device first heard of it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct VersionSeen {
+    /// The device's PeerId, in hex.
+    pub device: String,
+    pub device_name: String,
+    pub version: String,
+    /// When the install change that named it was made (its clock's wall time).
+    pub ms: i64,
+}
+
+/// How many versions a game's history keeps; the oldest go first.
+pub const VERSION_HISTORY: usize = 30;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct GameRecord {
     pub title: String,
@@ -122,6 +136,12 @@ pub struct GameRecord {
     pub installs: BTreeMap<String, DeviceInstall>,
     #[serde(default)]
     pub marks: BTreeMap<String, MarkValue>,
+    /// Every version any device has had installed, oldest first
+    /// (Droidtop/tracker#469 part 2): filled from the install changes this
+    /// device applies, so devices that never meet learn it through the ones
+    /// between them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub versions: Vec<VersionSeen>,
     #[serde(skip)]
     title_at: Hlc,
 }
@@ -213,6 +233,18 @@ impl Library {
                     record
                         .installs
                         .insert(device.clone(), DeviceInstall { device_name: device_name.clone(), install: install.clone(), at: *at });
+                    if let Some(version) = install.version.as_deref().map(str::trim).filter(|v| install.installed && !v.is_empty()) {
+                        if !record.versions.iter().any(|s| &s.device == device && s.version == version) {
+                            record.versions.push(VersionSeen {
+                                device: device.clone(),
+                                device_name: device_name.clone(),
+                                version: version.to_string(),
+                                ms: at.ms,
+                            });
+                            let over = record.versions.len().saturating_sub(VERSION_HISTORY);
+                            record.versions.drain(..over);
+                        }
+                    }
                     if !title.is_empty() && *at >= record.title_at {
                         record.title = title.clone();
                         record.title_at = *at;
@@ -462,6 +494,31 @@ mod tests {
         assert_eq!(handheld.note_marks(&hh, &report(true, true)), 0);
         assert_eq!(handheld.seq(), seq);
         assert!(handheld.marks_to_write(&report(true, true)).is_empty());
+    }
+
+    #[test]
+    fn versions_are_remembered_per_device_as_they_travel() {
+        let pc = DeviceKey::generate().peer_id();
+        let hh = DeviceKey::generate().peer_id();
+        let at = |v: &str| ScannedGame {
+            key: "title:eternum".into(),
+            title: "Eternum".into(),
+            platform: None,
+            install: Install { installed: true, version: Some(v.into()), ..Default::default() },
+        };
+        let mut pc_lib = Library::default();
+        pc_lib.update_device(&pc, "PC", vec![at("0.9.4")]);
+        pc_lib.update_device(&pc, "PC", vec![at("0.9.5")]);
+        let mut handheld = Library::default();
+        handheld.update_device(&hh, "Handheld", vec![at("0.9.4")]);
+        for c in pc_lib.changes_since(0).0 {
+            handheld.apply(c);
+        }
+        let seen: Vec<(String, String)> =
+            handheld.games["title:eternum"].versions.iter().map(|s| (s.device_name.clone(), s.version.clone())).collect();
+        // The handheld's own, then the computer's current one: the log carries only the latest per device.
+        assert_eq!(seen, vec![("Handheld".into(), "0.9.4".into()), ("PC".into(), "0.9.5".into())]);
+        assert_eq!(pc_lib.games["title:eternum"].versions.len(), 2);
     }
 
     #[test]

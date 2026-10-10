@@ -315,6 +315,14 @@ marks on a game are shared.
   - After it, the core names the shared marks that differ from what droidtop
     reported (`Library::marks_to_write`), and droidtop writes them into its
     own library.
+- **Versions** (Droidtop/tracker#469 part 2): each device states the version
+  it has installed in its facts. That is a store's build or version, the
+  version a folder game's name carries, or droidtop's set or derived
+  version. Each device keeps a game's version history (`GameRecord::versions`:
+  device, version, when first heard of, at most 30), filled from the install
+  changes it applies, so a device learns the versions of devices it never
+  meets. droidtop turns a newer version on a computer into "an update is
+  available" (its SPEC 7o).
 - **Play time:** each device reports its own total and last played time. A
   game's total is the sum, and its last played time is the latest. Nothing
   overwrites another device's numbers.

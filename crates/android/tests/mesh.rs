@@ -97,7 +97,7 @@ fn start(name: &str, games: &[&str], paired: Vec<PeerId>) -> (&'static Computer,
             key: g.to_string(),
             title: g.to_string(),
             platform: Some("pc".into()),
-            install: Install { installed: true, ..Default::default() },
+            install: Install { installed: true, version: Some(format!("{name} build")), ..Default::default() },
         })
         .collect();
     library.update_device(&id, name, scanned);
@@ -208,6 +208,9 @@ fn three_handhelds_and_three_computers_in_a_partial_mesh() {
     assert_eq!(game.installs.len(), 2, "one entry, installed on two computers: {on:?}");
     assert!(on.contains(&"PC-1") && on.contains(&"PC-2"));
     assert!(lib.games.contains_key("steam:2") && lib.games.contains_key("gog:5"));
+    // Each computer's version of it, remembered three hops away (Droidtop/tracker#469 part 2).
+    let seen: Vec<&str> = game.versions.iter().map(|v| v.version.as_str()).collect();
+    assert!(seen.contains(&"PC-1 build") && seen.contains(&"PC-2 build"), "{seen:?}");
     // And back the other way: PC-3's game reaches H1 through H2 and PC-2.
     h2.library(&c2);
     h1.library(&c2);

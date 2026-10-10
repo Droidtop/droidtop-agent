@@ -6,6 +6,14 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Every game keeps its version history across devices (device, version,
+  when first heard of; `GameRecord::versions`), filled from the install
+  changes each device applies, so it travels across many devices
+  (Droidtop/tracker#469 part 2). The mesh test checks that a handheld three
+  hops away knows both computers' versions.
+
+## build-27
+
 - Lutris's favourites and hidden games ("favorite" and ".hidden"
   categories) travel as the person's marks. Only a change made in Lutris
   since the last scan counts, so a mark set on a handheld is not undone, and
