@@ -8,7 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [lib]
-name = "droidtop_agent"
+name = "droidtop_agent_computer"
 path = "src/lib.rs"
 
 [[bin]]

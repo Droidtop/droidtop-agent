@@ -1,16 +1,24 @@
 //! Syncing one game's saves (docs/DESIGN.md sections 6 and 9).
 //!
-//! The rule is the one droidtop's Steam Cloud sync uses
-//! (`SteamCloudPlan.decide` in droidtop's `:stores`): against the files as
-//! they were at the last sync (the baseline the handheld keeps per computer
-//! and game), a side that alone changed wins and its set is copied over,
-//! deletions included; both changed is a conflict, and so is a first sync
-//! with differing files on both sides. A conflict is the person's: the
-//! handheld asks, then calls again with the side they chose, and the losing
-//! side is archived before it is overwritten.
+//! Against the files as they were at the last sync (the baseline the
+//! handheld keeps per computer and game), a side that alone changed wins and
+//! its set is copied over, deletions included. When both changed, or a first
+//! sync finds different files on each side, the newest copy wins (owner,
+//! 2026-10-10: "newest copy wins isn't the worst idea. We keep the newest
+//! copy from EACH device, and an archive if possible. We can also set a
+//! primary desktop and primary device to prefer saves from"):
+//! - a side the person prefers wins: the handheld's primary computer, or the
+//!   computer's primary handheld; when both sides prefer each other, or
+//!   neither, the set with the newer newest file wins;
+//! - the other side's changed set is not lost: before it is overwritten, the
+//!   device keeps it as its own copy ([`keep_copy`]), and the copy it had
+//!   kept before goes to a short dated archive.
+//!
+//! The person can still pick a side ([`SaveSyncRequest::choice`]), to bring
+//! back the other device's set.
 //!
 //! The baseline moves file by file, so a sync cut short is finished by the
-//! next one instead of turning into a conflict.
+//! next one instead of being read as a change on both sides.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -36,49 +44,69 @@ pub enum Side {
     There,
 }
 
-/// One side of a conflict, as the dialog shows it.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct SideSummary {
-    pub files: usize,
-    pub bytes: u64,
-    pub newest_ms: i64,
-}
-
-fn summary(m: &Manifest) -> SideSummary {
-    SideSummary { files: m.len(), bytes: m.values().map(|e| e.size).sum(), newest_ms: m.values().map(|e| e.mtime_ms).max().unwrap_or(0) }
+/// Which side the person prefers saves from, when both changed.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Prefer {
+    /// The computer names this handheld its primary handheld.
+    #[serde(default)]
+    pub here: bool,
+    /// The handheld names this computer its primary computer.
+    #[serde(default)]
+    pub there: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Plan {
     Nothing,
-    Copy { from: Side, changed: Vec<FileEntry>, removed: Vec<String> },
-    Conflict { here: SideSummary, there: SideSummary },
+    /// [`keep`]: the side being overwritten had changed too, so it keeps
+    /// its set as a copy first.
+    Copy {
+        from: Side,
+        changed: Vec<FileEntry>,
+        removed: Vec<String>,
+        keep: bool,
+    },
 }
 
-fn copy_from(side: Side, here: &Manifest, there: &Manifest) -> Plan {
+fn copy_from(side: Side, here: &Manifest, there: &Manifest, keep: bool) -> Plan {
     let (src, dst) = match side {
         Side::Here => (here, there),
         Side::There => (there, here),
     };
     let changed = src.iter().filter(|(k, e)| dst.get(*k).is_none_or(|d| d.sha256 != e.sha256)).map(|(_, e)| e.clone()).collect();
     let removed = dst.iter().filter(|(k, _)| !src.contains_key(*k)).map(|(_, e)| e.name.clone()).collect();
-    Plan::Copy { from: side, changed, removed }
+    Plan::Copy { from: side, changed, removed, keep }
+}
+
+/// The time of a set's newest file.
+pub fn newest_ms(m: &Manifest) -> i64 {
+    m.values().map(|e| e.mtime_ms).max().unwrap_or(0)
+}
+
+/// The side that wins when both changed: the preferred one, else the newest copy.
+pub fn winner(here: &Manifest, there: &Manifest, prefer: Prefer) -> Side {
+    match (prefer.here, prefer.there) {
+        (true, false) => Side::Here,
+        (false, true) => Side::There,
+        _ if newest_ms(there) > newest_ms(here) => Side::There,
+        _ => Side::Here,
+    }
 }
 
 /// What to do, from both sides' files and the baseline.
-pub fn decide(here: &Manifest, there: &Manifest, baseline: Option<&Manifest>) -> Plan {
+pub fn decide(here: &Manifest, there: &Manifest, baseline: Option<&Manifest>, prefer: Prefer) -> Plan {
     if manifest::same(here, there) {
         return Plan::Nothing;
     }
-    let conflict = || Plan::Conflict { here: summary(here), there: summary(there) };
+    let both = || copy_from(winner(here, there, prefer), here, there, true);
     match baseline {
-        None if here.is_empty() => copy_from(Side::There, here, there),
-        None if there.is_empty() => copy_from(Side::Here, here, there),
-        None => conflict(),
+        None if here.is_empty() => copy_from(Side::There, here, there, false),
+        None if there.is_empty() => copy_from(Side::Here, here, there, false),
+        None => both(),
         Some(base) => match (!manifest::same(here, base), !manifest::same(there, base)) {
-            (true, false) => copy_from(Side::Here, here, there),
-            (false, true) => copy_from(Side::There, here, there),
-            _ => conflict(),
+            (true, false) => copy_from(Side::Here, here, there, false),
+            (false, true) => copy_from(Side::There, here, there, false),
+            _ => both(),
         },
     }
 }
@@ -97,11 +125,10 @@ pub enum Outcome {
         files: usize,
         removed: usize,
         bytes: u64,
-    },
-    /// Nothing changed; the person decides.
-    Conflict {
-        here: SideSummary,
-        there: SideSummary,
+        /// Both sides had changed: the other side's set was kept as that
+        /// device's copy before it was overwritten.
+        #[serde(default)]
+        kept: bool,
     },
 }
 
@@ -111,9 +138,13 @@ pub struct SaveSyncRequest<'a> {
     pub roots: &'a Roots,
     /// The baseline file for this computer and game.
     pub baseline_path: &'a Path,
-    /// Where this side's conflict loser goes.
+    /// This game's archive here: the copies kept per device, and older ones.
     pub archive_dir: &'a Path,
-    /// The person's answer to an earlier conflict.
+    /// This device's name, for the copy it keeps of its own saves.
+    pub name: &'a str,
+    /// This computer is the handheld's primary computer.
+    pub primary_computer: bool,
+    /// The person picked a side (to bring back the other device's saves).
     pub choice: Option<Side>,
 }
 
@@ -170,13 +201,17 @@ pub fn sync<S: Read + Write>(ch: &mut Channel<S>, req: &SaveSyncRequest) -> Resu
     }
     let baseline = load_baseline(req.baseline_path);
     let here = manifest::build(saves::collect(&spec, req.roots), baseline.as_ref().unwrap_or(&Manifest::new()));
-    let there = match ask(ch, &Request::SaveManifest { game: req.game.clone() })? {
-        Response::Manifest { files } => manifest::from_entries(files.into_iter().filter(|f| spec.matches(&f.name)).collect()),
+    let (there, primary_handheld) = match ask(ch, &Request::SaveManifest { game: req.game.clone() })? {
+        Response::Manifest { files, primary } => {
+            (manifest::from_entries(files.into_iter().filter(|f| spec.matches(&f.name)).collect()), primary)
+        }
         other => return Err(protocol(format!("expected a manifest, got {other:?}"))),
     };
-    let (plan, archive) = match (decide(&here, &there, baseline.as_ref()), req.choice) {
-        (Plan::Conflict { .. }, Some(side)) => (copy_from(side, &here, &there), true),
-        (plan, _) => (plan, false),
+    let prefer = Prefer { here: primary_handheld, there: req.primary_computer };
+    let plan = match (decide(&here, &there, baseline.as_ref(), prefer), req.choice) {
+        // The person's own pick replaces the rule; the side it overwrites keeps a copy.
+        (Plan::Copy { from, .. }, Some(side)) if from != side => copy_from(side, &here, &there, true),
+        (plan, _) => plan,
     };
     let mut base = baseline.unwrap_or_default();
     let result = match plan {
@@ -184,11 +219,10 @@ pub fn sync<S: Read + Write>(ch: &mut Channel<S>, req: &SaveSyncRequest) -> Resu
             base = here.clone();
             Ok(Outcome::UpToDate { files: here.len() })
         }
-        Plan::Conflict { here, there } => return Ok(Outcome::Conflict { here, there }),
-        Plan::Copy { from: Side::There, changed, removed } => pull(ch, req, &spec, &here, archive, &changed, &removed, &mut base)
-            .map(|bytes| Outcome::Copied { from: Side::There, files: changed.len(), removed: removed.len(), bytes }),
-        Plan::Copy { from: Side::Here, changed, removed } => push(ch, req, archive, &changed, &removed, &mut base)
-            .map(|bytes| Outcome::Copied { from: Side::Here, files: changed.len(), removed: removed.len(), bytes }),
+        Plan::Copy { from: Side::There, changed, removed, keep } => pull(ch, req, &spec, &here, keep, &changed, &removed, &mut base)
+            .map(|bytes| Outcome::Copied { from: Side::There, files: changed.len(), removed: removed.len(), bytes, kept: keep }),
+        Plan::Copy { from: Side::Here, changed, removed, keep } => push(ch, req, keep, &changed, &removed, &mut base)
+            .map(|bytes| Outcome::Copied { from: Side::Here, files: changed.len(), removed: removed.len(), bytes, kept: keep }),
     };
     if result.is_ok() {
         // A finished copy leaves both sides equal to the winner.
@@ -228,10 +262,17 @@ pub enum Posted {
 /// changed since the computer last had them (docs/DESIGN.md section 10,
 /// transport 3). The set states the files it was made against: the last
 /// live baseline, or the set posted before it when that one has not been
-/// settled live yet. The computer applies it only while its own saves still
-/// match that, so a change on both sides stays a conflict for the next live
-/// sync instead of being overwritten.
-pub fn post_to_share(share: &Path, key: &DeviceKey, to: &PeerId, game: &GameRef, roots: &Roots, baseline_path: &Path) -> Result<Posted> {
+/// settled live yet. When the computer's saves changed too, the newest copy
+/// wins there, as in a live sync, and the other set is kept as a copy.
+pub fn post_to_share(
+    share: &Path,
+    key: &DeviceKey,
+    to: &PeerId,
+    game: &GameRef,
+    roots: &Roots,
+    baseline_path: &Path,
+    primary_computer: bool,
+) -> Result<Posted> {
     let spec: Option<SaveSpec> = fs::read(spec_path(baseline_path)).ok().and_then(|b| serde_json::from_slice(&b).ok());
     let posted = posted_path(baseline_path);
     let (Some(spec), Some(base)) = (spec, load_baseline(&posted).or_else(|| load_baseline(baseline_path))) else {
@@ -249,7 +290,7 @@ pub fn post_to_share(share: &Path, key: &DeviceKey, to: &PeerId, game: &GameRef,
         return Ok(Posted::UpToDate { files: here.len() });
     }
     let bytes = contents.iter().map(|c| c.len() as u64).sum();
-    let envelope = Envelope::Saves { game: game.clone(), base: base.into_values().collect(), files };
+    let envelope = Envelope::Saves { game: game.clone(), base: base.into_values().collect(), files, primary_computer };
     mailbox::post(share, key, to, &mailbox::pack(&envelope, &contents)?)?;
     save_baseline(&posted, &here)?;
     Ok(Posted::Posted { files: here.len(), bytes })
@@ -261,13 +302,13 @@ fn pull<S: Read + Write>(
     req: &SaveSyncRequest,
     spec: &SaveSpec,
     here: &Manifest,
-    archive: bool,
+    keep: bool,
     changed: &[FileEntry],
     removed: &[String],
     base: &mut Manifest,
 ) -> Result<u64> {
-    if archive {
-        archive_files(here.values().filter_map(|e| Some((e.name.clone(), saves::local_path(&e.name, req.roots)?))), req.archive_dir)?;
+    if keep {
+        keep_copy(here.values().filter_map(|e| Some((e.name.clone(), saves::local_path(&e.name, req.roots)?))), req.archive_dir, req.name)?;
     }
     let mut bytes = 0;
     for entry in changed {
@@ -304,12 +345,13 @@ fn pull<S: Read + Write>(
 fn push<S: Read + Write>(
     ch: &mut Channel<S>,
     req: &SaveSyncRequest,
-    archive: bool,
+    keep: bool,
     changed: &[FileEntry],
     removed: &[String],
     base: &mut Manifest,
 ) -> Result<u64> {
-    match ask(ch, &Request::SaveApply { game: req.game.clone(), remove: removed.to_vec(), archive })? {
+    // The computer keeps its own changed set as its copy before it is overwritten.
+    match ask(ch, &Request::SaveApply { game: req.game.clone(), remove: removed.to_vec(), archive: keep })? {
         Response::Ok => {}
         other => return Err(protocol(format!("expected ok, got {other:?}"))),
     }
@@ -418,23 +460,64 @@ fn is_stamp(name: &str) -> bool {
     name.len() == 16 && name.ends_with('Z') && name.as_bytes()[8] == b'T'
 }
 
-/// Copies [`files`] (canonical name, path) into a new folder under
-/// [`archive_dir`], after removing the one before: the owner ruled out
-/// versioning, so only the latest loser is kept.
-pub fn archive_files(files: impl Iterator<Item = (String, PathBuf)>, archive_dir: &Path) -> Result<()> {
+/// How many older copies a game's dated archive keeps.
+pub const ARCHIVED: usize = 5;
+
+/// The folder of [`device`]'s kept copy in a game's archive.
+pub fn copy_dir(archive_dir: &Path, device: &str) -> PathBuf {
+    let name: String = device.chars().map(|c| if c.is_alphanumeric() || " -_.()".contains(c) { c } else { '_' }).collect();
+    let name = name.trim().trim_matches('.');
+    archive_dir.join("copies").join(if name.is_empty() { "device" } else { name })
+}
+
+/// Keeps [`files`] (canonical name, path) as [`device`]'s copy of the game's
+/// saves: the newest copy from each device is kept under `copies/<device>/`.
+/// The copy this replaces moves into the dated archive, which keeps the
+/// [`ARCHIVED`] most recent.
+pub fn keep_copy(files: impl Iterator<Item = (String, PathBuf)>, archive_dir: &Path, device: &str) -> Result<()> {
     let files: Vec<(String, PathBuf)> = files.filter(|(_, p)| p.is_file()).collect();
     if files.is_empty() {
         return Ok(());
     }
-    if let Ok(read) = fs::read_dir(archive_dir) {
-        for entry in read.flatten() {
-            let name = entry.file_name();
-            if name.to_str().is_some_and(is_stamp) && entry.file_type().is_ok_and(|t| t.is_dir()) {
-                fs::remove_dir_all(archive_dir.join(name))?;
-            }
+    let dest = copy_dir(archive_dir, device);
+    if dest.is_dir() {
+        let stamp = utc_stamp(SystemTime::now());
+        let mut older = archive_dir.join(&stamp);
+        let mut n = 1;
+        while older.exists() {
+            older = archive_dir.join(format!("{stamp}-{n}"));
+            n += 1;
         }
+        fs::rename(&dest, &older)?;
+        let _ = fs::write(older.join("device.txt"), device);
+        prune(archive_dir)?;
     }
-    let dest = archive_dir.join(utc_stamp(SystemTime::now()));
+    write_set(files, &dest)
+}
+
+/// The dated archive, oldest first.
+pub fn archived(archive_dir: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = fs::read_dir(archive_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_str().and_then(|n| n.get(..16)).is_some_and(is_stamp) && e.path().is_dir())
+        .map(|e| e.path())
+        .collect();
+    out.sort();
+    out
+}
+
+fn prune(archive_dir: &Path) -> Result<()> {
+    let all = archived(archive_dir);
+    for old in &all[..all.len().saturating_sub(ARCHIVED)] {
+        fs::remove_dir_all(old)?;
+    }
+    Ok(())
+}
+
+/// Copies a save set into [`dest`], laid out by root token.
+fn write_set(files: Vec<(String, PathBuf)>, dest: &Path) -> Result<()> {
     for (name, path) in files {
         let Some((token, parts)) = saves::parse_name(&name) else { continue };
         let mut target = dest.join(token.trim_matches(['<', '>']));
@@ -453,27 +536,33 @@ pub fn archive_files(files: impl Iterator<Item = (String, PathBuf)>, archive_dir
 mod tests {
     use super::*;
 
-    fn m(files: &[(&str, &str)]) -> Manifest {
+    fn at(files: &[(&str, &str, i64)]) -> Manifest {
         manifest::from_entries(
-            files.iter().map(|(n, h)| FileEntry { name: n.to_string(), size: 1, mtime_ms: 1, sha256: h.to_string() }).collect(),
+            files.iter().map(|(n, h, t)| FileEntry { name: n.to_string(), size: 1, mtime_ms: *t, sha256: h.to_string() }).collect(),
         )
     }
+
+    fn m(files: &[(&str, &str)]) -> Manifest {
+        at(&files.iter().map(|(n, h)| (*n, *h, 1)).collect::<Vec<_>>())
+    }
+
+    const NONE: Prefer = Prefer { here: false, there: false };
 
     #[test]
     fn one_side_changed_wins() {
         let base = m(&[("<base>/a", "1")]);
         let here = m(&[("<base>/a", "2")]);
         let there = base.clone();
-        assert!(matches!(decide(&here, &there, Some(&base)), Plan::Copy { from: Side::Here, .. }));
-        assert!(matches!(decide(&there, &here, Some(&base)), Plan::Copy { from: Side::There, .. }));
+        assert!(matches!(decide(&here, &there, Some(&base), NONE), Plan::Copy { from: Side::Here, keep: false, .. }));
+        assert!(matches!(decide(&there, &here, Some(&base), NONE), Plan::Copy { from: Side::There, keep: false, .. }));
     }
 
     #[test]
     fn deletions_travel() {
         let base = m(&[("<base>/a", "1"), ("<base>/b", "1")]);
         let here = m(&[("<base>/a", "1")]);
-        match decide(&here, &base, Some(&base)) {
-            Plan::Copy { from: Side::Here, changed, removed } => {
+        match decide(&here, &base, Some(&base), NONE) {
+            Plan::Copy { from: Side::Here, changed, removed, .. } => {
                 assert!(changed.is_empty());
                 assert_eq!(removed, vec!["<base>/b".to_string()]);
             }
@@ -482,12 +571,48 @@ mod tests {
     }
 
     #[test]
-    fn both_changed_or_first_sync_with_differences_is_a_conflict() {
-        let base = m(&[("<base>/a", "1")]);
-        assert!(matches!(decide(&m(&[("<base>/a", "2")]), &m(&[("<base>/a", "3")]), Some(&base)), Plan::Conflict { .. }));
-        assert!(matches!(decide(&m(&[("<base>/a", "2")]), &m(&[("<base>/a", "3")]), None), Plan::Conflict { .. }));
-        assert!(matches!(decide(&Manifest::new(), &m(&[("<base>/a", "3")]), None), Plan::Copy { from: Side::There, .. }));
-        assert_eq!(decide(&base, &base, None), Plan::Nothing);
+    fn when_both_changed_the_newest_copy_wins_and_the_other_is_kept() {
+        let base = at(&[("<base>/a", "1", 10)]);
+        let older = at(&[("<base>/a", "2", 20)]);
+        let newer = at(&[("<base>/a", "3", 30)]);
+        assert!(matches!(decide(&older, &newer, Some(&base), NONE), Plan::Copy { from: Side::There, keep: true, .. }));
+        assert!(matches!(decide(&newer, &older, Some(&base), NONE), Plan::Copy { from: Side::Here, keep: true, .. }));
+        // A first sync with different files on each side follows the same rule.
+        assert!(matches!(decide(&older, &newer, None, NONE), Plan::Copy { from: Side::There, keep: true, .. }));
+        assert!(matches!(decide(&Manifest::new(), &newer, None, NONE), Plan::Copy { from: Side::There, keep: false, .. }));
+        assert_eq!(decide(&base, &base, None, NONE), Plan::Nothing);
+    }
+
+    #[test]
+    fn a_preferred_side_beats_a_newer_one() {
+        let base = at(&[("<base>/a", "1", 10)]);
+        let (older, newer) = (at(&[("<base>/a", "2", 20)]), at(&[("<base>/a", "3", 30)]));
+        let primary_computer = Prefer { here: false, there: true };
+        let primary_handheld = Prefer { here: true, there: false };
+        assert!(matches!(decide(&newer, &older, Some(&base), primary_computer), Plan::Copy { from: Side::There, keep: true, .. }));
+        assert!(matches!(decide(&older, &newer, Some(&base), primary_handheld), Plan::Copy { from: Side::Here, keep: true, .. }));
+        // Each preferring the other settles nothing: the newest wins.
+        let both = Prefer { here: true, there: true };
+        assert!(matches!(decide(&older, &newer, Some(&base), both), Plan::Copy { from: Side::There, .. }));
+    }
+
+    #[test]
+    fn each_device_keeps_its_newest_copy_and_a_short_archive() {
+        let dir = std::env::temp_dir().join(format!("dta-keep-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let src = dir.join("src.sav");
+        let archive = dir.join("archive");
+        for round in 0..(ARCHIVED + 3) {
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(&src, format!("round {round}")).unwrap();
+            keep_copy(std::iter::once(("<base>/slot.sav".to_string(), src.clone())), &archive, "Retroid Pocket 5").unwrap();
+            keep_copy(std::iter::once(("<base>/slot.sav".to_string(), src.clone())), &archive, "DESKTOP/PC").unwrap();
+        }
+        let last = format!("round {}", ARCHIVED + 2);
+        assert_eq!(fs::read_to_string(copy_dir(&archive, "Retroid Pocket 5").join("base/slot.sav")).unwrap(), last);
+        assert_eq!(fs::read_to_string(archive.join("copies/DESKTOP_PC/base/slot.sav")).unwrap(), last);
+        assert_eq!(archived(&archive).len(), ARCHIVED);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

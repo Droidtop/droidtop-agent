@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use droidtop_agent::state::Agent;
+use droidtop_agent_computer::state::Agent;
 
 mod icon;
 mod tray;
@@ -33,7 +33,7 @@ fn main() {
         let (agent, service) = (agent.clone(), service.clone());
         std::thread::spawn(move || {
             *service.lock().unwrap() = ui::Service::Running;
-            let result = droidtop_agent::serve::run(agent);
+            let result = droidtop_agent_computer::serve::run(agent);
             *service.lock().unwrap() = ui::Service::Stopped(match result {
                 Ok(()) => "The agent stopped.".into(),
                 Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {

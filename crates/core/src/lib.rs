@@ -17,6 +17,7 @@ pub mod keys;
 pub mod library;
 pub mod mailbox;
 pub mod manifest;
+pub mod moved;
 pub mod pairing;
 pub mod proto;
 pub mod rendezvous;
@@ -38,4 +39,4 @@ pub const PAIR_PORT: u16 = 47612;
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// What this build of the core can do, stated in `hello`.
-pub const FEATURES: &[&str] = &["saves", "library", "contexts", "wireguard", "rendezvous"];
+pub const FEATURES: &[&str] = &["saves", "library", "contexts", "wireguard", "rendezvous", "newest_copy", "moved"];

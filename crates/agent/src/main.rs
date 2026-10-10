@@ -9,8 +9,8 @@ use droidtop_agent_core::library::title_key;
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 
-use droidtop_agent::state::Agent;
-use droidtop_agent::{autostart, contexts, host, ludusavi, pair, rendezvous, serve, state};
+use droidtop_agent_computer::state::Agent;
+use droidtop_agent_computer::{autostart, contexts, host, ludusavi, pair, rendezvous, serve, state};
 
 const HELP: &str = "droidtop-agent: keeps this computer and droidtop on a handheld in step.
 
@@ -58,6 +58,8 @@ Usage:
   droidtop-agent rendezvous servers default | <url>...
                                        Discovery servers, in Syncthing's notation (default: Syncthing's)
   droidtop-agent rendezvous stun default | <host:port>...
+  droidtop-agent primary [<id> | none] The handheld whose saves win here when both changed (the start of its id
+                                       is enough); with none, the newest copy wins
   droidtop-agent autostart [on | off]  Start when you sign in (a systemd user unit or autostart entry on
                                        Linux, a LaunchAgent on macOS, the Run key on Windows); off unless
                                        you turn it on
@@ -216,6 +218,30 @@ fn main() {
         ["rendezvous", "stun", list @ ..] if !list.is_empty() => {
             agent.settings.lock().unwrap().stun_servers = list.iter().map(|s| s.to_string()).collect();
             agent.save_settings().map_err(|e| e.to_string())
+        }
+        ["primary"] => {
+            let id = agent.settings.lock().unwrap().primary_device.clone();
+            match id.and_then(|id| PeerId::from_hex(&id).ok()) {
+                Some(peer) => println!("Primary handheld: {}", agent.device_name(&peer)),
+                None => println!("No primary handheld: the newest copy of a game's saves wins."),
+            }
+            Ok(())
+        }
+        ["primary", "none"] => {
+            agent.settings.lock().unwrap().primary_device = None;
+            agent.save_settings().map_err(|e| e.to_string())
+        }
+        ["primary", id] => {
+            let matches: Vec<String> =
+                agent.devices.lock().unwrap().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
+            match matches.as_slice() {
+                [one] => {
+                    agent.settings.lock().unwrap().primary_device = Some(one.clone());
+                    agent.save_settings().map_err(|e| e.to_string())
+                }
+                [] => Err("No paired handheld has that id.".into()),
+                _ => Err("More than one paired handheld starts with that; give more of the id.".into()),
+            }
         }
         ["autostart"] => {
             println!("Starting when you sign in: {}", if autostart::enabled() { "on" } else { "off" });

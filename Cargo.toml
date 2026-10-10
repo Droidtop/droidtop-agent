@@ -13,8 +13,8 @@ rust-version = "1.85"
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
 # this workspace is too.
-windowcast-identity = { git = "https://github.com/Droidtop/windowcast", rev = "9481e55ae5f4265b3420e95e0f0a69bd5ad4904b" }
-windowcast-pairing = { git = "https://github.com/Droidtop/windowcast", rev = "9481e55ae5f4265b3420e95e0f0a69bd5ad4904b" }
+windowcast-identity = { git = "https://github.com/Droidtop/windowcast", rev = "93efcb9ebf108ae71222b9fe3e19d0d57cfb102e" }
+windowcast-pairing = { git = "https://github.com/Droidtop/windowcast", rev = "93efcb9ebf108ae71222b9fe3e19d0d57cfb102e" }
 # Rendezvous away from the LAN (Syncthing's global discovery, STUN, hole
 # punching), shared with windowcast rather than copied. windowcast 0.15.0.
 windowcast-rendezvous = { git = "https://github.com/Droidtop/windowcast", rev = "da060ccef595a8dad76deb3113db0a5b394e1210" }

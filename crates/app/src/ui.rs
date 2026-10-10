@@ -8,10 +8,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use droidtop_agent::state::{Agent, Settings};
-use droidtop_agent::{autostart, pair, rendezvous, state};
+use droidtop_agent_computer::state::{Agent, Settings};
+use droidtop_agent_computer::{autostart, pair, rendezvous, state};
 use droidtop_agent_core::keys::{short, PeerId};
 use droidtop_agent_core::library::now_ms;
+use droidtop_agent_core::savesync;
 use eframe::egui::{self, Color32, RichText};
 
 use crate::tray::{Action, Tray};
@@ -231,21 +232,28 @@ fn open_folder(path: &Path) {
     let _ = std::process::Command::new(program).arg(path).spawn();
 }
 
-/// The archive: `<game>/<UTC time>/` folders, newest first.
+/// The archive: per game, the newest copy kept from each device
+/// (`copies/<device>/`), then the older ones, newest first.
 fn archived(root: &Path) -> Vec<Archived> {
     let mut out = Vec::new();
-    for game in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        for when in std::fs::read_dir(game.path()).into_iter().flatten().flatten() {
-            let files = walk_count(&when.path(), 0);
-            out.push(Archived {
-                game: game.file_name().to_string_lossy().into_owned(),
-                when: when.file_name().to_string_lossy().into_owned(),
-                files,
-                path: when.path(),
-            });
+    let mut games: Vec<PathBuf> =
+        std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    games.sort();
+    for dir in games {
+        let game = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut copies: Vec<PathBuf> = std::fs::read_dir(dir.join("copies")).into_iter().flatten().flatten().map(|e| e.path()).collect();
+        copies.sort();
+        for copy in copies {
+            let device = copy.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            out.push(Archived { game: game.clone(), when: format!("newest from {device}"), files: walk_count(&copy, 0), path: copy });
+        }
+        for older in savesync::archived(&dir).into_iter().rev() {
+            let stamp = older.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let device = std::fs::read_to_string(older.join("device.txt")).unwrap_or_default();
+            let files = walk_count(&older, 0).saturating_sub(usize::from(!device.is_empty()));
+            out.push(Archived { game: game.clone(), when: format!("{stamp}, older, from {}", device.trim()), files, path: older });
         }
     }
-    out.sort_by(|a, b| b.when.cmp(&a.when));
     out
 }
 
@@ -499,7 +507,7 @@ impl App {
         ui.heading("Saves");
         ui.add_space(6.0);
         ui.label(
-            "When the handheld and this computer both changed a game's saves, you choose on the handheld which to keep. If this computer's copy loses, or a save the handheld left in the cloud folder no longer fits, it is kept here.",
+            "When two devices both changed a game's saves, the newest copy wins (or the preferred device's: Settings). The other device's saves are not lost: each device keeps its newest overwritten copy, and a few older ones. These are the ones kept on this computer.",
         );
         ui.add_space(8.0);
         if self.archive.is_empty() {
@@ -583,6 +591,7 @@ impl App {
             self.settings_outcome = Some(autostart::set(self.autostart));
             self.autostart = autostart::enabled();
         }
+        let devices = self.agent.devices.lock().unwrap().clone();
         let draft = self.settings.get_or_insert_with(|| self.agent.settings.lock().unwrap().clone());
         let mut name = draft.name.clone().unwrap_or_default();
         ui.add_space(8.0);
@@ -592,6 +601,20 @@ impl App {
             ui.end_row();
             ui.label("Rescan every");
             ui.add(egui::DragValue::new(&mut draft.scan_minutes).range(5..=1440).suffix(" min"));
+            ui.end_row();
+            ui.label("Primary handheld");
+            let chosen = draft
+                .primary_device
+                .as_ref()
+                .and_then(|id| devices.iter().find(|d| &d.id == id))
+                .map(|d| d.name.clone())
+                .unwrap_or_else(|| "none: the newest saves win".into());
+            egui::ComboBox::from_id_salt("primary").selected_text(chosen).show_ui(ui, |ui| {
+                ui.selectable_value(&mut draft.primary_device, None, "none: the newest saves win");
+                for d in &devices {
+                    ui.selectable_value(&mut draft.primary_device, Some(d.id.clone()), format!("{}: its saves win", d.name));
+                }
+            });
             ui.end_row();
             ui.label("Away from home");
             ui.checkbox(&mut draft.rendezvous, "Let paired handhelds find this computer through global discovery");
@@ -690,18 +713,21 @@ mod tests {
     }
 
     #[test]
-    fn the_archive_lists_each_kept_copy_newest_first() {
+    fn the_archive_lists_each_devices_copy_then_older_ones() {
         let root = std::env::temp_dir().join(format!("dtagent-archive-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("steam_440/20261001T100000Z/a")).unwrap();
-        std::fs::create_dir_all(root.join("steam_440/20261002T100000Z")).unwrap();
-        std::fs::write(root.join("steam_440/20261001T100000Z/a/save.dat"), b"x").unwrap();
-        std::fs::write(root.join("steam_440/20261001T100000Z/b.dat"), b"x").unwrap();
+        let game = root.join("steam_440");
+        let save = root.join("save.dat");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&save, b"x").unwrap();
+        for device in ["DESKTOP", "DESKTOP", "Retroid Pocket 5"] {
+            savesync::keep_copy(std::iter::once(("<base>/save.dat".to_string(), save.clone())), &game, device).unwrap();
+        }
         let list = archived(&root);
-        assert_eq!(
-            list.iter().map(|a| (a.when.as_str(), a.files)).collect::<Vec<_>>(),
-            vec![("20261002T100000Z", 0), ("20261001T100000Z", 2)]
-        );
+        let whens: Vec<&str> = list.iter().map(|a| a.when.as_str()).collect();
+        assert_eq!(&whens[..2], &["newest from DESKTOP", "newest from Retroid Pocket 5"]);
+        assert!(whens[2].ends_with("older, from DESKTOP"), "{whens:?}");
+        assert!(list.iter().all(|a| a.files == 1));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

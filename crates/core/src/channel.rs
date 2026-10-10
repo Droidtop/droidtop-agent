@@ -57,12 +57,27 @@ impl<S: Read + Write> Channel<S> {
     }
 
     /// The computer's side: accept a channel from a device [`trusted`] says is paired.
-    pub fn accept(mut stream: S, key: &DeviceKey, trusted: impl Fn(&PeerId) -> bool) -> Result<Self> {
-        let secret = key.x25519_secret();
-        let mut hs = builder(&secret).build_responder()?;
+    pub fn accept(stream: S, key: &DeviceKey, trusted: impl Fn(&PeerId) -> bool) -> Result<Self> {
+        Self::accept_any(stream, &[key], trusted).map(|(ch, _)| ch)
+    }
+
+    /// [`accept`] for a computer that answers to more than one key while it
+    /// moves to a new identity ([`crate::moved`]): the handheld's first
+    /// message opens only with the key it was sent to. Returns which of
+    /// [`keys`] that was.
+    pub fn accept_any(mut stream: S, keys: &[&DeviceKey], trusted: impl Fn(&PeerId) -> bool) -> Result<(Self, usize)> {
         let first = read_short(&mut stream)?;
         let mut payload = vec![0u8; MAX_NOISE];
-        let n = hs.read_message(&first, &mut payload)?;
+        let mut opened = None;
+        for (i, key) in keys.iter().enumerate() {
+            let secret = key.x25519_secret();
+            let mut hs = builder(&secret).build_responder()?;
+            if let Ok(n) = hs.read_message(&first, &mut payload) {
+                opened = Some((i, hs, n));
+                break;
+            }
+        }
+        let Some((index, mut hs, n)) = opened else { return Err(Error::NotPaired) };
         if n != 32 {
             return Err(Error::NotPaired);
         }
@@ -76,7 +91,7 @@ impl<S: Read + Write> Channel<S> {
         write_short(&mut stream, &buf[..n])?;
         stream.flush()?;
         let noise = hs.into_transport_mode()?;
-        Ok(Channel { stream, noise, peer, out: buf, inp: payload })
+        Ok((Channel { stream, noise, peer, out: buf, inp: payload }, index))
     }
 
     /// The device on the other end.
@@ -184,6 +199,25 @@ mod tests {
         let stranger = DeviceKey::generate();
         let _ = Channel::connect(TcpStream::connect(addr).unwrap(), &stranger, &server_id);
         assert!(matches!(handle.join().unwrap(), Some(Error::NotPaired)));
+    }
+
+    #[test]
+    fn a_computer_moving_keys_answers_to_both() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (new, old) = (DeviceKey::generate(), DeviceKey::generate());
+        let old_id = old.peer_id();
+        let client = DeviceKey::generate();
+        let client_id = client.peer_id();
+        let handle = thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let (mut ch, which) = Channel::accept_any(s, &[&new, &old], |p| *p == client_id).unwrap();
+            ch.send(b"hi").unwrap();
+            which
+        });
+        let mut ch = Channel::connect(TcpStream::connect(addr).unwrap(), &client, &old_id).unwrap();
+        assert_eq!(ch.recv().unwrap(), b"hi");
+        assert_eq!(handle.join().unwrap(), 1);
     }
 
     #[test]

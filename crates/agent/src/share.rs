@@ -12,7 +12,7 @@ use droidtop_agent_core::mailbox::{self, Envelope};
 use droidtop_agent_core::manifest::{self, FileEntry, Manifest};
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
-use droidtop_agent_core::savesync::archive_files;
+use droidtop_agent_core::savesync::{keep_copy, winner, Prefer, Side};
 use sha2::{Digest, Sha256};
 
 use crate::state::Agent;
@@ -47,8 +47,10 @@ fn handle(agent: &Agent, share: &std::path::Path, from: &PeerId, envelope: Envel
                 let _ = agent.save_library();
             }
         }
-        Envelope::Saves { game, base, files } => {
-            if let Err(reason) = apply_saves(agent, &game, base, &files, contents) {
+        Envelope::Saves { game, base, files, primary_computer } => {
+            let prefer = Prefer { here: agent.is_primary(from), there: primary_computer };
+            let sender = agent.device_name(from);
+            if let Err(reason) = apply_saves(agent, &game, base, &files, contents, prefer, &sender) {
                 let reply = Envelope::SavesRefused { game, reason };
                 if let Ok(payload) = mailbox::pack(&reply, &[]) {
                     let _ = mailbox::post(share, &agent.key, from, &payload);
@@ -59,10 +61,20 @@ fn handle(agent: &Agent, share: &std::path::Path, from: &PeerId, envelope: Envel
     }
 }
 
-/// Applies a save set left in the share when this computer's saves still
-/// match the baseline it was made against; otherwise keeps it in the
-/// archive and says why.
-fn apply_saves(agent: &Agent, game: &GameRef, base: Vec<FileEntry>, files: &[FileEntry], contents: &[u8]) -> Result<(), String> {
+/// Applies a save set left in the share. When this computer's saves changed
+/// too since the set's baseline, the newest copy wins as in a live sync (a
+/// preferred side first), and the losing set is kept as its device's copy:
+/// this computer's under its own name, or the handheld's under [`sender`],
+/// with a refusal back to it.
+fn apply_saves(
+    agent: &Agent,
+    game: &GameRef,
+    base: Vec<FileEntry>,
+    files: &[FileEntry],
+    contents: &[u8],
+    prefer: Prefer,
+    sender: &str,
+) -> Result<(), String> {
     let (spec, roots, _) = agent.save_lookup(game, false).ok_or("this computer knows no save location for the game")?;
     let current = manifest::build(saves::collect(&spec, &roots), &Manifest::new());
     let mut offset = 0usize;
@@ -76,27 +88,30 @@ fn apply_saves(agent: &Agent, game: &GameRef, base: Vec<FileEntry>, files: &[Fil
         blobs.push(blob);
         offset = end;
     }
-    // Already the same here (a live sync got there first): nothing to do,
-    // and nothing to archive.
-    if manifest::same(&current, &manifest::from_entries(files.to_vec())) {
+    let incoming = manifest::from_entries(files.to_vec());
+    // Already the same here (a live sync got there first): nothing to do.
+    if manifest::same(&current, &incoming) {
         return Ok(());
     }
     let archive = agent.dirs.archive().join(crate::host::file_key(&game.key));
     if !manifest::same(&current, &manifest::from_entries(base)) {
-        // Both changed: the incoming set is kept, not applied.
-        let tmp = std::env::temp_dir().join(format!("droidtop-agent-incoming-{}", std::process::id()));
-        let mut staged = Vec::new();
-        for (f, blob) in files.iter().zip(&blobs) {
-            let p = tmp.join(manifest::key(&f.name).replace(['<', '>', '/'], "_"));
-            fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-            fs::write(&p, blob).map_err(|e| e.to_string())?;
-            staged.push((f.name.clone(), p));
+        if winner(&incoming, &current, prefer) == Side::There {
+            // This computer's copy stays; the handheld's is kept beside it.
+            let tmp = std::env::temp_dir().join(format!("droidtop-agent-incoming-{}", std::process::id()));
+            let mut staged = Vec::new();
+            for (f, blob) in files.iter().zip(&blobs) {
+                let p = tmp.join(manifest::key(&f.name).replace(['<', '>', '/'], "_"));
+                fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+                fs::write(&p, blob).map_err(|e| e.to_string())?;
+                staged.push((f.name.clone(), p));
+            }
+            keep_copy(staged.into_iter(), &archive, sender).map_err(|e| e.to_string())?;
+            if tmp.starts_with(std::env::temp_dir()) {
+                let _ = fs::remove_dir_all(&tmp);
+            }
+            return Err(format!("this computer's saves were newer, so they stay; yours are kept on it in {}", archive.display()));
         }
-        archive_files(staged.into_iter(), &archive).map_err(|e| e.to_string())?;
-        if tmp.starts_with(std::env::temp_dir()) {
-            let _ = fs::remove_dir_all(&tmp);
-        }
-        return Err(format!("the saves changed on this computer too; the handheld's copy is in {}", archive.display()));
+        keep_copy(saves::collect(&spec, &roots).into_iter(), &archive, &agent.name()).map_err(|e| e.to_string())?;
     }
     for (f, blob) in files.iter().zip(blobs) {
         let path = saves::local_path(&f.name, &roots).ok_or("no place for a file")?;
@@ -108,7 +123,6 @@ fn apply_saves(agent: &Agent, game: &GameRef, base: Vec<FileEntry>, files: &[Fil
             let _ = file.set_modified(manifest::system_time(f.mtime_ms));
         }
     }
-    let incoming = manifest::from_entries(files.to_vec());
     for (k, e) in &current {
         if !incoming.contains_key(k) {
             if let Some(p) = saves::local_path(&e.name, &roots) {

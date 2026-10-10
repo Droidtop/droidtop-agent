@@ -104,9 +104,17 @@ pub enum Envelope {
     /// Library changes the recipient has not had yet.
     Library { changes: Vec<Change> },
     /// A game's whole save set, made when no live path was there, with the
-    /// baseline the sender last agreed on with the recipient: the recipient
-    /// applies it only when its own saves still match that baseline.
-    Saves { game: GameRef, base: Vec<FileEntry>, files: Vec<FileEntry> },
+    /// baseline the sender last agreed on with the recipient. When the
+    /// recipient's saves changed too, the newest copy wins as in a live sync
+    /// (a preferred side first: [`primary_computer`] says the sender prefers
+    /// the recipient's), and the other set is kept as its device's copy.
+    Saves {
+        game: GameRef,
+        base: Vec<FileEntry>,
+        files: Vec<FileEntry>,
+        #[serde(default)]
+        primary_computer: bool,
+    },
     /// The recipient could not apply a save set, and why.
     SavesRefused { game: GameRef, reason: String },
 }

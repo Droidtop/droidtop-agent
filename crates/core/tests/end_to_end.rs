@@ -109,14 +109,22 @@ fn sync(host: &'static TestHost, hh_roots: &Roots, state: &Path, choice: Option<
             roots: hh_roots,
             baseline_path: &baseline,
             archive_dir: &archive,
+            name: "Handheld",
+            primary_computer: false,
             choice,
         };
         savesync::sync(ch, &req).unwrap()
     })
 }
 
+/// Writes a save with a given modification time, so which copy is newest is clear.
+fn write_at(path: &Path, contents: &[u8], secs: u64) {
+    fs::write(path, contents).unwrap();
+    fs::File::options().write(true).open(path).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)).unwrap();
+}
+
 #[test]
-fn saves_sync_both_ways_and_conflicts_are_the_persons() {
+fn saves_sync_both_ways_and_the_newest_copy_wins() {
     let pc_dir = temp("pc");
     let hh_dir = temp("hh");
     let state = temp("state");
@@ -151,19 +159,24 @@ fn saves_sync_both_ways_and_conflicts_are_the_persons() {
     assert_eq!(fs::read(pc_game.join("slots/one.sav")).unwrap(), b"handheld save 2");
     assert!(!pc_game.join("settings.ini").exists());
 
-    // Played on both: a conflict, and nothing moves until the person picks.
-    fs::write(hh_game.join("slots/one.sav"), b"handheld save 3").unwrap();
-    fs::write(pc_game.join("slots/one.sav"), b"pc save 3").unwrap();
-    assert!(matches!(sync(host, &hh_roots, &state, None), Outcome::Conflict { .. }));
-    assert_eq!(fs::read(pc_game.join("slots/one.sav")).unwrap(), b"pc save 3");
-
-    // The person keeps the handheld's: the computer's loser is archived.
-    let resolved = sync(host, &hh_roots, &state, Some(Side::Here));
-    assert!(matches!(resolved, Outcome::Copied { from: Side::Here, .. }), "{resolved:?}");
+    // Played on both: the newest copy wins, and the computer keeps its own.
+    write_at(&hh_game.join("slots/one.sav"), b"handheld save 3", 2_000_000_000);
+    write_at(&pc_game.join("slots/one.sav"), b"pc save 3", 1_900_000_000);
+    let newest = sync(host, &hh_roots, &state, None);
+    assert!(matches!(newest, Outcome::Copied { from: Side::Here, kept: true, .. }), "{newest:?}");
     assert_eq!(fs::read(pc_game.join("slots/one.sav")).unwrap(), b"handheld save 3");
-    let archived: Vec<_> = fs::read_dir(pc_dir.join("archive")).unwrap().flatten().collect();
-    assert_eq!(archived.len(), 1);
-    assert_eq!(fs::read(archived[0].path().join("winAppData/Game/slots/one.sav")).unwrap(), b"pc save 3");
+    let kept = savesync::copy_dir(&pc_dir.join("archive"), "Test PC").join("winAppData/Game/slots/one.sav");
+    assert_eq!(fs::read(&kept).unwrap(), b"pc save 3");
+
+    // Played on both again, and the person picks the computer's older copy:
+    // the handheld keeps its own as a copy.
+    write_at(&hh_game.join("slots/one.sav"), b"handheld save 4", 2_100_000_000);
+    write_at(&pc_game.join("slots/one.sav"), b"pc save 4", 2_050_000_000);
+    let picked = sync(host, &hh_roots, &state, Some(Side::There));
+    assert!(matches!(picked, Outcome::Copied { from: Side::There, kept: true, .. }), "{picked:?}");
+    assert_eq!(fs::read(hh_game.join("slots/one.sav")).unwrap(), b"pc save 4");
+    let own = savesync::copy_dir(&state.join("archive"), "Handheld").join("winAppData/Game/slots/one.sav");
+    assert_eq!(fs::read(own).unwrap(), b"handheld save 4");
 
     // A game the computer knows no saves for says so.
     let unknown = session(host, |ch| {
@@ -172,6 +185,8 @@ fn saves_sync_both_ways_and_conflicts_are_the_persons() {
             roots: &hh_roots,
             baseline_path: &state.join("other.json"),
             archive_dir: &state.join("archive"),
+            name: "Handheld",
+            primary_computer: false,
             choice: None,
         };
         savesync::sync(ch, &req).unwrap()
@@ -208,7 +223,7 @@ fn saves_left_in_the_share_state_what_they_were_made_against() {
     let baseline = state.join("baseline.json");
     let handheld = DeviceKey::generate();
     let pc = DeviceKey::generate();
-    let post = || post_to_share(&share, &handheld, &pc.peer_id(), &game, &hh_roots, &baseline).unwrap();
+    let post = || post_to_share(&share, &handheld, &pc.peer_id(), &game, &hh_roots, &baseline, false).unwrap();
 
     // Before any live sync the handheld does not know where the saves are.
     assert_eq!(post(), Posted::NotYet);

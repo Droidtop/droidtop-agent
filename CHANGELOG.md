@@ -6,6 +6,21 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- One identity and one pairing with windowcast: the agent keeps its identity
+  and trusted handhelds in windowcast's host folder, and pairs through
+  windowcast's exchange (`windowcast_pairing::exchange`, label
+  `droidtop-agent pair v2`). Version-1 pairing peers are told to update.
+  Existing pairings move once:
+  - the agent's key becomes the shared one when windowcast has none;
+  - otherwise the agent answers to both keys and tells each handheld of the
+    move, signed by both (`moved_to`), until all have moved.
+- Saves: the newest copy wins when both sides changed, with no question. A
+  preferred side beats newer: the handheld's primary computer, or the
+  computer's primary handheld (`droidtop-agent primary`). Each device keeps
+  its own overwritten changed set as its copy (`archive/<game>/copies/<device>/`),
+  and the 5 most recent older copies. Save letters follow the same rule.
+- Any number of handhelds and computers pair with each other. A CI test runs
+  three of each in a partial mesh.
 - droidtop-agent-app: the agent with a window and a tray icon on Windows,
   Linux and macOS. Its pages are status, pairing (it shows or takes a code,
   with a QR code), the library it found, kept saves, plugin data (install

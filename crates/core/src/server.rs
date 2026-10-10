@@ -14,7 +14,7 @@ use crate::library::Change;
 use crate::manifest::{self, Manifest};
 use crate::proto::{GameRef, Request, Response};
 use crate::saves::{self, Roots, SaveSpec};
-use crate::savesync::{archive_files, entry_for, receive_file, send_contents};
+use crate::savesync::{entry_for, keep_copy, receive_file, send_contents};
 use crate::{Error, Result, FEATURES, PROTOCOL_VERSION};
 
 pub trait Host: Send + Sync {
@@ -32,8 +32,13 @@ pub trait Host: Send + Sync {
     fn hello(&self, _peer: &PeerId, _disco: Option<&str>) {}
     /// Where [`game`] keeps its saves, and this computer's folder for each token.
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)>;
-    /// Where this computer's conflict loser for [`game`] goes.
+    /// [`game`]'s archive here: the copies kept per device, and older ones.
     fn archive_dir(&self, game: &GameRef) -> PathBuf;
+    /// Whether [`peer`] is this computer's primary handheld, whose saves it
+    /// prefers when both sides changed.
+    fn primary(&self, _peer: &PeerId) -> bool {
+        false
+    }
     fn library_pull(&self, peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)>;
     fn library_push(&self, peer: &PeerId, changes: Vec<Change>) -> Result<()>;
     /// A context's records here. [`offer`] is the adapter the plugin offers,
@@ -46,6 +51,12 @@ pub trait Host: Send + Sync {
 
 /// Answers requests until the handheld says goodbye or hangs up.
 pub fn serve<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host) -> Result<()> {
+    serve_moved(ch, host, None)
+}
+
+/// [`serve`] for a session the handheld opened to an identity this computer
+/// is moving away from: its hello reply carries [`moved`].
+pub fn serve_moved<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host, moved: Option<crate::moved::Moved>) -> Result<()> {
     let peer = ch.peer();
     let mut specs: HashMap<GameRef, Option<(SaveSpec, Roots)>> = HashMap::new();
     let mut known: HashMap<GameRef, Manifest> = HashMap::new();
@@ -66,6 +77,7 @@ pub fn serve<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host) -> Result<()
                     features: FEATURES.iter().map(|f| f.to_string()).collect(),
                     endpoints: host.endpoints(),
                     disco: host.disco_id(),
+                    moved_to: moved.clone(),
                 })
             }
             Request::LibraryPull { since } => {
@@ -78,9 +90,9 @@ pub fn serve<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host) -> Result<()
                     let m = manifest::build(saves::collect(&spec, &roots), known.get(&game).unwrap_or(&Manifest::new()));
                     let files = m.values().cloned().collect();
                     known.insert(game, m);
-                    Ok(Response::Manifest { files })
+                    Ok(Response::Manifest { files, primary: host.primary(&peer) })
                 }
-                None => Ok(Response::Manifest { files: Vec::new() }),
+                None => Ok(Response::Manifest { files: Vec::new(), primary: host.primary(&peer) }),
             },
             Request::FileGet { game, name } => match spec_of(&game) {
                 Some((spec, roots)) if spec.matches(&name) => match saves::local_path(&name, &roots).filter(|p| p.is_file()) {
@@ -133,8 +145,9 @@ pub fn serve<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host) -> Result<()
 }
 
 fn apply(host: &dyn Host, game: &GameRef, spec: &SaveSpec, roots: &Roots, remove: &[String], archive: bool) -> Result<()> {
+    // This computer's changed set is overwritten: it keeps it as its own copy first.
     if archive {
-        archive_files(saves::collect(spec, roots).into_iter(), &host.archive_dir(game))?;
+        keep_copy(saves::collect(spec, roots).into_iter(), &host.archive_dir(game), &host.name())?;
     }
     for name in remove {
         if !spec.matches(name) {

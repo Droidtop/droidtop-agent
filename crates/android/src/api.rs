@@ -286,6 +286,8 @@ struct Session {
     computer: String,
     endpoints: Vec<String>,
     disco: Option<String>,
+    /// The computer moved to a new identity; droidtop re-pins it.
+    moved_to: Option<PeerId>,
 }
 
 fn hello(mut ch: Channel<Link>, address: String, path: Path, key: &DeviceKey, args: &Value) -> Result<Session, Failure> {
@@ -293,11 +295,13 @@ fn hello(mut ch: Channel<Link>, address: String, path: Path, key: &DeviceKey, ar
     let features = droidtop_agent_core::FEATURES.iter().map(|f| f.to_string()).collect();
     let disco = rendezvous::certificate(key).ok().map(|c| c.device_id());
     ch.send_json(&Request::Hello { name, version: PROTOCOL_VERSION, features, disco })?;
-    let (computer, endpoints, disco) = match ch.recv_json::<Response>()? {
-        Response::Hello { name, endpoints, disco, .. } => (name, endpoints, disco),
-        _ => (String::new(), Vec::new(), None),
+    let (computer, endpoints, disco, moved) = match ch.recv_json::<Response>()? {
+        Response::Hello { name, endpoints, disco, moved_to, .. } => (name, endpoints, disco, moved_to),
+        _ => (String::new(), Vec::new(), None, None),
     };
-    Ok(Session { ch, address, path, computer, endpoints, disco })
+    // Only a move both keys signed, from the identity this session reached.
+    let moved_to = moved.and_then(|m| m.check(&ch.peer()));
+    Ok(Session { ch, address, path, computer, endpoints, disco, moved_to })
 }
 
 /// The rendezvous settings droidtop passes (`rendezvous` in the arguments):
@@ -465,6 +469,9 @@ fn located(mut v: Value, s: &Session) -> Value {
     if let Some(disco) = &s.disco {
         v["disco"] = json!(disco);
     }
+    if let Some(moved) = &s.moved_to {
+        v["moved_to"] = json!(moved.to_hex());
+    }
     v
 }
 
@@ -486,6 +493,13 @@ struct SavesArgs {
     roots: Roots,
     baseline: PathBuf,
     archive: PathBuf,
+    /// This device's name, for the copy it keeps of its own saves.
+    #[serde(default)]
+    name: Option<String>,
+    /// The computer is this device's primary computer: its saves win when
+    /// both sides changed.
+    #[serde(default)]
+    primary: bool,
     #[serde(default)]
     choice: Option<Side>,
 }
@@ -510,8 +524,16 @@ fn sync_saves(args: &Value) -> Outcome {
     let a: SavesArgs = serde_json::from_value(args.clone())?;
     let roots = a.roots();
     let mut s = connect(&key, args)?;
-    let request =
-        SaveSyncRequest { game: a.game.clone(), roots: &roots, baseline_path: &a.baseline, archive_dir: &a.archive, choice: a.choice };
+    let name = a.name.clone().unwrap_or_else(|| "droidtop".into());
+    let request = SaveSyncRequest {
+        game: a.game.clone(),
+        roots: &roots,
+        baseline_path: &a.baseline,
+        archive_dir: &a.archive,
+        name: &name,
+        primary_computer: a.primary,
+        choice: a.choice,
+    };
     let outcome = savesync::sync(&mut s.ch, &request);
     let v = located(serde_json::to_value(outcome?)?, &s);
     bye(s.ch);
@@ -645,7 +667,7 @@ fn share_post_saves(args: &Value) -> Outcome {
     let peer = peer_of(args["peer"].as_str().unwrap_or_default())?;
     let outbox = path_arg(args, "outbox")?;
     let a: SavesArgs = serde_json::from_value(args.clone())?;
-    let posted = savesync::post_to_share(&outbox, &key, &peer, &a.game, &a.roots(), &a.baseline)?;
+    let posted = savesync::post_to_share(&outbox, &key, &peer, &a.game, &a.roots(), &a.baseline, a.primary)?;
     Ok(serde_json::to_value(posted)?)
 }
 

@@ -13,7 +13,7 @@ use std::time::Duration;
 use droidtop_agent_core::channel::Channel;
 use droidtop_agent_core::discovery;
 use droidtop_agent_core::keys::{short, PeerId};
-use droidtop_agent_core::server::serve;
+use droidtop_agent_core::server::{serve, serve_moved};
 use droidtop_agent_core::tunnel;
 use droidtop_agent_core::PORT;
 
@@ -111,8 +111,12 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
             let address = stream.peer_addr().ok().map(|p| p.ip().to_string());
             let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
-            let mut ch = match Channel::accept(stream, &a.key, |p| a.is_trusted(p)) {
-                Ok(ch) => ch,
+            // While this computer moves to the identity it shares with
+            // windowcast, it answers to its previous one too and tells the
+            // handheld (crate::state::migrate).
+            let keys: Vec<&droidtop_agent_core::keys::DeviceKey> = std::iter::once(&a.key).chain(a.previous.as_ref()).collect();
+            let (mut ch, which) = match Channel::accept_any(stream, &keys, |p| a.is_trusted(p)) {
+                Ok(accepted) => accepted,
                 Err(e) => {
                     eprintln!("Refused a connection from {}: {e}", address.unwrap_or_default());
                     return;
@@ -120,7 +124,13 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
             };
             let peer = ch.peer();
             a.seen(&peer, address);
-            if let Err(e) = serve(&mut ch, &*a) {
+            let served = if which == 0 {
+                a.on_current_key(&peer);
+                serve(&mut ch, &*a)
+            } else {
+                serve_moved(&mut ch, &*a, a.moved())
+            };
+            if let Err(e) = served {
                 eprintln!("Session with {} ended: {e}", short(&peer));
             }
         });

@@ -86,6 +86,10 @@ pub enum Response {
         /// The computer's global discovery ID, to find it away from the LAN.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         disco: Option<String>,
+        /// The handheld reached the computer at an identity it is moving
+        /// away from: the new one, signed by both (crate::moved).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        moved_to: Option<crate::moved::Moved>,
     },
     Ok,
     Error {
@@ -98,8 +102,12 @@ pub enum Response {
     SaveSpec {
         spec: Option<SaveSpec>,
     },
+    /// [`primary`]: the computer names this handheld its primary handheld,
+    /// whose saves it prefers when both changed.
     Manifest {
         files: Vec<FileEntry>,
+        #[serde(default)]
+        primary: bool,
     },
     File {
         file: FileEntry,

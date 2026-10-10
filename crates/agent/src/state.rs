@@ -18,10 +18,14 @@ use crate::scan::Scan;
 /// Where the agent keeps its files.
 #[derive(Debug, Clone)]
 pub struct Dirs {
-    /// Settings, the key and the paired devices.
+    /// Settings and the paired devices' names.
     pub config: PathBuf,
-    /// The library, the Ludusavi index and conflict archives.
+    /// The library, the Ludusavi index and the save archives.
     pub data: PathBuf,
+    /// This computer's identity and trusted devices: windowcast's host folder
+    /// (`windowcast_identity::computer_dir`), shared with windowcast, or the
+    /// agent's own folder when `DROIDTOP_AGENT_HOME` makes it portable.
+    pub computer: PathBuf,
 }
 
 impl Dirs {
@@ -29,24 +33,40 @@ impl Dirs {
     /// tests); otherwise the platform's own places.
     pub fn locate() -> io::Result<Dirs> {
         let dirs = match std::env::var_os("DROIDTOP_AGENT_HOME") {
-            Some(home) => Dirs { config: PathBuf::from(&home), data: PathBuf::from(home) },
+            Some(home) => Dirs { config: PathBuf::from(&home), data: PathBuf::from(&home), computer: PathBuf::from(home) },
             None => {
                 let config =
                     dirs::config_dir().ok_or_else(|| io::Error::other("no settings folder on this system"))?.join("droidtop-agent");
                 let data = dirs::data_local_dir().ok_or_else(|| io::Error::other("no data folder on this system"))?.join("droidtop-agent");
-                Dirs { config, data }
+                Dirs { config, data, computer: windowcast_identity::computer_dir() }
             }
         };
         fs::create_dir_all(&dirs.config)?;
         fs::create_dir_all(&dirs.data)?;
+        fs::create_dir_all(&dirs.computer)?;
         Ok(dirs)
     }
 
+    /// This computer's identity, shared with windowcast's host.
     pub fn identity(&self) -> PathBuf {
+        self.computer.join(windowcast_identity::HOST_IDENTITY_FILE)
+    }
+    /// The devices this computer trusts, shared with windowcast's host.
+    pub fn trust(&self) -> PathBuf {
+        self.computer.join(windowcast_identity::HOST_TRUST_FILE)
+    }
+    /// Where the agent kept its own identity and trusted devices before it
+    /// shared windowcast's.
+    pub fn own_identity(&self) -> PathBuf {
         self.config.join("identity.key")
     }
-    pub fn trust(&self) -> PathBuf {
+    pub fn own_trust(&self) -> PathBuf {
         self.config.join("trusted-devices")
+    }
+    /// The identity this computer is moving away from, kept until every
+    /// paired handheld has heard of the move (crate::state::migrate).
+    pub fn previous_identity(&self) -> PathBuf {
+        self.config.join("previous-identity.key")
     }
     pub fn peers(&self) -> PathBuf {
         self.config.join("devices.json")
@@ -121,6 +141,10 @@ pub struct Settings {
     /// The contexts whose offered adapter the person declined, and the plugin.
     #[serde(default)]
     pub declined: BTreeMap<String, String>,
+    /// The handheld whose saves this computer prefers when both sides
+    /// changed (`primary`), by id; otherwise the newest copy wins.
+    #[serde(default)]
+    pub primary_device: Option<String>,
     /// Rendezvous away from the LAN through global discovery and STUN
     /// (`rendezvous on|off`; on unless the person turned it off).
     #[serde(default = "yes")]
@@ -160,6 +184,10 @@ pub struct Device {
     /// Its global discovery ID, as it said in its last hello.
     #[serde(default)]
     pub disco: Option<String>,
+    /// It has reached this computer at its current identity since the
+    /// computer moved to it (crate::state::migrate).
+    #[serde(default)]
+    pub moved: bool,
 }
 
 /// Save locations the person states for a game, ahead of the Ludusavi manifest.
@@ -170,6 +198,38 @@ pub struct UserSaves {
     /// The game's folder, when the scanner does not know it.
     #[serde(default)]
     pub base: Option<PathBuf>,
+}
+
+/// Moves the agent onto the identity and trusted list it shares with
+/// windowcast's host (docs/DESIGN.md section 3, "One identity with
+/// windowcast"), once. [`paired`]: the agent has paired handhelds.
+/// - Only the agent had an identity: it becomes the shared one; nothing
+///   changes for the paired handhelds.
+/// - Both had one: the shared (windowcast's) identity stays. With paired
+///   handhelds the agent keeps its own as the previous identity, answers to
+///   both, and tells each handheld of the move ([`Agent::moved`]).
+/// - The agent's trusted handhelds join the shared list.
+///
+/// The agent's own files are renamed `*.moved`, so this runs once.
+pub fn migrate(dirs: &Dirs, paired: bool) -> io::Result<()> {
+    let (own_id, own_trust) = (dirs.own_identity(), dirs.own_trust());
+    if own_id == dirs.identity() || !own_id.is_file() {
+        return Ok(());
+    }
+    let own = fs::read(&own_id)?;
+    match fs::read(dirs.identity()) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => fs::write(dirs.identity(), &own)?,
+        Err(e) => return Err(e),
+        Ok(shared) if shared != own && paired => fs::write(dirs.previous_identity(), &own)?,
+        Ok(_) => {}
+    }
+    if own_trust.is_file() {
+        let theirs = TrustStore::load(&own_trust).map_err(|e| io::Error::other(e.to_string()))?;
+        TrustStore::update(&dirs.trust(), |t| theirs.peers().for_each(|p| t.pin(*p))).map_err(|e| io::Error::other(e.to_string()))?;
+        fs::rename(&own_trust, own_trust.with_extension("moved"))?;
+    }
+    fs::rename(&own_id, own_id.with_extension("key.moved"))?;
+    Ok(())
 }
 
 pub fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> io::Result<T> {
@@ -194,8 +254,10 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
 pub struct Agent {
     pub dirs: Dirs,
     pub key: DeviceKey,
+    /// The identity this computer is moving away from (crate::state::migrate),
+    /// still answered until every paired handheld has heard of the move.
+    pub previous: Option<DeviceKey>,
     pub settings: Mutex<Settings>,
-    pub trust: Mutex<TrustStore>,
     pub devices: Mutex<Vec<Device>>,
     pub saves: Mutex<BTreeMap<String, UserSaves>>,
     pub library: Mutex<Library>,
@@ -209,17 +271,19 @@ pub struct Agent {
 impl Agent {
     pub fn open() -> io::Result<Agent> {
         let dirs = Dirs::locate()?;
-        // windowcast's identity file, so the two can share one key on a
-        // computer that runs both (docs/DESIGN.md section 3).
+        let devices: Vec<Device> = read_json(&dirs.peers())?;
+        migrate(&dirs, !devices.is_empty())?;
+        // windowcast's identity file, so a computer running both has one key
+        // and one pairing (docs/DESIGN.md section 3).
         let identity = Identity::load_or_generate(&dirs.identity()).map_err(|e| io::Error::other(e.to_string()))?;
         let key = DeviceKey::from_identity(&identity);
-        let trust = TrustStore::load(&dirs.trust()).map_err(|e| io::Error::other(e.to_string()))?;
+        let previous = fs::read(dirs.previous_identity()).ok().and_then(|seed| DeviceKey::from_seed(&seed).ok());
         let library = Library::load(&dirs.library())?;
         Ok(Agent {
             settings: Mutex::new(read_json(&dirs.settings())?),
-            devices: Mutex::new(read_json(&dirs.peers())?),
+            devices: Mutex::new(devices),
             saves: Mutex::new(read_json(&dirs.saves())?),
-            trust: Mutex::new(trust),
+            previous,
             library: Mutex::new(library),
             scan: Mutex::new(None),
             ludusavi: Mutex::new(None),
@@ -237,8 +301,46 @@ impl Agent {
         self.key.peer_id()
     }
 
+    /// Whether [`peer`] is the handheld whose saves this computer prefers.
+    pub fn is_primary(&self, peer: &PeerId) -> bool {
+        self.settings.lock().unwrap().primary_device.as_deref() == Some(peer.to_hex().as_str())
+    }
+
+    /// A paired device's name, or the start of its id.
+    pub fn device_name(&self, peer: &PeerId) -> String {
+        let id = peer.to_hex();
+        self.devices.lock().unwrap().iter().find(|d| d.id == id).map(|d| d.name.clone()).unwrap_or_else(|| id[..16].to_string())
+    }
+
+    /// Whether [`peer`] is paired: the trusted list on disk, which
+    /// windowcast's host changes too.
     pub fn is_trusted(&self, peer: &PeerId) -> bool {
-        self.trust.lock().unwrap().is_pinned(peer)
+        TrustStore::load(&self.dirs.trust()).is_ok_and(|t| t.is_pinned(peer))
+    }
+
+    /// The move this computer tells a handheld that reached it at its
+    /// previous identity.
+    pub fn moved(&self) -> Option<droidtop_agent_core::moved::Moved> {
+        self.previous.as_ref().map(|old| droidtop_agent_core::moved::Moved::new(old, &self.key))
+    }
+
+    /// A paired handheld reached this computer at its current identity: once
+    /// all have, the previous one is no longer needed and is deleted.
+    pub fn on_current_key(&self, peer: &PeerId) {
+        if self.previous.is_none() {
+            return;
+        }
+        let all = {
+            let mut devices = self.devices.lock().unwrap();
+            if let Some(d) = devices.iter_mut().find(|d| d.id == peer.to_hex()) {
+                d.moved = true;
+            }
+            devices.iter().all(|d| d.moved)
+        };
+        let _ = self.save_devices();
+        if all {
+            let _ = fs::remove_file(self.dirs.previous_identity());
+        }
     }
 
     pub fn save_settings(&self) -> io::Result<()> {
@@ -259,11 +361,7 @@ impl Agent {
 
     /// Pins a newly paired device and remembers its name.
     pub fn add_device(&self, peer: PeerId, name: &str) -> io::Result<()> {
-        {
-            let mut trust = self.trust.lock().unwrap();
-            trust.pin(peer);
-            trust.save(&self.dirs.trust()).map_err(|e| io::Error::other(e.to_string()))?;
-        }
+        TrustStore::update(&self.dirs.trust(), |t| t.pin(peer)).map_err(|e| io::Error::other(e.to_string()))?;
         {
             let mut devices = self.devices.lock().unwrap();
             devices.retain(|d| d.id != peer.to_hex());
@@ -274,6 +372,7 @@ impl Agent {
                 last_address: None,
                 last_seen_ms: 0,
                 disco: None,
+                moved: true,
             });
         }
         self.save_devices()
@@ -281,11 +380,7 @@ impl Agent {
 
     /// Forgets a device: unpinned, so it can no longer connect.
     pub fn remove_device(&self, peer: &PeerId) -> io::Result<()> {
-        {
-            let mut trust = self.trust.lock().unwrap();
-            trust.revoke(peer);
-            trust.save(&self.dirs.trust()).map_err(|e| io::Error::other(e.to_string()))?;
-        }
+        TrustStore::update(&self.dirs.trust(), |t| t.revoke(peer)).map_err(|e| io::Error::other(e.to_string()))?;
         self.devices.lock().unwrap().retain(|d| d.id != peer.to_hex());
         self.save_devices()
     }
@@ -343,5 +438,67 @@ impl Agent {
             self.rescan();
         }
         self.scan.lock().unwrap().as_ref().map(|(_, s)| s.clone()).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dirs(name: &str) -> Dirs {
+        let root = std::env::temp_dir().join(format!("dta-migrate-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let d = Dirs { config: root.join("agent"), data: root.join("data"), computer: root.join("windowcast/app/host") };
+        for p in [&d.config, &d.data, &d.computer] {
+            fs::create_dir_all(p).unwrap();
+        }
+        d
+    }
+
+    fn own(d: &Dirs, trusted: &PeerId) -> Vec<u8> {
+        let seed = DeviceKey::generate().seed().to_vec();
+        fs::write(d.own_identity(), &seed).unwrap();
+        TrustStore::update(&d.own_trust(), |t| t.pin(*trusted)).unwrap();
+        seed
+    }
+
+    #[test]
+    fn the_agents_identity_becomes_the_shared_one_when_windowcast_has_none() {
+        let d = dirs("one");
+        let handheld = DeviceKey::generate().peer_id();
+        let seed = own(&d, &handheld);
+        migrate(&d, true).unwrap();
+        assert_eq!(fs::read(d.identity()).unwrap(), seed);
+        assert!(TrustStore::load(&d.trust()).unwrap().is_pinned(&handheld));
+        assert!(!d.previous_identity().exists() && !d.own_identity().exists());
+        // It runs once.
+        migrate(&d, true).unwrap();
+        assert_eq!(fs::read(d.identity()).unwrap(), seed);
+    }
+
+    #[test]
+    fn with_both_identities_and_pairings_the_agent_moves_to_windowcasts() {
+        let d = dirs("both");
+        let (handheld, viewer) = (DeviceKey::generate().peer_id(), DeviceKey::generate().peer_id());
+        let shared = DeviceKey::generate().seed().to_vec();
+        fs::write(d.identity(), &shared).unwrap();
+        TrustStore::update(&d.trust(), |t| t.pin(viewer)).unwrap();
+        let seed = own(&d, &handheld);
+        migrate(&d, true).unwrap();
+        assert_eq!(fs::read(d.identity()).unwrap(), shared);
+        assert_eq!(fs::read(d.previous_identity()).unwrap(), seed);
+        let trust = TrustStore::load(&d.trust()).unwrap();
+        assert!(trust.is_pinned(&handheld) && trust.is_pinned(&viewer));
+    }
+
+    #[test]
+    fn without_pairings_the_agent_simply_adopts_windowcasts() {
+        let d = dirs("adopt");
+        let shared = DeviceKey::generate().seed().to_vec();
+        fs::write(d.identity(), &shared).unwrap();
+        fs::write(d.own_identity(), DeviceKey::generate().seed()).unwrap();
+        migrate(&d, false).unwrap();
+        assert_eq!(fs::read(d.identity()).unwrap(), shared);
+        assert!(!d.previous_identity().exists());
     }
 }

@@ -108,16 +108,53 @@ follow (decision 1).
   The same key, converted to X25519 (the standard birational map, as
   libsodium's `crypto_sign_ed25519_*_to_curve25519` does), is the device's
   Noise and WireGuard static key. One key, one trust decision, for every
-  transport. On a computer the identity file lives in the agent's config
-  folder. windowcast can read the same file when the two become one desktop
-  app (decision 3). On the handheld, droidtop keeps the key sealed with
+  transport. On the handheld, droidtop keeps the key sealed with
   `KeystoreSecretCipher` and passes it to the library for each call.
+- **One identity with windowcast on a computer** (owner, 2026-10-10: a
+  computer paired once is paired for both; decision 3). The agent's identity
+  and trusted devices are windowcast's host files, in
+  `windowcast_identity::computer_dir()`: the reference app's `host` folder,
+  `%APPDATA%\windowcast\app\host` or `~/.config/windowcast/app/host`, holding
+  `agent-identity.key` and `agent-trusted-clients`. So a device paired with
+  either program is trusted by both, and forgetting it in either forgets it
+  in both. Both programs change the list with `TrustStore::update`, against
+  what is on disk, and the agent reads it at every check.
+  `DROIDTOP_AGENT_HOME` keeps everything in one folder (portable use, tests).
+- **Moving existing pairings** (`state::migrate`, once, at start):
+  1. Only the agent had an identity: its key becomes the shared one, and
+     nothing changes for the paired handhelds.
+  2. windowcast had one and the agent had no pairings: the agent adopts it.
+  3. Both had one and the agent had pairings: windowcast's stays. The agent
+     keeps its own as `previous-identity.key` and answers to both
+     (`Channel::accept_any`). A handheld that reaches it at the old identity
+     gets `moved_to` in the hello reply: the new id, signed by the old key
+     and by the new one (`core::moved`). droidtop checks both signatures and
+     re-pins the computer. Once every paired handheld has reached the new
+     identity, the old key is deleted. Until a handheld has, it moves at its
+     next session on the home network (the WireGuard path answers only the
+     current key).
+  4. The agent's trusted handhelds join the shared list. The agent's old
+     files are renamed `*.moved`.
 - **Trust** is windowcast's `TrustStore`: the set of pinned peers. The agent
   keeps a separate peers file for names and last-known addresses, so no
   trust decision is ever made from it.
-- **Pairing** is windowcast's SPAKE2 run (`windowcast-pairing`), unchanged:
-  6 digits from `generate_pin`, HKDF to a session key, and HMAC tags that both
-  sides check.
+- **Any number of devices, any pairing graph** (owner, 2026-10-10: "if we have
+  5 droidtop devices and 5 desktops, we should be able to connect and pair any
+  number of permutations of these devices and have them work"). A computer
+  trusts any number of handhelds, and a handheld keeps any number of
+  computers. Each pair is its own trust decision, session, WireGuard tunnel and
+  rendezvous lookup. Section 9 says how saves, the library and contexts travel
+  between devices that are not paired directly.
+- **Pairing is windowcast's exchange** (`windowcast_pairing::exchange`), the
+  one windowcast's signaling runs, under this program's label (`droidtop-agent
+  pair v2`):
+  - both sides send a hello: identity, a fresh nonce and the SPAKE2 message
+    (6 digits from `generate_pin`, HKDF to a session key);
+  - each then sends its name with a proof over the transcript (label, side,
+    both nonces, both identities, the name): its identity's signature and the
+    PIN key's HMAC tag.
+  - A wrong code, a substituted key or a replayed transcript fails the check.
+  - A version-1 peer is told to update.
   1. On the handheld: Settings > Computers > "Pair a computer". droidtop opens
      a short-lived listener (only while that screen is open), shows the 6-digit
      code in large type, and shows a QR code of
@@ -127,11 +164,8 @@ follow (decision 1).
      handheld on the LAN by a UDP broadcast query that only a handheld in
      pairing mode answers. `droidtop-agent pair 'droidtop-pair:1?...'` (the
      QR's text, from a phone or webcam) goes straight to the address in it.
-  3. The two run SPAKE2 over TCP. Each side then sends
-     `authenticate_fingerprint(key, transcript)` over the transcript
-     `"droidtop-agent pair v1" || host PeerId || client PeerId || host name ||
-     client name`, and checks the other's tag. A wrong code or a substituted
-     key fails here. Each side then pins the other's PeerId.
+  3. The two run the exchange above over TCP, and each pins the other's
+     PeerId.
   The pairing listener accepts one attempt per code. Three wrong attempts end
   the pairing screen's session.
 - **Why the code is typed on the computer and not scanned:** neither a desktop
@@ -181,10 +215,10 @@ exactly one reply (`{"t":"error","message":...}` on failure).
 | `library_pull {since}` | `library_changes {changes, cursor}` | the computer's library changes since a cursor |
 | `library_push {changes}` | `ok {cursor}` | the handheld's library changes |
 | `save_spec {game}` | `save_spec {spec}` or `unknown` | where this game keeps its saves, as templates |
-| `save_manifest {game}` | `manifest {files}` | the computer's save files: name, size, mtime, SHA-256 |
+| `save_manifest {game}` | `manifest {files, primary}` | the computer's save files: name, size, mtime, SHA-256; `primary` when this handheld is the computer's primary handheld |
 | `file_get {game, name}` | `file {name, size, sha256}` + data | one save file, computer to handheld |
 | `file_put {game, name, size, sha256, mtime}` + data | `ok` | one save file, handheld to computer |
-| `save_apply {game, remove, archive}` | `ok` | removals, and archiving the computer's side first when it lost a conflict |
+| `save_apply {game, remove, archive}` | `ok` | removals, and keeping the computer's own changed set as its copy first (`archive`) |
 | `context_pull {context}` | `context {records}` | a plugin context's records on the computer |
 | `context_push {context, changes}` | `ok` or `deferred` | record changes to apply on the computer |
 
@@ -215,14 +249,25 @@ slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
   saves elsewhere, often in another format. Those saves are not matched to
   the handheld's Windows copy, and only the person's own `saves add` entries
   cover such a game.
-- **The decision is the same rule droidtop's Steam Cloud sync uses**
-  (`SteamCloudPlan.decide`), now in the shared core so it is one
-  implementation. The handheld keeps a baseline per paired computer and game:
-  the files as they were after the last sync (name, SHA-256, size, mtime).
+- **The decision: the newest copy wins** (owner, 2026-10-10: "newest copy wins
+  isn't the worst idea. We keep the newest copy from EACH device, and an
+  archive if possible. We can also set a primary desktop and primary device to
+  prefer saves from. It's not like syncthing where we're handling lots of
+  arbitrary files"). The handheld keeps a baseline per paired computer and
+  game: the files as they were after the last sync (name, SHA-256, size,
+  mtime).
   - If only one side changed since the baseline, that side wins: its changed
     files are copied over, and files it deleted are deleted on the other side.
-  - If both changed and still differ, it is a conflict (section 9).
-  - A first sync with differing files on both sides is a conflict too.
+  - If both changed, or a first sync finds different files on each side, a
+    preferred side wins: the handheld's primary computer (droidtop, Settings
+    > Computers) or the computer's primary handheld (`droidtop-agent
+    primary`, the window's Settings). When neither side, or both, is
+    preferred, the set whose newest file is newer wins.
+  - The other side's changed set is kept, never lost (section 9).
+  - A save set is a game's whole set, not files picked one by one: a game's
+    files belong together (an index and its slots), so mixing files from two
+    devices could break a save. There are no version vectors: a game's saves
+    are a small, known set of files.
   - A file whose size and mtime match its baseline entry is not re-hashed.
 - **When it runs:** before a game starts and after it ends, on the same seam
   as `StoreSaves` (one launch path, two save sources). A computer that cannot
@@ -233,8 +278,7 @@ slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
   `.<name>.dtpart` and renamed over the target only when its SHA-256 matches.
   A failure keeps the baseline entry as it was, so the next sync retries the
   file instead of reading the failure as a change.
-- **No versioning.** The owner ruled it out for storage reasons. The one
-  exception is a conflict loser, which is archived (section 9).
+- **No general versioning.** Only the copies section 9 keeps.
 
 ## 7. Library
 
@@ -355,22 +399,54 @@ droidtop's `docs/plugin-api.md` ("Context sync"). The shape:
   A thread watched on the device is inserted with its id, name and url, and
   F95Checker's own refresh fills in the rest.
 
-## 9. Conflicts
+## 9. Both sides changed, and many devices
 
-One question, everywhere: droidtop's existing "Saves differ" dialog
-(`SaveConflictPrompts`). It names the computer instead of "Cloud" and shows
-each side's last change, file count and which is newer. The person picks a
-side. "Later" (B) changes nothing, and the game starts on this device's files.
+**Saves: nothing is lost.** When both sides changed, the newest (or the
+preferred) copy wins without asking (section 6). Before a device's own
+changed set is overwritten, it keeps it as its own copy (`savesync::keep_copy`):
+- the newest copy from each device, in `archive/<game>/copies/<device name>/`;
+- the copy that replaces moves to the dated archive,
+  `archive/<game>/<UTC time>/` (with `device.txt`), which keeps the 5 most
+  recent per game (decision 8).
 
-**Losers are archived, not deleted.** Before the losing side is overwritten,
-its files are moved to an archive:
-- on the computer: `<agent data>/archive/<game>/<UTC time>/`;
-- on the handheld: droidtop's `files/agent/archive/<computer>/<game>/<UTC time>/`.
+That is `<agent data>/archive/` on the computer, and the archive folder
+droidtop names for each computer on the handheld. The person can still pick
+the other side (`choice`), to bring back a copy: the side that pick
+overwrites keeps its own the same way. droidtop says which side's saves were
+kept (`kept` in the outcome). Steam Cloud games keep the store's own rule and
+its dialog. Save letters in the cloud folder follow the same rule on the
+computer: when its saves changed too, the newest or preferred set wins, the
+other is kept, and a refusal tells the handheld where its copy is.
 
-Only the most recent loser per game is kept, because the owner ruled out
-versioning for storage reasons (decision 8). A context's conflicts are per
-record and per field, never per file, so nothing there is overwritten without
-a rule or an answer.
+**Devices that are not paired directly** reach each other through the
+devices they share. The pairing graph is any set of handhelds and computers.
+A handheld and a computer exchange what each has, so changes travel along
+pairings:
+- **Saves:** a second handheld paired with the same computer gets the first
+  one's saves at its next sync with it. Each pair keeps its own baseline, so
+  a set that arrives through a third device is a change on one side and moves
+  without a question. Two devices that both changed meet the newest-copy
+  rule wherever they meet.
+- **Library:** each device's facts are written only by that device and travel
+  through any device in between: the change log is relayed, and a change
+  that moves nothing stops. A game installed on two computers is one entry
+  with an install per device, so two locations.
+- **Plugin contexts:** merged per field against a baseline the handheld keeps
+  per computer and context. A field changed on two computers meets the
+  field's rule (or the person) on the handheld that carries both.
+
+A context's conflicts are per record and per field, never per file, so
+nothing there is overwritten without a rule or an answer.
+
+CI covers this with three handhelds and three computers in one process,
+paired in a partial mesh (`crates/android/tests/mesh.rs`):
+- the library relaying across the mesh, with one entry per game and two
+  locations;
+- saves edited on two devices at once (the newest wins, and the other
+  device's copy is kept);
+- a preferred computer beating a newer copy;
+- saves reaching a handheld through a computer it shares;
+- an identity move.
 
 ## 10. Transports, in order
 
@@ -583,8 +659,8 @@ and skips folders it cannot read.
 2. **Pairing input.** The code is typed on the computer, and the QR code
    serves cameras (laptop webcam, phone). Decided (coordinator, 2026-10-09):
    the computer can also show the code and the handheld connect (section 3).
-3. **One identity with windowcast on a computer.** Default: yes, one key file,
-   one pairing, once the two share the desktop app.
+3. **One identity with windowcast on a computer.** Decided (owner, 2026-10-10):
+   one key file, one trusted list, one pairing exchange (section 3).
 4. **Finding endpoints for WireGuard off the LAN.** Default: last-known
    endpoints, plus signed announcements in the person's own cloud share. Should
    a STUN server or Syncthing's global discovery also be used (each needs its
@@ -600,7 +676,8 @@ and skips folders it cannot read.
    copies?
 7. **Writing F95Checker's database.** Default: only while F95Checker is
    closed; changes wait until then.
-8. **Conflict archive depth.** Default: the most recent loser per game.
+8. **Archive depth.** Decided (owner, 2026-10-10): the newest copy from each
+   device, plus the 5 most recent older copies per game (section 9).
 9. **Autostart on the computer.** Default: off. `droidtop-agent autostart
    on` (or the checkbox in the window) adds a per-user autostart: a systemd
    user unit on Linux (tied to the graphical session for the window
@@ -634,9 +711,9 @@ macOS, so nobody needs the command line.
   - **Library:** what the last scan found (games, installed apps, programs
     it can sync with, sources it could not read), a filter, and Scan now.
   - **Saves:** the copies the agent kept: this computer's side when it lost
-    a conflict, and save letters it refused. Each opens in the file manager.
-    The conflict question itself is asked on the handheld, where the game
-    is about to run (section 9).
+    to a newer or preferred copy, and the copies it kept from handhelds' save
+    letters, with the dated older ones (section 9). Each opens in the file
+    manager. Settings names the primary handheld.
   - **Plugin data:** adapters plugins offered (Install or Decline; a declined
     plugin's offer for that context is not kept again) and the ones
     installed (Remove).

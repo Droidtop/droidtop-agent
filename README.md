@@ -5,7 +5,10 @@ step with [droidtop](https://github.com/Droidtop/droidtop) on a handheld:
 
 - **Saves.** Before a game starts on the handheld and after it ends, its saves
   are brought up to date with the computer's copy. If both sides changed,
-  droidtop asks which to keep, and the other copy is archived, not deleted.
+  the newest copy wins (or the one from the computer or handheld you made
+  primary), and the other device keeps its own as a copy, with a few older
+  ones. Nothing is deleted. Any number of handhelds and computers can pair
+  with each other.
 - **Library.** The agent scans the computer for games: Steam, GOG, Epic,
   Amazon, itch, Battle.net, Heroic, Lutris, Bottles, Minigalaxy, your own game folders, and ROM
   folders laid out by ES-DE system name. The two libraries stay in step both

@@ -125,6 +125,10 @@ impl Host for Agent {
         Agent::name(self)
     }
 
+    fn primary(&self, peer: &PeerId) -> bool {
+        self.is_primary(peer)
+    }
+
     fn endpoints(&self) -> Vec<String> {
         let mut out = endpoints(self.settings.lock().unwrap().public_endpoint.as_deref());
         // The address STUN found for the WireGuard socket: enough on its own
