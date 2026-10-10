@@ -6,6 +6,14 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A game's version can be copied between a handheld and a computer
+  (`core::gamecopy`, `game_pull` and `game_push`; Droidtop/tracker#469 part
+  3). It arrives as a new folder beside the game's others, resumable and
+  checked per file. On the computer it goes to the person's first game
+  folder, never into a store's install folders.
+
+## build-28
+
 - Every game keeps its version history across devices (device, version,
   when first heard of; `GameRecord::versions`), filled from the install
   changes each device applies, so it travels across many devices

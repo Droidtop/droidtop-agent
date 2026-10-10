@@ -129,6 +129,26 @@ impl Host for Agent {
         self.is_primary(peer)
     }
 
+    fn game_folder(&self, game: &GameRef) -> Option<(PathBuf, Option<String>)> {
+        let scan = self.fresh_scan(300);
+        let found = scan.find(&game.key).or_else(|| scan.find_title(&game.title))?;
+        Some((found.base.clone().filter(|b| b.is_dir())?, found.game.install.version.clone()))
+    }
+
+    /// A version a handheld sends goes to the person's first game folder:
+    /// never into a store's own install folders.
+    fn game_inbox(&self) -> std::result::Result<PathBuf, String> {
+        self.settings.lock().unwrap().game_folders.iter().find(|f| f.is_dir()).cloned().ok_or_else(|| {
+            "this computer has no game folder to put it in: add one in droidtop-agent's Settings (or droidtop-agent folders add <path>)"
+                .into()
+        })
+    }
+
+    fn game_arrived(&self, game: &GameRef, folder: &Path) {
+        println!("{} arrived in {}.", game.title, folder.display());
+        self.rescan();
+    }
+
     fn endpoints(&self) -> Vec<String> {
         let mut out = endpoints(self.settings.lock().unwrap().public_endpoint.as_deref());
         // The address STUN found for the WireGuard socket: enough on its own

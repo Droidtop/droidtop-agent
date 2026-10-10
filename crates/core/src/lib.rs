@@ -12,6 +12,7 @@ pub mod context;
 pub mod discovery;
 pub mod error;
 pub mod frame;
+pub mod gamecopy;
 pub mod hex;
 pub mod keys;
 pub mod library;
@@ -39,4 +40,4 @@ pub const PAIR_PORT: u16 = 47612;
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// What this build of the core can do, stated in `hello`.
-pub const FEATURES: &[&str] = &["saves", "library", "contexts", "wireguard", "rendezvous", "newest_copy", "moved"];
+pub const FEATURES: &[&str] = &["saves", "library", "contexts", "wireguard", "rendezvous", "newest_copy", "moved", "game_copy"];

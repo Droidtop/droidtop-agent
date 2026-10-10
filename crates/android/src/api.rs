@@ -47,6 +47,8 @@ pub fn call(op: &str, args: &str) -> String {
         "sync_saves" => sync_saves(&args),
         "sync_library" => sync_library(&args),
         "sync_context" => sync_context(&args),
+        "game_pull" => game_pull(&args),
+        "game_push" => game_push(&args),
         "share_library" => share_library(&args),
         "share_post_saves" => share_post_saves(&args),
         other => Err(Failure::Error(format!("unknown operation {other}"))),
@@ -669,6 +671,54 @@ fn share_post_saves(args: &Value) -> Outcome {
     let a: SavesArgs = serde_json::from_value(args.clone())?;
     let posted = savesync::post_to_share(&outbox, &key, &peer, &a.game, &a.roots(), &a.baseline, a.primary)?;
     Ok(serde_json::to_value(posted)?)
+}
+
+// Game folders ----------------------------------------------------------------
+//
+// A version of a game copied between this device and a computer, as a new
+// folder beside the game's others (droidtop-agent docs/DESIGN.md section 7,
+// "Game updates"). droidtop runs it as a job; how far it has come is written
+// to the file named `progress` (`{"done": .., "total": ..}`) at most twice a
+// second.
+
+/// Writes how far a copy has come, now and then.
+fn progress_file(path: Option<PathBuf>) -> impl FnMut(u64, u64) {
+    let mut last = std::time::Instant::now() - Duration::from_secs(1);
+    move |done, total| {
+        let Some(path) = &path else { return };
+        if done < total && last.elapsed() < Duration::from_millis(500) {
+            return;
+        }
+        last = std::time::Instant::now();
+        let _ = std::fs::write(path, json!({ "done": done, "total": total }).to_string());
+    }
+}
+
+fn game_pull(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let game: GameRef = serde_json::from_value(args["game"].clone())?;
+    let parent = path_arg(args, "parent")?;
+    let name = args["folder_name"].as_str().unwrap_or_default().to_string();
+    let mut progress = progress_file(args["progress"].as_str().map(PathBuf::from));
+    let mut s = connect(&key, args)?;
+    let copied = droidtop_agent_core::gamecopy::pull(&mut s.ch, &game, &parent, &name, &mut progress);
+    let v = located(serde_json::to_value(copied?)?, &s);
+    bye(s.ch);
+    Ok(v)
+}
+
+fn game_push(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let game: GameRef = serde_json::from_value(args["game"].clone())?;
+    let source = path_arg(args, "source")?;
+    let name = args["folder_name"].as_str().unwrap_or_default().to_string();
+    let version = args["version"].as_str().map(str::to_string);
+    let mut progress = progress_file(args["progress"].as_str().map(PathBuf::from));
+    let mut s = connect(&key, args)?;
+    let copied = droidtop_agent_core::gamecopy::push(&mut s.ch, &game, &source, &name, version, &mut progress);
+    let v = located(serde_json::to_value(copied?)?, &s);
+    bye(s.ch);
+    Ok(v)
 }
 
 // Plugin contexts ------------------------------------------------------------

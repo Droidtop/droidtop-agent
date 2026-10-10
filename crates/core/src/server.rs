@@ -34,6 +34,18 @@ pub trait Host: Send + Sync {
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)>;
     /// [`game`]'s archive here: the copies kept per device, and older ones.
     fn archive_dir(&self, game: &GameRef) -> PathBuf;
+    /// [`game`]'s folder on this computer and the version it has, for a
+    /// handheld that copies it (crate::gamecopy).
+    fn game_folder(&self, _game: &GameRef) -> Option<(PathBuf, Option<String>)> {
+        None
+    }
+    /// Where a game folder a handheld sends is made: one of the person's game
+    /// folders here, or why there is none.
+    fn game_inbox(&self) -> std::result::Result<PathBuf, String> {
+        Err("this computer takes no games".into())
+    }
+    /// A game folder a handheld sent is in place.
+    fn game_arrived(&self, _game: &GameRef, _folder: &std::path::Path) {}
     /// Whether [`peer`] is this computer's primary handheld, whose saves it
     /// prefers when both sides changed.
     fn primary(&self, _peer: &PeerId) -> bool {
@@ -60,6 +72,7 @@ pub fn serve_moved<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host, moved:
     let peer = ch.peer();
     let mut specs: HashMap<GameRef, Option<(SaveSpec, Roots)>> = HashMap::new();
     let mut known: HashMap<GameRef, Manifest> = HashMap::new();
+    let mut incoming: Option<(GameRef, crate::gamecopy::Incoming)> = None;
     loop {
         let request: Request = match ch.recv_json() {
             Ok(r) => r,
@@ -131,6 +144,36 @@ pub fn serve_moved<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host, moved:
             Request::SaveApply { game, remove, archive } => match spec_of(&game) {
                 Some((spec, roots)) => apply(host, &game, &spec, &roots, &remove, archive).map(|()| Response::Ok),
                 None => Err(Error::Protocol("this computer knows no saves for that game".into())),
+            },
+            Request::GameFiles { game } => match host.game_folder(&game) {
+                Some((folder, version)) => crate::gamecopy::describe(&folder, version).map(|folder| Response::GameFiles { folder }),
+                None => Err(Error::Protocol(format!("{} is not installed on this computer", game.title))),
+            },
+            Request::GameFileGet { game, path, offset } => match host.game_folder(&game) {
+                Some((folder, _)) => match crate::gamecopy::send_file(ch, &folder, &path, offset) {
+                    Ok(()) => continue,
+                    Err(e) => Err(e),
+                },
+                None => Err(Error::Protocol(format!("{} is not installed on this computer", game.title))),
+            },
+            Request::GamePutStart { game, folder } => match host.game_inbox() {
+                Ok(parent) => crate::gamecopy::Incoming::start(&parent, folder).map(|(inc, have)| {
+                    incoming = Some((game, inc));
+                    Response::GamePutHave { have }
+                }),
+                Err(why) => Err(Error::Protocol(why)),
+            },
+            Request::GameFilePut { game, path } => match &incoming {
+                // The file follows whatever happens; a refusal comes after it.
+                Some((g, inc)) if *g == game => inc.receive(ch, &path).map(|()| Response::Ok),
+                _ => Err(Error::Protocol("no game folder is being sent".into())),
+            },
+            Request::GamePutFinish { game } => match incoming.take() {
+                Some((g, inc)) if g == game => inc.finish().map(|folder| {
+                    host.game_arrived(&game, &folder);
+                    Response::GamePlaced { folder: folder.display().to_string() }
+                }),
+                _ => Err(Error::Protocol("no game folder is being sent".into())),
             },
             Request::ContextPull { context, adapter } => {
                 host.context_pull(&context, adapter.as_ref()).map(|records| Response::Context { records })

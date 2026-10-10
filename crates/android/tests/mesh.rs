@@ -287,3 +287,72 @@ fn a_computer_that_moved_to_windowcasts_identity_tells_its_handhelds() {
     let again = h.library(&(computer, new_id, at));
     assert!(again.get("moved_to").is_none(), "{again}");
 }
+
+#[test]
+fn a_newer_version_comes_from_a_computer_through_droidtops_call() {
+    use droidtop_agent_core::proto::GameRef as G;
+    struct GamePc {
+        game: PathBuf,
+    }
+    impl Host for GamePc {
+        fn name(&self) -> String {
+            "PC".into()
+        }
+        fn saves(&self, _game: &G) -> Option<(SaveSpec, Roots)> {
+            None
+        }
+        fn archive_dir(&self, _game: &G) -> PathBuf {
+            std::env::temp_dir()
+        }
+        fn library_pull(&self, _peer: &PeerId, since: u64) -> droidtop_agent_core::Result<(Vec<Change>, u64)> {
+            Ok((Vec::new(), since))
+        }
+        fn library_push(&self, _peer: &PeerId, _changes: Vec<Change>) -> droidtop_agent_core::Result<()> {
+            Ok(())
+        }
+        fn context_pull(&self, _context: &str, _offer: Option<&AdapterOffer>) -> droidtop_agent_core::Result<Records> {
+            Ok(Records::new())
+        }
+        fn context_push(&self, _context: &str, _changes: Vec<RecordChange>) -> droidtop_agent_core::Result<Option<String>> {
+            Ok(None)
+        }
+        fn game_folder(&self, _game: &G) -> Option<(PathBuf, Option<String>)> {
+            Some((self.game.clone(), Some("1.1".into())))
+        }
+    }
+    let h = Handheld::new("Copier");
+    let source = temp("pull-pc").join("Testgame v1.1");
+    fs::create_dir_all(source.join("game")).unwrap();
+    fs::write(source.join("Testgame.exe"), b"MZ v1.1").unwrap();
+    fs::write(source.join("game/data.bin"), vec![7u8; 300_000]).unwrap();
+    let pc: &'static GamePc = Box::leak(Box::new(GamePc { game: source }));
+    let key = DeviceKey::generate();
+    let id = key.peer_id();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let at = listener.local_addr().unwrap();
+    let paired = h.id;
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            if let Ok(mut ch) = Channel::accept(stream, &key, |p| *p == paired) {
+                let _ = serve(&mut ch, pc);
+            }
+        }
+    });
+    let shelf = h.dir.join("games");
+    fs::create_dir_all(&shelf).unwrap();
+    let progress = h.dir.join("progress.json");
+    let out: Value = serde_json::from_str(&call(
+        "game_pull",
+        &json!({
+            "seed": h.seed, "peer": id.to_hex(), "addresses": [at.to_string()], "name": "Copier",
+            "game": { "key": "title:testgame", "title": "Testgame" },
+            "parent": shelf, "folder_name": "Testgame v1.1", "progress": progress,
+        })
+        .to_string(),
+    ))
+    .unwrap();
+    assert_eq!(out["files"], 2, "{out}");
+    assert_eq!(fs::read(shelf.join("Testgame v1.1/Testgame.exe")).unwrap(), b"MZ v1.1");
+    let p: Value = serde_json::from_str(&fs::read_to_string(progress).unwrap()).unwrap();
+    assert_eq!(p["done"], p["total"]);
+}

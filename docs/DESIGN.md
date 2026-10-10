@@ -323,6 +323,27 @@ marks on a game are shared.
   changes it applies, so a device learns the versions of devices it never
   meets. droidtop turns a newer version on a computer into "an update is
   available" (its SPEC 7o).
+- **Game updates between devices** (Droidtop/tracker#469 part 3; owner,
+  2026-10-10: "If I install an update to a game on my desktop, I should be
+  able to sync it to the handheld and version-manage it automatically").
+  `core::gamecopy` copies a game's folder as a NEW folder beside the game's
+  others, named for its version (droidtop's "a version is a folder", its
+  SPEC 7m). The previous version stays playable, rolling back is choosing
+  it, and nothing is changed in place.
+  - The copy is made in `<name>.dtpart/` and renamed into place only when
+    every file is whole.
+  - A copy that stopped continues: a file already the right size and time
+    is kept, and a shorter one goes on from where it ends.
+  - Files travel in 1 MiB pieces over the session channel (LAN or
+    WireGuard; never the cloud folder), each followed by the whole file's
+    SHA-256, which the receiver checks.
+  - Paths are plain relative paths; anything else is refused on both sides,
+    and symbolic links are not followed.
+  - From the computer: the game's folder as the scan found it (a store's
+    install folder included). To the computer: the person's first game
+    folder, never a store's install folders. The computer rescans when one
+    arrives.
+  - droidtop runs it as a job, with progress (`game_pull`, `game_push`).
 - **Play time:** each device reports its own total and last played time. A
   game's total is the sum, and its last played time is the latest. Nothing
   overwrites another device's numbers.

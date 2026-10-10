@@ -68,6 +68,35 @@ pub enum Request {
         context: String,
         changes: Vec<RecordChange>,
     },
+    /// A game's folder on the computer: its files, to copy it here
+    /// (crate::gamecopy).
+    GameFiles {
+        game: GameRef,
+    },
+    /// One file of that folder from [`offset`]; the reply is a
+    /// `game_file` header, the rest of the file, an empty message and a
+    /// `digest` of the whole file.
+    GameFileGet {
+        game: GameRef,
+        path: String,
+        offset: u64,
+    },
+    /// This device's folder of a game is coming, to be made among the
+    /// computer's game folders as [`folder`]'s name.
+    GamePutStart {
+        game: GameRef,
+        folder: crate::gamecopy::GameFolder,
+    },
+    /// One file of it follows, as a `game_file` header, its pieces, an
+    /// empty message and a `digest`.
+    GameFilePut {
+        game: GameRef,
+        path: String,
+    },
+    /// Every file has been sent: put the folder in place.
+    GamePutFinish {
+        game: GameRef,
+    },
     Bye,
 }
 
@@ -118,5 +147,27 @@ pub enum Response {
     ContextApplied {
         deferred: bool,
         message: Option<String>,
+    },
+    GameFiles {
+        folder: crate::gamecopy::GameFolder,
+    },
+    /// A file's header: its whole size and the offset its pieces start at.
+    GameFile {
+        path: String,
+        size: u64,
+        offset: u64,
+    },
+    /// The SHA-256 of a whole file that was just sent.
+    Digest {
+        sha256: String,
+    },
+    /// Per announced file, what the computer already has: its size when it
+    /// is whole, `u64::MAX` when it starts over, else the bytes it holds.
+    GamePutHave {
+        have: Vec<u64>,
+    },
+    /// Where the computer put the folder.
+    GamePlaced {
+        folder: String,
     },
 }
