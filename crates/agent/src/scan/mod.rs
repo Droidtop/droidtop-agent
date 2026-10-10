@@ -16,7 +16,9 @@ use crate::state::{Dirs, Settings};
 mod amazon;
 pub mod apps;
 mod battlenet;
+mod engines;
 mod epic;
+mod flashpoint;
 mod folders;
 mod gog;
 pub mod installed;
@@ -45,6 +47,10 @@ pub struct Found {
     pub base: Option<PathBuf>,
     /// Where its Windows saves are when it runs under Proton or Wine here.
     pub prefix: Option<Prefix>,
+    /// The engines-database id of the engine a folder game was made with
+    /// (`renpy`, `unity`...), when the folder says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
 }
 
 /// A program whose state the agent can read or sync with: launchers,
@@ -165,6 +171,7 @@ pub fn pc_game(key: String, title: String, base: Option<PathBuf>, launcher: &str
         },
         base,
         prefix: None,
+        engine: None,
     }
 }
 

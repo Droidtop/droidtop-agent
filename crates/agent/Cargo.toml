@@ -29,6 +29,8 @@ serde_yaml = "0.9"
 ureq = "2"
 # Launcher databases (itch, Amazon, Lutris).
 rusqlite = { version = "0.32", features = ["bundled"] }
+# The file-head rules of droidtop's engines database are regular expressions.
+regex = "1"
 dirs = "5"
 gethostname = "0.5"
 # Installed applications: Store package manifests (Windows) and bundles'
@@ -40,3 +42,5 @@ if-addrs = "0.13"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+# Which drives are fixed disks, for the `Games` folders the scan walks unasked.
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }

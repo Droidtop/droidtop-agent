@@ -222,6 +222,7 @@ mod tests {
             },
             base: Some(PathBuf::from("/games/G")),
             prefix: Some(crate::scan::Prefix { drive_c: PathBuf::from("/pfx/drive_c"), user: "steamuser".into() }),
+            engine: None,
         };
         let roots = roots_for(Some(&found), None);
         assert_eq!(roots["<winAppData>"], PathBuf::from("/pfx/drive_c/users/steamuser/AppData/Roaming"));

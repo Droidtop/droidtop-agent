@@ -1,0 +1,2060 @@
+{
+ "version": 5,
+ "comment": "The full engine REGISTRY, droidtop-authored (no upstream frontend maintains these). v4 (direction 2026-08-31): detection, launch routing, and enginehost vocabulary all live HERE so new engines/contexts ship as a database update, not an app rebuild. v5 (unified detection, 2026-09-02): this file is the ONE classification authority for BOTH droidtop (scan time) and enginehost (launch/config time) - enginehost bundles this same file and refreshes it from the same droidtop-platforms URL, so the two apps can never classify one folder differently. Per engine: 'detect' is an ordered list of rules (rules OR, conditions within a rule AND; first matching engine in file order wins; condition types: dirExists, fileExists, anyFileNameContains, anyFileExtension, anyFileNameIn, dirNamePrefixCount, fileHeadRegex (case-insensitive, first 4KB), anyFileExtensionDeep (anyFileExtension searching subdirectories to maxDepth), builtin (named code probe for byte-magic checks JSON cannot express)); 'strategies' is launch priority (names match droidtop's GameLaunchStrategy enum; availability stays code - the database only decides which available strategy WINS); 'enginehost' is the family/context vocabulary from enginehost-contract.md's own table (context null = the rules cannot determine it, launch opens enginehost's CONFIGURE screen prefilled). A row whose id an app does not map is skipped by that app: rpgmaker-mvmz and flash-swf are enginehost-only by design (droidtop has no MV-or-MZ engine, and plain .swf is deliberately droidtop's players-database path - Ruffle etc., systemId flash - so flash-air's droidtop detection stays the AIR package shape). Version/execFile extraction for enginehost's config prefill is ENRICHMENT code keyed on the family this file classified; it can never change the classification. Engine EMULATORS (EasyRPG, Kirikiroid2, Ruffle, ...) are NOT declared here: engines are systems, and apps that emulate engines live in players-database.json exactly like apps that emulate consoles. JoiPlay is deliberately absent everywhere: it exposes no consumable launch surface. Data expansion 2026-09-10: 41 detection-only rows added for the engine families the engine-expansion brief names that had no row (NScripter/ONScripter, AGS, AliceSoft System 3.x and 4.x, RealLive, QSP, Suika2, Majiro, YU-RIS, LiveMaker, Yuka, SiglusEngine, WillPlus/AdvHD, ShiinaRio, QLIE, Malie, AI5WIN/AI6WIN, SystemNNN, Propeller, Artemis, rUGP, WOLF RPG Editor, Light.vn, KaGuYa, SHSystem, Eushully, F&C, EntisGLS, ExHIBIT, FAVORITE, Musica, NEXTON, Nitroplus, RAGS, GameMaker, TyranoScript, Construct 2/3, Visual Novel Maker, generic NW.js/Electron). No schema change and no new condition types, so the file stays version 5 and every existing droidtop/enginehost parser keeps loading it. Each new row's signatures come from cited public format documentation (GARbro's supported-formats table, VNTranslationTools, the engines' own tooling repos and manuals) recorded in its notes; all of them carry strategies [\"WINE_PREFIX\"] and enginehost null because no plugin exists for these families yet, and droidtop skips a row whose id it does not map, so they classify nothing until an engine id is added on the app side. Families whose signatures no citable source pins down (NeXAS, SoftPal, ArcGameEngine, Mware, Cyberworks C/System, and AVG32 as distinct from RealLive) got NO row on purpose; they are listed in /root/coordination/research/engine-signatures/README.md. Census additions 2026-09-25 (the engine census of the owner's library): detection-only rows for LOVE (love2d), XNA/FNA/MonoGame, HashLink, Torque, GoldSrc, Source/Source 2, the Tomb Raider I-III engine and X-COM's original data. ScummVM gets no row: its engines are identified per game by its own detector tables, which conditions here cannot express.",
+ "engines": [
+  {
+   "id": "renpy",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "dirExists",
+       "path": "renpy"
+      },
+      {
+       "type": "dirExists",
+       "path": "game"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "LINUX_CONTAINER",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "renpy",
+    "context": "standard"
+   },
+   "notes": "Ren'Py ships py/sh/exe launchers together; Linux path preferred over Wine when both exist. Compiled-only distributions without the renpy/ runtime dir are caught by the renpy-fallback row further down."
+  },
+  {
+   "id": "rpgmaker-mv",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "js/rpg_core.js"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "www/js/rpg_core.js"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX",
+    "LINUX_CONTAINER"
+   ],
+   "enginehost": {
+    "family": "rpgmaker",
+    "context": "mv"
+   },
+   "notes": "MV/MZ are nw.js exports; Linux only when the export includes it."
+  },
+  {
+   "id": "rpgmaker-mz",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "js/rmmz_core.js"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "www/js/rmmz_core.js"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX",
+    "LINUX_CONTAINER"
+   ],
+   "enginehost": {
+    "family": "rpgmaker",
+    "context": "mz"
+   }
+  },
+  {
+   "id": "rpgmaker-mvmz",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "js/main.js"
+      },
+      {
+       "type": "fileExists",
+       "path": "index.html"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "www/js/main.js"
+      },
+      {
+       "type": "fileExists",
+       "path": "www/index.html"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX",
+    "LINUX_CONTAINER"
+   ],
+   "enginehost": {
+    "family": "rpgmaker",
+    "context": null
+   },
+   "notes": "ENGINEHOST-ONLY row (droidtop maps no engine id to it, so droidtop skips it). An MV/MZ web runtime whose core script is missing or renamed: the family is proven, the generation is not - context null routes to enginehost's CONFIGURE screen where the user picks mv or mz."
+  },
+  {
+   "id": "rpgmaker-vxace",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameContains",
+       "value": ".rgss3a"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileHeadRegex",
+       "path": "Game.ini",
+       "regex": "Library\\s*=\\s*.*RGSS3\\d\\d"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "rpgmaker",
+    "context": "vxace",
+    "extras": {
+     "ruby": "1.9.2"
+    }
+   },
+   "notes": "RGSS runtimes are Windows-only. Ruby 1.9.2 is a PREFILL, not a pin: mkxp-z deliberately declares vxace against both 1.9.2 and 3.1.3, and the config editor keeps runtimeRequirements user-editable so either branch stays selectable. The Game.ini Library line is the engine declaring its own RGSS build; the .rgss3a check tolerates renamed archives (real install: Game.rgss3a.old)."
+  },
+  {
+   "id": "rpgmaker-vx",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameContains",
+       "value": ".rgss2a"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "Game.rvproj"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileHeadRegex",
+       "path": "Game.ini",
+       "regex": "Library\\s*=\\s*.*RGSS2\\d\\d"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "rpgmaker",
+    "context": "vx"
+   },
+   "notes": "RGSS2 line: .rgss2a archive, Game.rvproj project marker, or the Game.ini Library=RGSS2xx declaration. Listed after vxace so the more specific RGSS3 evidence wins first."
+  },
+  {
+   "id": "rpgmaker-xp",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameContains",
+       "value": ".rgssad"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "Game.rxproj"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileHeadRegex",
+       "path": "Game.ini",
+       "regex": "Library\\s*=\\s*.*RGSS1\\d\\d"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "rpgmaker",
+    "context": "xp"
+   },
+   "notes": "RGSS1 line: .rgssad archive, Game.rxproj project marker, or Game.ini Library=RGSS1xx."
+  },
+  {
+   "id": "rpgmaker-2000-2003",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "RPG_RT.ldb"
+      },
+      {
+       "type": "fileExists",
+       "path": "RPG_RT.exe"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "RPG_RT.ldb"
+      },
+      {
+       "type": "fileExists",
+       "path": "RPG_RT.lmt"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "rpgmaker",
+    "context": null
+   },
+   "notes": "The .ldb database plus either the runtime exe or the .lmt map tree - the corroborated pairing enginehost verified. A stray RPG_RT.exe without its database, or a lone .ldb with neither companion, is not a launchable game and no longer detects. Context null on purpose: this proves the 2000/2003 FAMILY but not which generation; launch opens enginehost's CONFIGURE screen prefilled. The easyrpg PLAYER entries in players-database.json remain the alternate path (engines are systems)."
+  },
+  {
+   "id": "kirikiri",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "xp3"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "startup.tjs"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "KIRIKIROID2",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "kirikiri2",
+    "context": "default",
+    "versionSelectorFallback": "0"
+   },
+   "notes": "Any .xp3 archive, or startup.tjs (the engine's own boot script) for unpacked games with no archive - the marker enginehost already used. versionSelectorFallback 0 is a selector fall-through, not a version claim: by the engine's own semantics anything that maps to no implementation string selects the sole default. Device-confirmed 2026-08-31. KIRIKIROID2 strategy predates the unified player entry; both point at the same app."
+  },
+  {
+   "id": "august",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "dirNamePrefixCount",
+       "prefix": "aug",
+       "min": 2
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "buriko",
+    "context": "august-compiled-script-v1"
+   },
+   "notes": "August is not a separate enginehost family: buriko with the August context, per the contract."
+  },
+  {
+   "id": "buriko",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "BGI.gdb"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "BGI.hvl"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "data01000.arc"
+       ]
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "buriko",
+    "context": "compiled-script-v1"
+   },
+   "notes": "BGI.gdb/BGI.hvl, or the data01000.arc archive-set head enginehost already keyed on."
+  },
+  {
+   "id": "catsystem2",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "cs2conf.dll"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "cst"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "catsystem2",
+    "context": "cst"
+   },
+   "notes": "cs2conf.dll, or a loose .cst scene script (enginehost's marker)."
+  },
+  {
+   "id": "cmvs",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "cmvs32.exe",
+        "cmvs64.exe",
+        "cmvs.cfg"
+       ]
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "cmvs",
+    "context": null
+   },
+   "notes": "ps2 vs ps3 generation undetermined by the cmvs32/cmvs64/cmvs.cfg signature; CONFIGURE flow. Listed BEFORE the script-extension rows on purpose: droidtop resolves an engine's launch row as the FIRST row carrying that engine id, so the generic context-null row must be the canonical one - the script rows below only refine the context for folders where a script is visible and no cmvs runtime marker is."
+  },
+  {
+   "id": "cmvs-ps3",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ps3"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "cmvs",
+    "context": "ps3"
+   },
+   "notes": "A .ps3 script names the CMVS generation exactly, so this row carries the context the generic cmvs row above cannot."
+  },
+  {
+   "id": "cmvs-ps2",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ps2"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "cmvs",
+    "context": "ps2"
+   }
+  },
+  {
+   "id": "flash-air",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "dirExists",
+       "path": "META-INF"
+      },
+      {
+       "type": "fileExists",
+       "path": "mimetype"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "flash_air",
+    "context": "air"
+   },
+   "notes": "Detection is specifically the AIR package shape, so the air context is the real answer, not a coin flip. Plain .swf: droidtop routes it through the flash player entries in players-database.json (Ruffle etc.), enginehost detects it via the flash-swf row at the end of this file."
+  },
+  {
+   "id": "godot",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "project.godot"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "builtin",
+       "name": "godot"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "LINUX_CONTAINER",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "godot",
+    "context": "standard"
+   },
+   "notes": "project.godot (an unexported project tree - enginehost's marker), or the builtin probe covering both the loose .pck shape and the embedded-pack GDPC trailer that JSON conditions cannot express."
+  },
+  {
+   "id": "nscripter",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "nscript.dat"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "0.txt"
+       ]
+      },
+      {
+       "type": "anyFileExtension",
+       "value": "nsa"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "nsa"
+      },
+      {
+       "type": "anyFileExtension",
+       "value": "sar"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "nscripter",
+    "context": "nscripter"
+   },
+   "notes": "NScripter/ONScripter: nscript.dat is the engine's own (obfuscated) script file and 0.txt its plain-text form -- ONScripter's script loader looks for exactly those names (https://github.com/Galladite27/ONScripter-EN/blob/master/ScriptHandler.cpp); .nsa/.sar are its resource archives (https://github.com/YuriSizuku/OnscripterYuri, https://morkt.github.io/GARbro/supported.html). Context nscripter, not onscripter: what these markers prove is that the game was authored for NScripter, and ONScripter is the engine that reads it. The plugin serves both contexts from one runtime because the script, the archives and the save format are identical either way; nothing a folder contains distinguishes them, so nothing here claims to."
+  },
+  {
+   "id": "ags",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "acsetup.cfg"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ags"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Adventure Game Studio: \"For historical reasons configuration file should be called 'acsetup.cfg'\", and the game data file is <name>.ags (https://github.com/adventuregamestudio/ags/blob/master/OPTIONS.md). No enginehost plugin yet."
+  },
+  {
+   "id": "love2d",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "love"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "love.dll"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "main.lua"
+      },
+      {
+       "type": "fileHeadRegex",
+       "path": "conf.lua",
+       "regex": "function\\s+love\\.conf\\s*\\("
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "LINUX_CONTAINER",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "love2d",
+    "context": "standard"
+   },
+   "notes": "LOVE (love2d): a game is a .love zip, or on Windows a fused game.exe (love.exe with the .love appended) shipped beside love.dll, lua51.dll and SDL2.dll (https://love2d.org/wiki/Game_Distribution); an unpacked game is a folder whose main.lua runs and whose conf.lua defines love.conf (https://love2d.org/wiki/Config_Files). main.lua alone is not enough: other Lua runtimes use the same name, so the loose shape also needs love.conf. The LOVE version the game was written for is enrichment: love.dll's own version resource when the game ships the Windows runtime, else conf.lua's t.version. Enginehost plugin: dev.enginehost.love2d.11.v1 (LOVE 11.5)."
+  },
+  {
+   "id": "alicesoft-system4",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "system40.ini"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ain"
+      },
+      {
+       "type": "anyFileExtension",
+       "value": "afa"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "AliceSoft System 4.x: System40.ini is the runtime's ini, next to the <game>.ain bytecode (https://github.com/nunuhara/xsystem4); .afa (AFAH) is the System4-era AliceSoft archive (https://morkt.github.io/GARbro/supported.html). Ordered before the System 3.x row: System 3.9's .ain is the fixed name System39.ain and ships with .ald, never .afa."
+  },
+  {
+   "id": "alicesoft-system3",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "system39.ain"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "xsystem35.gr"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ald"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "AliceSoft System 3.x-3.9: the runtime reads the game's *.ALD files from the game directory, or a game-resource file xsystem35.gr (https://github.com/kichikuou/xsystem35-sdl2/blob/master/doc/xsystem35.6.adoc); System39.ain is System 3.9's bytecode file (https://github.com/kichikuou/xsys35c). .ald is AliceSoft-only in GARbro's table (https://morkt.github.io/GARbro/supported.html)."
+  },
+  {
+   "id": "reallive",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "gameexe.ini"
+       ]
+      },
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "seen.txt"
+       ]
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "VisualArt's RealLive/AVG32 lineage: Gameexe.ini is the data-driven config every VA interpreter reads and SEEN.TXT the compiled scenario container (https://github.com/eglaysher/rlvm, https://github.com/Ruin0x11/adieu). AVG32 uses the SAME two files, so this row is the lineage, not the exact VM -- see the not-yet-detectable list in /root/coordination/research/engine-signatures/README.md."
+  },
+  {
+   "id": "qsp",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "qsp"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "aqsp"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "QSP / Quest Soft Player: .qsp (compiled) and .aqsp are the player's own game-file extensions (https://github.com/QSPFoundation/qspider/blob/main/apps/player-desktop/src/app/utils.ts). .qsps (plain source) and .gam are deliberately left out: too generic for a folder-level rule."
+  },
+  {
+   "id": "suika2",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "conf/config.txt"
+      },
+      {
+       "type": "dirExists",
+       "path": "txt"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Suika2: a game folder is conf/config.txt plus the fixed asset dirs (txt/, cg/, bg/, bgm/, cv/, se/, ch/) -- see the engine's own shipped game tree, https://github.com/denisoa/suika2/tree/master/suika2 . Two conditions so a stray conf/config.txt cannot match."
+  },
+  {
+   "id": "majiro",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "majiro.env"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "update.arc",
+        "fastdata.arc",
+        "scenario.arc"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "mjo"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Majiro: the engine boots by searching update*.arc/fastdata*.arc for majiro.env, and its archives use the fixed names update/fastdata/scenario/data/slowdata/stream/voice.arc; .mjo are the compiled scripts (https://github.com/AtomCrafty/MajiroTools). Archive magic is MajiroArcV1.000-V3.000 (https://morkt.github.io/GARbro/supported.html) but the archive file name is not fixed enough for a head-regex path, so name/extension evidence is used."
+  },
+  {
+   "id": "yuris",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ypf"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ybn"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "YU-RIS: .ypf archives (magic YPF) and .ycg images are YU-RIS-only in GARbro's table (https://morkt.github.io/GARbro/supported.html); .ybn is its script container (https://github.com/arcusmaximus/VNTranslationTools, https://github.com/fengberd/YuRISTools)."
+  },
+  {
+   "id": "livemaker",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "game.dat"
+       ]
+      },
+      {
+       "type": "fileHeadRegex",
+       "path": "game.dat",
+       "regex": "\\Avff"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "lsb"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "LiveMaker: game.dat carries the 'vff' archive magic at offset 0 (https://morkt.github.io/GARbro/supported.html), and .lsb are the engine's script binaries (https://github.com/pmrowla/pylivemaker). The head-regex is paired with the file-name condition so a differently-cased game.dat simply fails the rule instead of matching on the name alone."
+  },
+  {
+   "id": "yuka",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ykc"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ykg"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Yuka System: .ykc archives (YKC001/YKC002) and .ykg images (YKG000) are Yuka-only in GARbro's table (https://morkt.github.io/GARbro/supported.html, https://github.com/AtomCrafty/yukatool)."
+  },
+  {
+   "id": "siglus",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "scene.pck"
+       ]
+      },
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "gameexe.dat"
+       ]
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "SiglusEngine: Scene.pck (the scenario pack, which must carry exactly that name) beside Gameexe.dat (https://github.com/xmoezzz/SiglusExtract). Both required, so this cannot collide with the RealLive row's Gameexe.ini/SEEN.TXT."
+  },
+  {
+   "id": "willplus-advhd",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "rio.arc"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ws2"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "WillPlus/AdvHD: Rio.arc is the engine's game archive and .ws2 its compiled scripts (https://github.com/DarthFly/advhd_ws2_tools, https://github.com/arcusmaximus/VNTranslationTools). GARbro's 'Will' rows cover the same .arc/.wip/.pna family (https://morkt.github.io/GARbro/supported.html)."
+  },
+  {
+   "id": "shiinario",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "war"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "ShiinaRio: .war archives (WARC 1.1-1.7) with .s25 images (https://morkt.github.io/GARbro/supported.html). Note the one overlap in GARbro's own table: Studio Ryokucha also uses a .war extension with a different magic, which JSON conditions cannot check without a fixed file name -- both are Windows VNs and both land on Wine, so the launch outcome is the same either way."
+  },
+  {
+   "id": "qlie",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "pack"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "QLIE: .pack archives (FilePackVer1.0/2.0/3.0/3.1) are QLIE-only in GARbro's table (https://morkt.github.io/GARbro/supported.html). The FilePackVer signature sits in the archive FOOTER, not the head, so fileHeadRegex cannot be used here."
+  },
+  {
+   "id": "malie",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "mgf"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "dzi"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "data.lib"
+       ]
+      },
+      {
+       "type": "fileHeadRegex",
+       "path": "data.lib",
+       "regex": "\\ALIB"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Malie: .mgf (MalieGF) images, .dzi, and .lib archives whose head magic is LIB/LIBP/LIBU (https://morkt.github.io/GARbro/supported.html). The .lib rule pairs the conventional data.lib name with that head magic, because a bare .lib extension would collide with ordinary native libraries."
+  },
+  {
+   "id": "ai5win",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "ai5win.exe"
+       ]
+      },
+      {
+       "type": "anyFileExtension",
+       "value": "arc"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "gcc"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "AI5WIN (elf/Silky's lineage): AI5WIN.exe is the engine's FIXED runtime executable name -- hook tables key on exactly that process name (https://github.com/HIllya51/LunaTranslator/blob/main/src/NativeImpl/LunaHook/LunaHook/engine32/Elf.cpp) -- paired with the engine's .arc archives, per the brief's rule that an .exe name is never evidence on its own. .gcc images (G24n/G24m/R24n/R24m) are AI5WIN-only in GARbro (https://morkt.github.io/GARbro/supported.html)."
+  },
+  {
+   "id": "ai6win",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "ai6win.exe"
+       ]
+      },
+      {
+       "type": "anyFileExtension",
+       "value": "arc"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "akb"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "AI6WIN: AI6WIN.exe is the fixed runtime executable name (same LunaHook Elf table as AI5WIN), paired with the engine's .arc archives; .akb images (AKB/AKB+) are AI6WIN-only in GARbro (https://morkt.github.io/GARbro/supported.html). Scripts are .mes/.map (https://github.com/arcusmaximus/VNTranslationTools)."
+  },
+  {
+   "id": "systemnnn",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "gpk"
+      },
+      {
+       "type": "anyFileExtension",
+       "value": "gtb"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "nnn"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "System-NNN: the engine ships .gpk+.gtb and .vpk+.vtb archive/index PAIRS (https://morkt.github.io/GARbro/supported.html), and its scripts are .nnn/.spt (https://github.com/arcusmaximus/VNTranslationTools). The paired extensions are required together, which is what makes the rule specific."
+  },
+  {
+   "id": "propeller",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "mpk"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "mgr"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Propeller / Stuff Script Engine: .mpk archives and .mgr graphics are propeller-only in GARbro's table (https://morkt.github.io/GARbro/supported.html); scripts are .msc (https://github.com/arcusmaximus/VNTranslationTools)."
+  },
+  {
+   "id": "artemis",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "pfs"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "mja"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Artemis Engine: .pfs archives (magic pf2/pf6/pf8, normally root.pfs) and .mja audio (MJA0) (https://morkt.github.io/GARbro/supported.html); scripts are .asb/.ast (https://github.com/arcusmaximus/VNTranslationTools)."
+  },
+  {
+   "id": "rugp",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "rio"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "rha"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "rUGP (age): .rio objects, .rha archives and .rip/.s5i images are rUGP-only in GARbro's table (https://morkt.github.io/GARbro/supported.html)."
+  },
+  {
+   "id": "wolfrpg",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtensionDeep",
+       "value": "wolf",
+       "maxDepth": 1
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "dirExists",
+       "path": "Data/BasicData"
+      },
+      {
+       "type": "dirExists",
+       "path": "Data/MapData"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "WOLF RPG Editor: encrypted game archives are Data/*.wolf -- BasicData.wolf, MapData.wolf, Picture.wolf, System.wolf (https://github.com/Sinflower/WolfDec, https://github.com/Sinflower/UberWolf) -- hence the depth-1 search; unencrypted games keep the same layout as loose Data/BasicData + Data/MapData directories. Wine per the brief until a runtime exists."
+  },
+  {
+   "id": "lightvn",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "vndat"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "mcdat"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Light.vn: .vndat and .mcdat are the engine's packed/encrypted resource files (https://github.com/kiraio-moe/Light.vnTools). The brief asks for a format census before any runtime work; this row only classifies."
+  },
+  {
+   "id": "kaguya",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ari"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "message.dat"
+       ]
+      },
+      {
+       "type": "anyFileExtension",
+       "value": "arc"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "KaGuYa: .arc archives come PAIRED with .ari indexes (magic WFL1), and the family also uses LIN2/LINK3/LINK5/LINK6/UF01 .arc variants (https://morkt.github.io/GARbro/supported.html); message.dat is its script file (https://github.com/arcusmaximus/VNTranslationTools). .ari is KaGuYa-only in GARbro's table, .arc alone is not, hence the pairing."
+  },
+  {
+   "id": "shsystem",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "hxp"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "SHSystem/ShSystem: .hxp archives (magic Him4/Him5/SHS6/SHS7) are SH System-only in GARbro's table (https://morkt.github.io/GARbro/supported.html); scripts are .hst (https://github.com/arcusmaximus/VNTranslationTools)."
+  },
+  {
+   "id": "eushully",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "sys4ini.bin",
+        "sys3ini.bin"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "alf"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Eushully: sys4ini.bin / sys3ini.bin (magic S4IC/S3IC/S3IN) are the engine's fixed initialisation files, next to .alf archives and .agf images (https://morkt.github.io/GARbro/supported.html)."
+  },
+  {
+   "id": "fc-advwin32",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "mrg"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "F&C ADVWin32 lineage: .mrg archives (magic MRG), with .mcg images and .acd scripts, are F&C-only in GARbro's table (https://morkt.github.io/GARbro/supported.html)."
+  },
+  {
+   "id": "entisgls",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "noa"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "eri"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "EntisGLS / ERISA: .noa archives and .eri/.mio media all carry the 'Entis\\x1a' magic and are Entis-only in GARbro's table (https://morkt.github.io/GARbro/supported.html)."
+  },
+  {
+   "id": "exhibit",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "gyu"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "ExHIBIT: .gyu images (magic GYU\\x1a) are ExHIBIT-only in GARbro's table (https://morkt.github.io/GARbro/supported.html). Its .grp archives (AiFS) share the extension with NeXAS's .grp, so only .gyu is used here."
+  },
+  {
+   "id": "favorite",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "hzc"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "FAVORITE's proprietary engine: .hzc media (magic hzc1) are Favorite-only in GARbro's table (https://morkt.github.io/GARbro/supported.html). Its .bin archives have no magic and are far too generic to key on."
+  },
+  {
+   "id": "musica",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "paz"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Musica: .paz archives are Musica-only in GARbro's table (https://morkt.github.io/GARbro/supported.html); scripts are .sc (https://github.com/arcusmaximus/VNTranslationTools)."
+  },
+  {
+   "id": "nexton",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "tgf"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "NEXTON (LikeC lineage): .tgf is NEXTON-only in GARbro's table (https://morkt.github.io/GARbro/supported.html). The Nexton/Tactics .arc variant (magic TACTICS_ARC_FILE) is deliberately NOT used: .arc is shared by nineteen brands in that same table and the magic needs a fixed file name this row does not have."
+  },
+  {
+   "id": "nitroplus",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "npa"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "npk"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Nitroplus (N2System and the older Nitro+ runtimes): .npa (magic NPA) and .npk (NPK2) archives are Nitro+-only in GARbro's table (https://morkt.github.io/GARbro/supported.html); NitroSharp is the N2System reimplementation the brief points at (https://github.com/CommitteeOfZero/nitrosharp). One row for the brand: the archive alone does not say which of the two VMs a game uses."
+  },
+  {
+   "id": "rags",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "rag"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtension",
+       "value": "ragx"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "RAGS (Rapid Adventure Game System): a game IS a single .rag file, in either of the two documented container formats -- NRBF for early versions, the SDF database format for later ones (https://github.com/Kassy2048/rags2html). The same extension covers 2.x and 3.x, so this row does not split them."
+  },
+  {
+   "id": "gamemaker",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "data.win"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "game.unx",
+        "game.ios"
+       ]
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "GameMaker / GameMaker Studio: the runner's data file is data.win on Windows, game.unx on Linux and game.ios on macOS (https://tcrf.net/Help:Contents/Finding_Content/Game_Engines/GameMaker:_Studio). Brief section 11 puts this family on Wine/native by default -- there is no portable drop-in runner to prefer."
+  },
+  {
+   "id": "tyranoscript",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "dirExists",
+       "path": "tyrano"
+      },
+      {
+       "type": "fileExists",
+       "path": "data/system/Config.tjs"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "dirExists",
+       "path": "tyrano"
+      },
+      {
+       "type": "dirExists",
+       "path": "data/scenario"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "TyranoScript/TyranoBuilder: a game is index.html + the tyrano/ engine folder + data/ holding system/Config.tjs and scenario/*.ks (https://tyranoscript.com/usage/tutorial/ready_v5, https://github.com/ShikemokuMK/tyranoscript). Both conditions required so a KiriKiri Config.tjs cannot match. Ordered before the generic NW.js/Electron and html rows."
+  },
+  {
+   "id": "construct2",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "c2runtime.js"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Construct 2: c2runtime.js is the fixed name of the exported HTML5 runtime that every C2 export ships beside index.html (https://www.construct.net/en/make-games/manuals/construct-3/overview/publishing-projects). Ordered before the generic web rows."
+  },
+  {
+   "id": "construct3",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "scripts/c3runtime.js"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "c3runtime.js"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Construct 3: c3runtime.js is the fixed exported-runtime file name, normally under scripts/ (https://www.construct.net/en/make-games/manuals/construct-3/overview/publishing-projects). Ordered before the generic web rows."
+  },
+  {
+   "id": "visualnovelmaker",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "index.html"
+      },
+      {
+       "type": "fileExists",
+       "path": "package.json"
+      },
+      {
+       "type": "fileExists",
+       "path": "signature"
+      },
+      {
+       "type": "dirExists",
+       "path": "resources"
+      },
+      {
+       "type": "dirExists",
+       "path": "data"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Visual Novel Maker: an exported package is Game.exe + index.html + package.json + icon.png + a 'signature' file + data/ and resources/ (http://asset.visualnovelmaker.com/help/Create_Game_Package.htm). All five markers are required together because the shell itself is plain NW.js/Electron; the payload is what identifies the engine, hence this row sits before the generic web-shell row."
+  },
+  {
+   "id": "xna-fna-monogame",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "fna.dll"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "monogame.framework.dll"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "microsoft.xna.framework.dll",
+        "microsoft.xna.framework.game.dll"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "dirExists",
+       "path": "Content"
+      },
+      {
+       "type": "anyFileExtensionDeep",
+       "value": "xnb",
+       "maxDepth": 2
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "XNA 4.0 games and their open reimplementations: FNA ships as FNA.dll beside the game (https://fna-xna.github.io/docs/1%3A-Setting-Up-FNA/), MonoGame as MonoGame.Framework.dll (https://docs.monogame.net/articles/getting_started/packaging_games.html), and an XNA build references Microsoft.Xna.Framework*.dll. A game built against XNA itself often ships no framework DLL (the redistributable installs it), so the compiled content tree is the fallback tell: .xnb is the XNA content pipeline's output format, loaded from Content/ (https://docs.monogame.net/articles/getting_to_know/whatis/content_pipeline/). No enginehost plugin yet."
+  },
+  {
+   "id": "hashlink",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "hlboot.dat"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "libhl.dll",
+        "libhl.so"
+       ]
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Heaps / HashLink: the HashLink VM boots the bytecode file hlboot.dat found beside its executable when it is given none (https://github.com/HaxeFoundation/hashlink/blob/master/src/main.c), and the runtime library is libhl.dll / libhl.so. No enginehost plugin yet."
+  },
+  {
+   "id": "torque",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "main.cs.dso"
+       ]
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileNameIn",
+       "values": [
+        "main.cs"
+       ]
+      },
+      {
+       "type": "anyFileExtensionDeep",
+       "value": "dso",
+       "maxDepth": 3
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Torque (TGE/TGEA/Torque3D): the engine starts by executing main.cs at the game root, and ships its TorqueScript compiled to .cs.dso files beside or instead of the sources (https://github.com/TorqueGameEngines/Torque3D/blob/development/Templates/BaseGame/game/main.cs.in, https://docs.torque3d.org/for-programmers/torquescript). main.cs alone is not enough (a C# source file can carry the name), so it needs compiled scripts beside it. No enginehost plugin yet."
+  },
+  {
+   "id": "goldsrc",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "valve/liblist.gam"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "GoldSrc (Half-Life 1 engine): the game directory valve/ holds liblist.gam, the mod description the engine reads (https://developer.valvesoftware.com/wiki/Liblist.gam); Xash3D FWGS runs the same tree (https://github.com/FWGS/xash3d-fwgs, 'copy valve folder'). A standalone mod folder without valve/ is not matched on purpose: liblist.gam alone names a mod, not an installed engine. No enginehost plugin yet."
+  },
+  {
+   "id": "source",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "bin/engine.dll"
+      },
+      {
+       "type": "dirExists",
+       "path": "platform"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "bin/engine.so"
+      },
+      {
+       "type": "dirExists",
+       "path": "platform"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "game/bin/win64/engine2.dll"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "LINUX_CONTAINER",
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Source and Source 2: a Source install keeps its engine in bin/engine.dll (bin/engine.so on Linux) beside the shared platform/ folder (https://developer.valvesoftware.com/wiki/Source_SDK_Base, https://developer.valvesoftware.com/wiki/Gameinfo.txt); Source 2 moved it to game/bin/win64/engine2.dll (https://developer.valvesoftware.com/wiki/Source_2). Both halves are required for Source 1 so a stray Engine.dll from an unrelated runtime is not read as Valve's. Native PC path only; not an enginehost family."
+  },
+  {
+   "id": "tomb-raider-classic",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtensionDeep",
+       "value": "phd",
+       "maxDepth": 1
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtensionDeep",
+       "value": "tr2",
+       "maxDepth": 1
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Tomb Raider I-III (Core Design's engine): level files are DATA/*.PHD for Tomb Raider I and data/*.TR2 for II and III, the formats TRX reads from the original data folder (https://github.com/LostArtefacts/TRX, https://opentomb.github.io/TRosettaStone3/trosettastone.html). One row: the three games share one engine lineage and TRX is one runtime for all of them. No enginehost plugin yet."
+  },
+  {
+   "id": "xcom-ufo",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "dirExists",
+       "path": "GEODATA"
+      },
+      {
+       "type": "dirExists",
+       "path": "UFOGRAPH"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "X-COM: UFO Defense / Terror from the Deep original data, which OpenXcom runs: it asks for the GEODATA, GEOGRAPH, MAPS, ROUTES, SOUND, TERRAIN, UFOGRAPH, UFOINTRO and UNITS folders copied from the original (https://www.ufopaedia.org/index.php/Installing_(OpenXcom)). The original ships them upper-case and the exact-path conditions are case-sensitive, so a re-cased copy is not matched. No enginehost plugin yet."
+  },
+  {
+   "id": "renpy-fallback",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "anyFileExtensionDeep",
+       "value": "rpa",
+       "maxDepth": 2
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "anyFileExtensionDeep",
+       "value": "rpyc",
+       "maxDepth": 2
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "LINUX_CONTAINER",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "renpy",
+    "context": "standard"
+   },
+   "notes": "Compiled Ren'Py game files (.rpa archives / .rpyc scripts, normally under game/, hence the depth-2 search) for distributions shipping without the renpy/ runtime dir - enginehost's existing fallback. A separate LATE row rather than part of the renpy row so the cheap runtime-dir check stays first and every more specific engine above outranks this looser evidence."
+  },
+  {
+   "id": "unreal",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "dirExists",
+       "path": "Engine/Binaries"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "LINUX_CONTAINER",
+    "WINE_PREFIX"
+   ],
+   "notes": "Not an enginehost family; PC runtime strategies only."
+  },
+  {
+   "id": "unity",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "builtin",
+       "name": "unity"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "LINUX_CONTAINER",
+    "WINE_PREFIX"
+   ],
+   "notes": "Not an enginehost family: no open Unity player exists to run either scripting backend on Android. The builtin probe searches UnityPlayer.dll/.so/.dylib up to 3 folders deep (real Linux-export fix). Enginehost's enrichment then says why it cannot run the game rather than failing generically: IL2CPP (GameAssembly.dll, <name>_Data/il2cpp_data) or Mono (<name>_Data/Managed), the player's machine architecture from its PE/ELF header, and the Unity version from the head of globalgamemanagers / data.unity3d / mainData."
+  },
+  {
+   "id": "nwjs-electron",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "resources/app.asar"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "resources/app/package.json"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "dirExists",
+       "path": "package.nw"
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "type": "fileExists",
+       "path": "package.nw"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "WINE_PREFIX"
+   ],
+   "enginehost": null,
+   "notes": "Generic NW.js / Electron-packaged HTML payload, the brief's section 7 FALLBACK: Electron ships the app as resources/app.asar (or an unpacked resources/app/) (https://www.electronjs.org/docs/latest/tutorial/asar-archives), NW.js as a package.nw folder or zip beside nw.exe (https://nwjs.readthedocs.io/en/latest/For%20Users/Package%20and%20Distribute/). Deliberately LAST of the web rows: every known child engine above -- RPG Maker MV/MZ, Tyrano, Visual Novel Maker, Construct -- must be classified by its own payload first, and nw.exe/electron.exe is never treated as the engine."
+  },
+  {
+   "id": "flash-swf",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "builtin",
+       "name": "swf"
+      }
+     ]
+    }
+   ],
+   "strategies": [],
+   "enginehost": {
+    "family": "flash_air",
+    "context": "swf"
+   },
+   "notes": "ENGINEHOST-ONLY row (droidtop maps no engine id to it, so droidtop skips it - plain .swf is deliberately droidtop's players-database path). The builtin probe checks root .swf files for a real FWS/CWS/ZWS header. Last on purpose: a stray .swf asset inside any richer game tree must never outrank the real engine."
+  },
+  {
+   "id": "html",
+   "detect": [
+    {
+     "all": [
+      {
+       "type": "builtin",
+       "name": "html"
+      }
+     ]
+    }
+   ],
+   "strategies": [
+    "ENGINEHOST",
+    "WINE_PREFIX"
+   ],
+   "enginehost": {
+    "family": "html",
+    "context": "compiled-html"
+   },
+   "notes": "An HTML game: a page at the folder's root, Twine stories included. Last in the file on purpose: Godot and Unity web exports also ship an index.html and must be classified first. The builtin probe accepts any root .html file."
+  }
+ ]
+}

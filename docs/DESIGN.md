@@ -583,8 +583,27 @@ no store APIs and no network.
 | Heroic prefixes | none | `GamesConfig/<app>.json` `winePrefix`, for its GOG, Epic and Amazon games | same |
 | Bottles | none | `library.yml`: each program the person put in the library, with its bottle as the prefix (native and Flatpak) | none |
 | Minigalaxy | none | `config.json` `install_dir`; each game's `gameinfo` (title, version) or `goggame-<id>.info` | none |
-| Folders | user-chosen roots; a folder with a program in it is a game | same | `.app` bundles too |
-| ROMs | user-chosen roots laid out by ES-DE system name; ES-DE's own `es_settings.xml` ROM folder and `gamelists/` | same | same |
+| Folders | user-chosen roots plus a `Games` folder at the top of each fixed drive, walked with droidtop's rules (below) | user-chosen roots plus `~/Games` | same, `.app` bundles too |
+| ROMs | user-chosen roots laid out by ES-DE system name; ES-DE's own `es_settings.xml` ROM folder and `gamelists/`; system folders met in a game folder | same | same |
+
+**Game folders are walked the way droidtop walks them** (droidtop SPEC 7g,
+7i, 7m: `GameEngineDetector.scan` and `PcFolderScan`), so the computer and
+the handheld find the same games in the same tree. Engines are decided by
+droidtop-platforms' `engines-database.json`, which the agent embeds
+(`crates/agent/data/`, refreshed by copying the file in) and evaluates row by
+row, every row, with droidtop's three byte probes (Godot's pack, a Twine page,
+Unity's player). A folder with an engine's layout or a program is a game and
+ends the walk; a folder holding two engine games is a collection; a lone game
+below a version or payload folder takes that folder's name; a folder with its
+own files and PC games below is their game; part and version folders cost no
+depth, anything else stops four folders down. A Steam library met on the way
+is read from its appmanifests (a folder with no manifest is a leftover), a
+folder named for a ROM system (`platforms-database.json`, droidtop's aliases)
+is read by the ROM rules when it holds that system's files, and a Flashpoint
+install is its launcher plus the games it downloaded. Titles drop the version
+and platform a download adds (`Eternum-0.9.5-pc` is Eternum 0.9.5). The
+`Games` folders are walked unasked because a library kept outside the stores
+is otherwise invisible: G:\games held 189 games, the stores' records 76.
 | Emulators | RetroArch, Dolphin, PCSX2, DuckStation, PPSSPP, RPCS3, Cemu, Ryujinx and others, detected for their save folders | same | same |
 
 **Installed applications** (owner, 2026-10-08: "we need to track third party

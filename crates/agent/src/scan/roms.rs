@@ -5,8 +5,10 @@
 //! system and its file name without the extension, so the same game meets
 //! across devices whatever its format.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use droidtop_agent_core::library::{title_key, Install, ScannedGame};
 
@@ -36,7 +38,62 @@ fn esde_rom_folder() -> Option<PathBuf> {
     (!value.is_empty()).then(|| PathBuf::from(value)).filter(|p| p.is_dir())
 }
 
-fn system_roms(system: &str, dir: &Path, depth: usize, out: &mut Vec<Found>) {
+/// droidtop's platforms database (`data/platforms-database.json`, a copy of
+/// droidtop-platforms' file): each system's id and the file types it runs.
+const PLATFORMS: &str = include_str!("../../data/platforms-database.json");
+
+/// Folder names droidtop reads as another system's id
+/// (`ConsoleRomProvider.SYSTEM_ID_ALIASES`).
+const ALIASES: &[(&str, &str)] = &[
+    ("ps1", "psx"),
+    ("nsw", "switch"),
+    ("3ds", "n3ds"),
+    ("appleii", "apple2"),
+    ("cdi", "cdimono1"),
+    ("coleco", "colecovision"),
+    ("cpc", "amstradcpc"),
+    ("gw", "gameandwatch"),
+    ("jaguar", "atarijaguar"),
+    ("jaguarcd", "atarijaguarcd"),
+    ("lynx", "atarilynx"),
+    ("master", "mastersystem"),
+    ("palmos", "palm"),
+    ("psv", "psvita"),
+    ("sg1000", "sg-1000"),
+    ("supercassette", "scv"),
+    ("tgcd", "tg-cd"),
+    ("vita", "psvita"),
+    ("ws", "wonderswan"),
+    ("wsc", "wonderswancolor"),
+];
+
+fn platforms() -> &'static BTreeMap<String, Vec<String>> {
+    static SYSTEMS: OnceLock<BTreeMap<String, Vec<String>>> = OnceLock::new();
+    SYSTEMS.get_or_init(|| {
+        let value: serde_json::Value = serde_json::from_str(PLATFORMS).unwrap_or_default();
+        value["platforms"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            // A store's own platform and the PC are not ROM systems.
+            .filter(|p| !p["ownedBy"].as_str().is_some_and(|o| o.eq_ignore_ascii_case("store")))
+            .filter_map(|p| {
+                let id = p["id"].as_str()?;
+                let extensions = p["extensions"].as_array()?.iter().filter_map(|e| e.as_str().map(str::to_lowercase)).collect();
+                (!matches!(id, "pc" | "windows")).then(|| (id.to_string(), extensions))
+            })
+            .collect()
+    })
+}
+
+/// The ROM system a folder's name means, with the file types it runs.
+pub(super) fn system_named(name: &str) -> Option<(&'static str, &'static [String])> {
+    let lower = name.to_lowercase();
+    let id = ALIASES.iter().find(|(alias, _)| *alias == lower).map_or(lower.as_str(), |(_, id)| *id);
+    platforms().get_key_value(id).map(|(id, extensions)| (id.as_str(), extensions.as_slice()))
+}
+
+pub(super) fn system_roms(system: &str, dir: &Path, depth: usize, out: &mut Vec<Found>) {
     let Ok(read) = fs::read_dir(dir) else { return };
     for entry in read.flatten() {
         let path = entry.path();
@@ -69,6 +126,7 @@ fn system_roms(system: &str, dir: &Path, depth: usize, out: &mut Vec<Found>) {
             },
             base: path.parent().map(Path::to_path_buf),
             prefix: None,
+            engine: None,
         });
     }
 }

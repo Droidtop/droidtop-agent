@@ -21,6 +21,10 @@ fn registry() -> Vec<Found> {
         let Ok(games) = winreg::RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(path) else { continue };
         for id in games.enum_keys().flatten() {
             let Ok(g) = games.open_subkey(&id) else { continue };
+            // A DLC names the game it belongs to; it shares that game's folder.
+            if g.get_value::<String, _>("dependsOn").is_ok_and(|d| !d.trim().is_empty()) {
+                continue;
+            }
             let title: String = g.get_value("gameName").or_else(|_| g.get_value("GAMENAME")).unwrap_or_else(|_| id.clone());
             let base = g.get_value::<String, _>("path").ok().map(PathBuf::from).filter(|p| p.is_dir());
             let version = g.get_value::<String, _>("ver").ok().filter(|v| !v.is_empty());

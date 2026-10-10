@@ -6,6 +6,18 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- The scanner walks game folders with droidtop's rules and its engines
+  database (`crates/agent/data/engines-database.json`): engine games of every
+  engine the database knows, PC games whose programs sit in sub-folders,
+  collections, version and payload folders, part folders. Steam libraries
+  and ROM system folders inside a game folder are read too, and a Flashpoint
+  install is its launcher and its downloaded games. A `Games` folder at the
+  top of each fixed drive (`~/Games` elsewhere) is walked without being
+  added. Titles drop the version a download adds. GOG DLC no longer appear as
+  games of their own.
+
+## build-21
+
 - One identity and one pairing with windowcast: the agent keeps its identity
   and trusted handhelds in windowcast's host folder, and pairs through
   windowcast's exchange (`windowcast_pairing::exchange`, label

@@ -85,34 +85,69 @@ pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
     let mut out = Vec::new();
     for root in roots() {
         for lib in libraries(&root) {
-            let apps = lib.join("steamapps");
-            let Ok(read) = fs::read_dir(&apps) else { continue };
-            for entry in read.flatten() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if !(name.starts_with("appmanifest_") && name.ends_with(".acf")) {
-                    continue;
-                }
-                let Ok(text) = fs::read_to_string(entry.path()) else { continue };
-                let parsed = vdf::parse(&text);
-                let Some(app) = parsed.get("AppState") else { continue };
-                let (Some(id), Some(title)) = (app.text("appid"), app.text("name")) else { continue };
-                if is_tool(id, title) {
-                    continue;
-                }
-                let flags: u32 = app.text("StateFlags").and_then(|f| f.parse().ok()).unwrap_or(0);
-                if flags & 4 == 0 {
-                    continue;
-                }
-                let base = app.text("installdir").map(|d| apps.join("common").join(d)).filter(|p| p.is_dir());
-                let size = app.text("SizeOnDisk").and_then(|s| s.parse().ok()).unwrap_or(0);
-                let version = app.text("buildid").map(|b| format!("build {b}"));
-                let mut found = pc_game(format!("steam:{id}"), title.to_string(), base, "steam", size, version);
-                found.prefix = proton_prefix(&apps, id);
-                out.push(found);
-            }
+            out.extend(library_games(&lib));
         }
     }
     Ok(out)
+}
+
+/// The installed games one library folder records in its `appmanifest`
+/// files. The client's own list of libraries leads here, and so does a
+/// library met in a game folder (a Steam folder copied to another drive,
+/// or one the client on this computer does not know).
+pub fn library_games(lib: &Path) -> Vec<Found> {
+    let mut out = Vec::new();
+    let apps = lib.join("steamapps");
+    for (id, app) in manifests(&apps) {
+        let Some(title) = app.text("name") else { continue };
+        if is_tool(&id, title) {
+            continue;
+        }
+        let flags: u32 = app.text("StateFlags").and_then(|f| f.parse().ok()).unwrap_or(0);
+        if flags & 4 == 0 {
+            continue;
+        }
+        let base = app.text("installdir").map(|d| apps.join("common").join(d)).filter(|p| p.is_dir());
+        let size = app.text("SizeOnDisk").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let version = app.text("buildid").map(|b| format!("build {b}"));
+        let mut found = pc_game(format!("steam:{id}"), title.to_string(), base, "steam", size, version);
+        found.prefix = proton_prefix(&apps, &id);
+        out.push(found);
+    }
+    out
+}
+
+/// Each `appmanifest_<id>.acf` in a `steamapps` folder, parsed.
+fn manifests(apps: &Path) -> Vec<(String, vdf::Value)> {
+    let Ok(read) = fs::read_dir(apps) else { return Vec::new() };
+    let mut out = Vec::new();
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with("appmanifest_") && name.ends_with(".acf")) {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(entry.path()) else { continue };
+        let Some(app) = vdf::parse(&text).get("AppState").cloned() else { continue };
+        let Some(id) = app.text("appid").map(str::to_string) else { continue };
+        out.push((id, app));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// The Steam key of a folder in a library's `steamapps/common`, from the
+/// manifest that installed it.
+pub fn installed_key(dir: &Path) -> Option<String> {
+    let common = dir.parent()?;
+    let apps = common.parent()?;
+    if !common.file_name()?.eq_ignore_ascii_case("common") || !apps.file_name()?.eq_ignore_ascii_case("steamapps") {
+        return None;
+    }
+    let name = dir.file_name()?.to_string_lossy().into_owned();
+    manifests(apps)
+        .into_iter()
+        .find(|(_, app)| app.text("installdir").is_some_and(|d| d.eq_ignore_ascii_case(&name)))
+        .map(|(id, _)| format!("steam:{id}"))
 }
 
 /// The Proton prefix Steam made for an app, when there is one.
