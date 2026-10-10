@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=droidtop-agent
+GenericName=Companion for droidtop
+Comment=Keeps this computer in step with droidtop on a handheld: saves, library, plugin data
+Exec=@BINDIR@/droidtop-agent-app
+Icon=dev.droidtop.agent
+Terminal=false
+Categories=Utility;Network;
+StartupWMClass=dev.droidtop.agent
+Keywords=droidtop;saves;sync;handheld;

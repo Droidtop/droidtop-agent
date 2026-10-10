@@ -1,0 +1,11 @@
+[Unit]
+Description=droidtop-agent: keeps this computer in step with droidtop
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/droidtop-agent run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

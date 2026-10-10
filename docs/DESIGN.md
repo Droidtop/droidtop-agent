@@ -705,6 +705,18 @@ and skips folders it cannot read.
   programs; macOS also gets `droidtop-agent.app` (`packaging/macos`). Each green build on `main`
   publishes a release (the computer binaries and the Android library) and adds
   a CHANGELOG entry. Releases are permanent history.
+  Linux is also packed four ways (`packaging/linux`, built by the
+  `linux-packages` job and attached to each release with `install.sh`,
+  `uninstall.sh` and `SHA256SUMS`; owner, 2026-10-10): a portable
+  `.tar.zst`, one runnable file (uruntime's RunImage squashfs runtime plus a
+  squashfs image; never AppImage or its tools), a `.deb` and an `.rpm` (nfpm).
+  No Flatpak: sandboxing a resident monitoring program would defeat its
+  purpose. `install.sh` installs per user without root, lists everything it
+  makes in `~/.local/share/droidtop-agent/install-manifest`, and
+  `uninstall.sh` removes exactly that, stops the agent and its autostart, and
+  keeps the person's data unless `--purge`. The packages ship the systemd
+  user unit disabled. The downloaded tools (nfpm, uruntime) are pinned by
+  version and SHA-256 in `packaging/linux/pins.env`.
 
 ## 14. Decisions for the owner
 

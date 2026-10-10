@@ -2,9 +2,12 @@ name: CI
 
 # Every push builds and tests the agent and its window-and-tray app on Windows,
 # Linux (x86_64 and aarch64) and macOS (arm64, and x86_64 built beside it), and builds
-# droidtop's library for both Android ABIs. A green push to main publishes a
-# release: the computer programs and the Android library droidtop fetches by
-# its pin (docs/DESIGN.md section 12). Releases are permanent history.
+# droidtop's library for both Android ABIs. On Linux the programs are also
+# packed four ways (packaging/linux): a tarball, one runnable file, a .deb and
+# an .rpm. A green push to main publishes a release: the computer programs,
+# the Linux packages with install.sh, uninstall.sh and SHA256SUMS, and the
+# Android library droidtop fetches by its pin (docs/DESIGN.md section 12).
+# Releases are permanent history.
 on:
   push:
   pull_request:
@@ -99,6 +102,105 @@ jobs:
           name: droidtop-agent-${{ matrix.system }}
           path: dist/
 
+  linux-packages:
+    # The Linux builds of the test job, packed four ways (packaging/linux):
+    # a portable tarball, one runnable file, a .deb and an .rpm. Each is
+    # installed and removed again here before it is offered.
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            system: linux-x86_64
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            system: linux-aarch64
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: droidtop-agent-${{ matrix.system }}
+          path: built
+
+      - name: Check the scripts
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools zstd shellcheck desktop-file-utils
+          shellcheck -s sh packaging/linux/*.sh
+          desktop-file-validate packaging/linux/dev.droidtop.agent.desktop
+
+      - name: Build the packages
+        env:
+          ARCH: ${{ matrix.arch }}
+          SYSTEM: ${{ matrix.system }}
+          RUN: ${{ github.run_number }}
+          TOOLS_DIR: ${{ runner.temp }}/linux-tools
+        run: |
+          set -eu
+          mkdir bins
+          cp "built/droidtop-agent-$SYSTEM" bins/droidtop-agent
+          cp "built/droidtop-agent-app-$SYSTEM" bins/droidtop-agent-app
+          chmod +x bins/*
+          sh packaging/linux/build.sh --arch "$ARCH" --bins bins --out linux --release "$RUN"
+
+      - name: Install and remove it again (tarball and single file)
+        run: sh packaging/linux/test.sh linux "${{ matrix.arch }}"
+
+      - name: The .deb installs on a clean Ubuntu, ships its unit disabled, and removes cleanly
+        run: |
+          set -eu
+          dpkg-deb -I linux/*.deb
+          dpkg-deb -c linux/*.deb
+          docker run --rm -v "$PWD/linux:/pkg:ro" ubuntu:24.04 sh -c '
+            set -eu
+            apt-get update -qq
+            apt-get install -y -qq /pkg/*.deb
+            for b in droidtop-agent droidtop-agent-app; do
+              missing=$(ldd /usr/bin/$b | grep "not found" || true)
+              if [ -n "$missing" ]; then echo "$b: $missing"; exit 1; fi
+            done
+            droidtop-agent --help | head -n 3
+            test -f /usr/lib/systemd/user/droidtop-agent.service
+            test -f /usr/share/applications/dev.droidtop.agent.desktop
+            if [ -e /etc/systemd/user/default.target.wants/droidtop-agent.service ]; then echo "the unit is enabled"; exit 1; fi
+            apt-get remove -y -qq droidtop-agent
+            for f in /usr/bin/droidtop-agent /usr/bin/droidtop-agent-app /usr/lib/systemd/user/droidtop-agent.service /usr/share/applications/dev.droidtop.agent.desktop; do
+              if [ -e "$f" ]; then echo "left behind: $f"; exit 1; fi
+            done'
+
+      - name: The .rpm installs on Fedora, and removes cleanly
+        run: |
+          set -eu
+          docker run --rm -v "$PWD/linux:/pkg:ro" fedora:42 sh -c '
+            set -eu
+            rpm -qpi /pkg/*.rpm
+            rpm -qpl /pkg/*.rpm
+            dnf install -y /pkg/*.rpm
+            for b in droidtop-agent droidtop-agent-app; do
+              missing=$(ldd /usr/bin/$b | grep "not found" || true)
+              if [ -n "$missing" ]; then echo "$b: $missing"; exit 1; fi
+            done
+            droidtop-agent --help | head -n 3
+            test -f /usr/lib/systemd/user/droidtop-agent.service
+            rpm -e droidtop-agent
+            if [ -e /usr/bin/droidtop-agent ]; then echo "left behind"; exit 1; fi'
+
+      - name: One copy of the install scripts in the release
+        if: matrix.arch != 'x86_64'
+        run: rm -f linux/install.sh linux/uninstall.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: droidtop-agent-linux-packages-${{ matrix.arch }}
+          path: linux/
+
   android:
     runs-on: ubuntu-24.04
     steps:
@@ -145,7 +247,7 @@ jobs:
 
   release:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test, android]
+    needs: [test, android, linux-packages]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -164,6 +266,8 @@ jobs:
         run: |
           set -eu
           tag="build-${RUN}"
+          # Sums of everything offered, so install.sh and anyone else can check a download.
+          (cd dist && sha256sum -- * > ../SHA256SUMS && mv ../SHA256SUMS .)
           ls -l dist
           gh release create "$tag" dist/* --repo "$REPO" --target "$SHA" \
             --title "Build ${RUN}" \

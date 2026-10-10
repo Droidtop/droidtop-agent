@@ -11,6 +11,12 @@ release carries until its number is written in.
   3). It arrives as a new folder beside the game's others, resumable and
   checked per file. On the computer it goes to the person's first game
   folder, never into a store's install folders.
+- Linux packages with each release: a portable `.tar.zst`, one runnable
+  `.run` file, a `.deb` and an `.rpm` for x86_64 and aarch64, plus
+  `install.sh` (per user, no root, `--autostart` optional) and `uninstall.sh`
+  (removes exactly what the install manifest lists; `--purge` also deletes
+  your data), and `SHA256SUMS` for everything in the release
+  (Droidtop/tracker#373).
 
 ## build-28
 

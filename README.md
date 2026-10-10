@@ -76,13 +76,50 @@ PCGamingWiki). The agent downloads it when it first needs it, or when you run
 `droidtop-agent manifest update`. Your own Ludusavi custom games are used too,
 and `droidtop-agent saves add` covers anything else.
 
+## Install on Linux
+
+Every release carries four ways to install it (x86_64 and aarch64, 64-bit
+Linux with glibc 2.39 or newer), each with its SHA-256 in `SHA256SUMS`:
+
+| File | What it is |
+|---|---|
+| `droidtop-agent-linux-<arch>.tar.zst` | Portable: the programs, a menu entry, the icon, `install.sh` and `uninstall.sh`. |
+| `droidtop-agent-linux-<arch>.run` | One file you can run (the window, or any `droidtop-agent` command) or install from. |
+| `droidtop-agent_<version>_<amd64\|arm64>.deb` | For Debian, Ubuntu and relatives. |
+| `droidtop-agent-<version>.<x86_64\|aarch64>.rpm` | For Fedora, openSUSE and relatives. |
+
+For you only, without root or a package manager:
+
+```
+curl -fsSL https://github.com/Droidtop/droidtop-agent/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/Droidtop/droidtop-agent/releases/latest/download/install.sh | sh -s -- --autostart
+```
+
+That downloads the tarball for this machine, checks it against `SHA256SUMS`,
+puts the programs in `~/.local/bin` and a menu entry and icon under
+`~/.local/share`, and, with `--autostart`, runs `droidtop-agent autostart on`.
+The same `install.sh` is in the tarball (`sh install.sh`) and inside the
+`.run` file (`./droidtop-agent-linux-x86_64.run install`). Everything it
+creates is listed in `~/.local/share/droidtop-agent/install-manifest`.
+
+To remove it, run `~/.local/share/droidtop-agent/uninstall.sh`: it stops the
+agent, turns off starting at sign-in and deletes exactly what the manifest
+lists. Your pairings, identity, settings and kept saves stay unless you add
+`--purge`.
+
+The `.deb` and `.rpm` put the programs in `/usr/bin` and ship a systemd user
+unit (`droidtop-agent.service`, the background service) without enabling it;
+`systemctl --user enable --now droidtop-agent` turns it on, or use
+`droidtop-agent autostart on` for the window. Remove them with `apt remove
+droidtop-agent` or `dnf remove droidtop-agent`.
+
 ## Build
 
 ```
 cargo build --release -p droidtop-agent -p droidtop-agent-app
 ```
 
-CI builds both programs for Linux (x86_64, aarch64), Windows and macOS (arm64, x86_64), and droidtop's Android library
+CI builds both programs for Linux (x86_64, aarch64, and the four Linux packages above), Windows and macOS (arm64, x86_64), and droidtop's Android library
 (`libdroidtop_agent.so`, arm64-v8a and x86_64), on every push. Each green
 build on `main` is published as a release.
 
