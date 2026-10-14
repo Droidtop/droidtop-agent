@@ -76,6 +76,10 @@ PCGamingWiki). The agent downloads it when it first needs it, or when you run
 `droidtop-agent manifest update`. Your own Ludusavi custom games are used too,
 and `droidtop-agent saves add` covers anything else.
 
+## Pythia, the desktop manager
+
+[Pythia](https://github.com/bi0shacker001/pythia) is the associated desktop manager: a multi-system game library manager (GPL-3.0). It does not run games. It keeps track of which games exist, where, on which of your systems and platforms, and what each one needs to run.
+
 ## Install on Linux
 
 Every release carries four ways to install it (x86_64 and aarch64, 64-bit
