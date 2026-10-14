@@ -201,7 +201,14 @@ impl Host for Agent {
     }
 
     fn archive_dir(&self, game: &GameRef) -> PathBuf {
-        self.dirs.archive().join(file_key(&game.key))
+        let dir = self.dirs.archive().join(file_key(&game.key));
+        // The folder is named for the key; the title is kept beside the copies so the
+        // Saves page can name a game the library does not list (Droidtop/tracker#528).
+        let title = dir.join("title.txt");
+        if !game.title.is_empty() && std::fs::read_to_string(&title).ok().as_deref() != Some(game.title.as_str()) {
+            let _ = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&title, &game.title));
+        }
+        dir
     }
 
     fn library_pull(&self, _peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)> {

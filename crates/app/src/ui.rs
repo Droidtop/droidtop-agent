@@ -285,6 +285,14 @@ fn open_folder(path: &Path) {
     let _ = std::process::Command::new(program).arg(path).spawn();
 }
 
+fn games_count(n: usize) -> String {
+    if n == 1 {
+        "1 game".into()
+    } else {
+        format!("{n} games")
+    }
+}
+
 /// "2026-10-08 22:45 UTC" for a stamp such as `20261008T224500Z`.
 fn pretty_stamp(stamp: &str) -> String {
     match (stamp.get(0..4), stamp.get(4..6), stamp.get(6..8), stamp.get(9..11), stamp.get(11..13)) {
@@ -323,7 +331,7 @@ fn places_of(scan: &droidtop_agent_computer::scan::Scan, source: &str) -> String
         .games
         .iter()
         .filter(|f| f.game.install.launcher.as_deref().is_some_and(|l| l == wanted))
-        .filter_map(|f| f.base.as_ref().and_then(|b| b.parent()).map(|p| p.display().to_string()))
+        .filter_map(|f| f.base.as_ref().and_then(|b| b.parent()).map(|p| p.display().to_string().trim_start_matches(r"\\?\").to_string()))
         .collect();
     places.sort();
     places.dedup();
@@ -384,7 +392,17 @@ fn archived(root: &Path, titles: &std::collections::BTreeMap<String, (String, St
         }
         let (key, title) = match titles.get(&folder) {
             Some((key, title)) => (Some(key.clone()), title.clone()),
-            None => (None, "A game that is no longer in the library".to_string()),
+            None => {
+                let kept = std::fs::read_to_string(dir.join("title.txt")).unwrap_or_default();
+                (
+                    None,
+                    if kept.trim().is_empty() {
+                        "A game from a handheld, with no title known".to_string()
+                    } else {
+                        kept.trim().to_string()
+                    },
+                )
+            }
         };
         out.push(GameCopies { key, title, dir, copies });
     }
@@ -669,7 +687,7 @@ impl App {
                     switch_source = Some((s.name.clone(), on));
                 }
                 ui.label(RichText::new(places_of(scan, &s.name)).weak().small());
-                ui.label(if s.enabled { format!("{} games", s.count) } else { "off".into() });
+                ui.label(if s.enabled { games_count(s.count) } else { "off".into() });
                 ui.end_row();
             }
         });
@@ -696,7 +714,7 @@ impl App {
                         .iter()
                         .filter(|f| f.base.as_ref().is_some_and(|b| b.starts_with(path)) && f.game.key.starts_with("rom:") == roms)
                         .count();
-                    ui.label(if enabled { format!("{count} games") } else { "off".into() });
+                    ui.label(if enabled { games_count(count) } else { "off".into() });
                     ui.label(RichText::new(if *auto { "found on its own" } else { "added by you" }).weak().small());
                     if !auto && ui.small_button("Remove").clicked() {
                         remove_folder = Some((path.clone(), roms));
@@ -969,9 +987,8 @@ impl App {
                     ui.label(RichText::new("Not known yet. Add the folder below and it will be synced.").weak());
                 }
                 Some(info) => {
-                    for p in &info.patterns {
-                        let how = if info.custom.contains(p) { "set by you" } else { "detected" };
-                        ui.label(RichText::new(format!("{p}   ({how})")).monospace().small());
+                    for p in info.patterns.iter().filter(|p| !info.custom.contains(p)) {
+                        ui.label(RichText::new(format!("{p}   (detected)")).monospace().small());
                     }
                     ui.label(RichText::new(format!("{} files found now.", info.files.len())).weak());
                     if let Some(folder) = info.files.first().and_then(|(_, p)| p.parent()) {
@@ -1278,6 +1295,14 @@ mod tests {
         assert_eq!(labels[2], "Older, from DESKTOP");
         assert!(list[0].copies.iter().all(|a| a.files == 1));
         assert!(list[0].copies[2].when.ends_with("UTC"));
+        // A game the library does not list is named by the title kept beside its copies, never by its key.
+        let other = root.join("folder_CUSTOM_GAME_7");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("title.txt"), "Custom Thing").unwrap();
+        savesync::keep_copy(std::iter::once(("<base>/save.dat".to_string(), save.clone())), &other, "DESKTOP").unwrap();
+        let list = archived(&root, &titles);
+        let named: Vec<(&str, Option<&str>)> = list.iter().map(|g| (g.title.as_str(), g.key.as_deref())).collect();
+        assert!(named.contains(&("Custom Thing", None)) && named.contains(&("Team Fortress 2", Some("steam:440"))), "{named:?}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
