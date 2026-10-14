@@ -522,16 +522,30 @@ impl Agent {
         });
     }
 
+    /// A paired device reached this computer. One the trusted list holds but
+    /// the device list lost (the list was emptied by the bug in
+    /// Droidtop/tracker#528) is put back, named as it named itself in the
+    /// library, so Status and `devices` show it again.
     pub fn seen(&self, peer: &PeerId, address: Option<String>) {
-        self.edit_devices(|devices| match devices.iter_mut().find(|d| d.id == peer.to_hex()) {
-            Some(d) => {
+        let id = peer.to_hex();
+        let lost = !self.devices_now().iter().any(|d| d.id == id) && self.is_trusted(peer);
+        let recovered = lost.then(|| {
+            let name = self.library_now().games.values().find_map(|g| g.installs.get(&id).map(|i| i.device_name.clone()));
+            name.unwrap_or_else(|| format!("Handheld {}", &id[..8]))
+        });
+        self.edit_devices(|devices| {
+            if devices.iter().all(|d| d.id != id) {
+                let Some(name) = recovered else { return ((), false) };
+                let paired_ms = droidtop_agent_core::library::now_ms();
+                devices.push(Device { id: id.clone(), name, paired_ms, last_address: None, last_seen_ms: 0, disco: None, moved: true });
+            }
+            if let Some(d) = devices.iter_mut().find(|d| d.id == id) {
                 d.last_seen_ms = droidtop_agent_core::library::now_ms();
                 if address.is_some() {
                     d.last_address = address;
                 }
-                ((), true)
             }
-            None => ((), false),
+            ((), true)
         });
     }
 
@@ -643,6 +657,32 @@ mod tests {
         let again = Agent::open_in(d).unwrap();
         assert_eq!(again.library_now().games["title:dt sync test"].marks["favourite"].value, serde_json::json!(true));
         assert_eq!(serving.library_now().games["title:dt sync test"].marks.len(), 1);
+    }
+
+    /// A handheld the trusted list holds but the device list lost comes back,
+    /// named as the library knows it, when it next reaches the computer.
+    #[test]
+    fn a_trusted_handheld_missing_from_the_device_list_is_put_back() {
+        let d = dirs("lost");
+        let agent = Agent::open_in(d.clone()).unwrap();
+        let handheld = DeviceKey::generate().peer_id();
+        TrustStore::update(&d.trust(), |t| t.pin(handheld)).unwrap();
+        agent.edit_library(|lib| {
+            let game = droidtop_agent_core::library::ScannedGame {
+                key: "title:x".into(),
+                title: "X".into(),
+                platform: None,
+                install: droidtop_agent_core::library::Install { installed: true, ..Default::default() },
+            };
+            ((), lib.update_device(&handheld, "SM-G998B", vec![game]) > 0)
+        });
+        assert!(agent.devices_now().is_empty());
+        agent.seen(&handheld, Some("10.0.2.2".into()));
+        let devices = agent.devices_now();
+        assert_eq!((devices.len(), devices[0].name.as_str(), devices[0].last_address.as_deref()), (1, "SM-G998B", Some("10.0.2.2")));
+        // A device that is not trusted is not added by a visit.
+        agent.seen(&DeviceKey::generate().peer_id(), None);
+        assert_eq!(agent.devices_now().len(), 1);
     }
 
     #[test]
