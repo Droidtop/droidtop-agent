@@ -1,117 +1,104 @@
-# droidtop-agent
+<h1 align="center">droidtop-agent</h1>
 
-A small program for your computer (Windows, Linux or macOS) that keeps it in
-step with [droidtop](https://github.com/Droidtop/droidtop) on a handheld:
+<p align="center">
+  <b>Your computer, in step with your handheld.</b><br>
+  Saves, game library, apps and plugin data, kept in sync with droidtop over your own network.
+</p>
 
-- **Saves.** Before a game starts on the handheld and after it ends, its saves
-  are brought up to date with the computer's copy. If both sides changed,
-  the newest copy wins (or the one from the computer or handheld you made
-  primary), and the other device keeps its own as a copy, with a few older
-  ones. Nothing is deleted. Any number of handhelds and computers can pair
-  with each other.
-- **Library.** The agent scans the computer for games: Steam, GOG, Epic,
-  Amazon, itch, Battle.net, Heroic, Lutris, Bottles, Minigalaxy, your own game folders, and ROM
-  folders laid out by ES-DE system name. The two libraries stay in step both
-  ways.
-- **Apps.** Everything else installed on the computer is listed too: Windows
-  programs and Store apps, Linux desktop apps (Flatpak and Snap included),
-  and macOS applications, so droidtop shows what each computer has.
-- **Plugin contexts.** Supporting data that droidtop's plugins share with
-  programs on the computer, synced both ways. A plugin that needs one
-  publishes a small context adapter program for the computer. When the
-  plugin asks for it, the agent says so; `droidtop-agent contexts approve
-  <context>` installs it, checked against the digest the plugin names.
-  `droidtop-agent contexts add <program>` adds one by hand.
+<p align="center">
+  <a href="https://github.com/Droidtop/droidtop-agent/releases/latest"><img alt="Latest build" src="https://img.shields.io/github/v/release/Droidtop/droidtop-agent?label=build&style=flat-square"></a>
+  <a href="https://github.com/Droidtop/droidtop-agent/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Droidtop/droidtop-agent/ci.yml?branch=main&label=ci&style=flat-square"></a>
+  <img alt="Windows, Linux and macOS" src="https://img.shields.io/badge/Windows%20%C2%B7%20Linux%20%C2%B7%20macOS-supported-2f7bf5?style=flat-square">
+  <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/github/license/Droidtop/droidtop-agent?style=flat-square"></a>
+  <img alt="Status: early" src="https://img.shields.io/badge/status-early-d69e2e?style=flat-square">
+</p>
 
-It does not stream your screen or control the computer remotely: that is
-[windowcast](https://github.com/Droidtop/windowcast)'s job. It never needs
-Tailscale or any other VPN. On your own network the two devices talk
-directly. Away from it, they can use a direct WireGuard tunnel, or a folder
-that your own sync tool already carries to both devices.
+<p align="center">
+  <a href="#what-it-does">What it does</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="#faq">FAQ</a> ·
+  <a href="#build">Build</a> ·
+  <a href="#licence">Licence</a>
+</p>
 
-The design, and what droidtop already had before it, is in
-[docs/DESIGN.md](docs/DESIGN.md).
+droidtop-agent is a small program for a Windows, Linux or macOS computer that pairs with [droidtop](https://github.com/Droidtop/droidtop) on a handheld. It runs in the tray, with a command line for headless machines.
 
-## Use
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/pair.webp" alt="The Pair a handheld page: type the six digits the handheld shows, or show a code on this computer" width="100%">
+      <br><sub><b>Pair.</b> Type the handheld's code, or show one here.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/images/library.webp" alt="The Library page listing games, apps and programs droidtop can sync with" width="100%">
+      <br><sub><b>Library.</b> What the agent found on this computer.</sub>
+    </td>
+  </tr>
+</table>
 
-Run **droidtop-agent-app**. It sits in the tray and has a window for
-everything below: pairing (it shows or takes a code), the paired handhelds,
-the games and apps it found, kept saves, plugin data and settings. On macOS
-it is `droidtop-agent.app`. It is not signed yet, so the first time you open
-it, use Open from its right-click menu.
+## What it does
 
-The command line does the same for headless machines and scripts:
-
-```
-droidtop-agent pair 123456      # the code droidtop shows under Settings > Computers > Pair a computer
-droidtop-agent pair             # or: this computer shows its address and a code, typed on the handheld
-droidtop-agent                  # keep it running; the handheld connects when it needs to
-droidtop-agent scan             # what it found on this computer
-droidtop-agent saves steam:440  # where a game's saves are here, and the files
-droidtop-agent autostart on     # start when you sign in (off unless you turn it on)
-droidtop-agent --help
-```
-
-The first time the agent runs, Windows may ask whether it may use the
-network. It listens on port 47610 (TCP and UDP) on your local network, and
-on UDP 47611 for WireGuard from outside it.
-
-Away from home, the two find each other the way Syncthing does: the agent
-learns its public address by STUN and announces it to Syncthing's global
-discovery servers, the handheld looks it up, and the two punch through both
-routers with WireGuard. Only addresses go to those servers; the sync itself
-goes through the direct WireGuard tunnel. `droidtop-agent rendezvous` shows
-it, and turns it off or points it at other servers. When the routers do not
-allow punching, the handheld still reaches the computer when its UDP 47611 is
-reachable: forward it on your router and run
-`droidtop-agent endpoint set <public ip>:47611`, or let a global IPv6
-address through your firewall. The handheld learns these each time the two
-meet. When neither works, `droidtop-agent share set <folder>` names a folder
-your own sync tool carries to the handheld (pick the same folder under
-droidtop's Settings > Computers > Cloud folder).
-
-Save locations come from the [Ludusavi
-manifest](https://github.com/mtkennerly/ludusavi-manifest) (data from
-PCGamingWiki). The agent downloads it when it first needs it, or when you run
-`droidtop-agent manifest update`. Your own Ludusavi custom games are used too,
-and `droidtop-agent saves add` covers anything else.
-
-## Install on Linux
-
-Every release carries four ways to install it (x86_64 and aarch64, 64-bit
-Linux with glibc 2.39 or newer), each with its SHA-256 in `SHA256SUMS`:
-
-| File | What it is |
+| | |
 |---|---|
-| `droidtop-agent-linux-<arch>.tar.zst` | Portable: the programs, a menu entry, the icon, `install.sh` and `uninstall.sh`. |
-| `droidtop-agent-linux-<arch>.run` | One file you can run (the window, or any `droidtop-agent` command) or install from. |
-| `droidtop-agent_<version>_<amd64\|arm64>.deb` | For Debian, Ubuntu and relatives. |
-| `droidtop-agent-<version>.<x86_64\|aarch64>.rpm` | For Fedora, openSUSE and relatives. |
+| **Saves** | Before a game starts on the handheld and after it ends, its saves are brought up to date with the computer's copy. If both sides changed, the newest wins, or the device you made primary. The other keeps its own as a copy, with a few older ones. Nothing is deleted. |
+| **Library** | Scans for Steam, GOG, Epic, Amazon, itch, Battle.net, Heroic, Lutris, Bottles and Minigalaxy games, your own game folders, and ROM folders laid out by ES-DE system name. Both libraries stay in step. |
+| **Apps** | Lists the other programs installed here too: Windows programs and Store apps, Linux desktop apps including Flatpak and Snap, and macOS applications. |
+| **Plugin contexts** | Syncs data that droidtop plugins share with programs on the computer. A plugin can ship a small adapter, and the agent installs it only when you approve, checked against the digest the plugin names. |
+| **No VPN needed** | On your own network the two devices talk directly. Away from it they use a direct WireGuard tunnel, or a folder your own sync tool carries to both. |
 
-For you only, without root or a package manager:
+Any number of handhelds and computers can pair with each other. The agent does not stream your screen or control the computer. That is [windowcast](https://github.com/Droidtop/windowcast).
+
+## Install
+
+Pick the newest build on the [releases page](https://github.com/Droidtop/droidtop-agent/releases/latest).
+
+| System | Download |
+|---|---|
+| Windows (x86_64) | `droidtop-agent-app-windows-x86_64.exe` |
+| macOS (arm64 or x86_64) | `droidtop-agent-macos-<arch>.app.zip`. It is not signed yet, so the first time, use Open from the right-click menu. |
+| Linux (x86_64 or aarch64, glibc 2.39+) | The one-line installer below, or a `.deb`, `.rpm`, `.run` or `.tar.zst` from the release |
+
+Linux, for you only and without root:
 
 ```
 curl -fsSL https://github.com/Droidtop/droidtop-agent/releases/latest/download/install.sh | sh
-curl -fsSL https://github.com/Droidtop/droidtop-agent/releases/latest/download/install.sh | sh -s -- --autostart
 ```
 
-That downloads the tarball for this machine, checks it against `SHA256SUMS`,
-puts the programs in `~/.local/bin` and a menu entry and icon under
-`~/.local/share`, and, with `--autostart`, runs `droidtop-agent autostart on`.
-The same `install.sh` is in the tarball (`sh install.sh`) and inside the
-`.run` file (`./droidtop-agent-linux-x86_64.run install`). Everything it
-creates is listed in `~/.local/share/droidtop-agent/install-manifest`.
+It checks the download against `SHA256SUMS` and lists everything it creates in `~/.local/share/droidtop-agent/install-manifest`. Run `~/.local/share/droidtop-agent/uninstall.sh` to remove exactly that list. More in [docs/USAGE.md](docs/USAGE.md).
 
-To remove it, run `~/.local/share/droidtop-agent/uninstall.sh`: it stops the
-agent, turns off starting at sign-in and deletes exactly what the manifest
-lists. Your pairings, identity, settings and kept saves stay unless you add
-`--purge`.
+## Get started
 
-The `.deb` and `.rpm` put the programs in `/usr/bin` and ship a systemd user
-unit (`droidtop-agent.service`, the background service) without enabling it;
-`systemctl --user enable --now droidtop-agent` turns it on, or use
-`droidtop-agent autostart on` for the window. Remove them with `apt remove
-droidtop-agent` or `dnf remove droidtop-agent`.
+1. Run **droidtop-agent-app**. It sits in the tray.
+2. On the handheld, open droidtop **Settings > Computers > Pair a computer**. It shows six digits.
+3. In the agent's **Pair a handheld** page, type them and press **Pair**.
+4. If your firewall asks, allow the agent on your home network. It listens on port 47610 (TCP and UDP), and on UDP 47611 for WireGuard from outside.
+
+For headless machines and scripts:
+
+```
+droidtop-agent pair 123456      # the code droidtop shows
+droidtop-agent                  # keep it running
+droidtop-agent scan             # what it found on this computer
+droidtop-agent saves steam:440  # where a game's saves are, and the files
+droidtop-agent autostart on     # start when you sign in
+```
+
+The design is in [docs/DESIGN.md](docs/DESIGN.md).
+
+## FAQ
+
+**Where does it find save locations?**
+From the [Ludusavi manifest](https://github.com/mtkennerly/ludusavi-manifest), which gets its data from PCGamingWiki. Your own Ludusavi custom games are used too, and `droidtop-agent saves add` covers anything else.
+
+**Could a sync lose a save?**
+The agent never deletes a save. When both sides changed, the losing copy is kept beside the winner.
+
+**What do I do away from home?**
+The agent finds the handheld the way Syncthing does and punches through both routers. Only addresses go to the discovery servers, and the sync itself goes through the direct tunnel. When that fails, forward UDP 47611 and run `droidtop-agent endpoint set <public ip>:47611`, or name a shared folder with `droidtop-agent share set <folder>`. Details are in [docs/USAGE.md](docs/USAGE.md).
+
+**Does it start by itself?**
+Only if you turn it on with `droidtop-agent autostart on`.
 
 ## Build
 
@@ -119,11 +106,8 @@ droidtop-agent` or `dnf remove droidtop-agent`.
 cargo build --release -p droidtop-agent -p droidtop-agent-app
 ```
 
-CI builds both programs for Linux (x86_64, aarch64, and the four Linux packages above), Windows and macOS (arm64, x86_64), and droidtop's Android library
-(`libdroidtop_agent.so`, arm64-v8a and x86_64), on every push. Each green
-build on `main` is published as a release.
+CI builds both programs for Linux, Windows and macOS, and droidtop's Android library, on every push. Each green build on `main` is published as a release.
 
 ## Licence
 
-GPL-3.0-only. The agent uses windowcast's `identity` and `pairing` crates,
-which are GPL-3.0-only.
+GPL-3.0-only, see [LICENSE](LICENSE). The agent uses windowcast's `identity` and `pairing` crates, which are GPL-3.0-only.
