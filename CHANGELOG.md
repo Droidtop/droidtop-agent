@@ -6,6 +6,12 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- The agent as a Python extension module, `droidtop_agent` (crates/python,
+  one abi3 wheel per system in each release), so Pythia is this computer's
+  agent while it runs: same identity, pairings, library, saves, scanner and
+  service, in its own process. The games Pythia tracks join the scan where
+  the scanner has not found them (docs/DESIGN.md section 16,
+  Droidtop/tracker#461).
 - The window attaches to a running agent instead of competing with it, and
   every copy of the agent (headless, window, command line) reads the paired
   devices and the library from their files again when they changed and writes

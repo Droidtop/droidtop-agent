@@ -201,6 +201,78 @@ jobs:
           name: droidtop-agent-linux-packages-${{ matrix.arch }}
           path: linux/
 
+  python:
+    # The agent as a Python extension module (crates/python), the one a
+    # desktop manager such as Pythia loads to be this computer's agent:
+    # one abi3 wheel per system, for Python 3.10 and newer. Each is installed
+    # and called once here before it is offered.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            system: linux-x86_64
+          - os: ubuntu-24.04-arm
+            system: linux-aarch64
+          - os: windows-latest
+            system: windows-x86_64
+          - os: macos-latest
+            system: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the wheel
+        shell: bash
+        env:
+          RUN: ${{ github.run_number }}
+        run: |
+          set -eu
+          python -m pip install --quiet "maturin>=1.7,<2"
+          # manylinux_2_39: the glibc the Linux programs already need (docs/DESIGN.md section 13).
+          compat=""
+          if [ "$RUNNER_OS" = Linux ]; then compat="--compatibility manylinux_2_39 --auditwheel skip"; fi
+          # shellcheck disable=SC2086
+          maturin build --release -m crates/python/Cargo.toml --out wheels $compat
+          ls -l wheels
+
+      - name: Install it and call it
+        shell: bash
+        run: |
+          set -eu
+          python -m pip install --quiet wheels/*.whl
+          export DROIDTOP_AGENT_HOME="$RUNNER_TEMP/agent-home"
+          python - <<'PY'
+          import json
+          import droidtop_agent
+          me = json.loads(droidtop_agent.call("identity", "{}"))
+          assert len(me["id"]) == 64, me
+          print("droidtop_agent", droidtop_agent.__version__, "protocol", droidtop_agent.PROTOCOL_VERSION, me["name"])
+          assert json.loads(droidtop_agent.call("devices", "{}")) == {"devices": []}
+          out = json.loads(droidtop_agent.call("extra_games", json.dumps({"games": [
+              {"key": "title:ci game", "title": "CI Game", "platform": "pc", "install": {"installed": True, "version": "1.0"}}
+          ]})))
+          assert out["games"] == 1, out
+          assert "title:ci game" in json.loads(droidtop_agent.call("library", "{}"))
+          assert "error" in json.loads(droidtop_agent.call("no_such_op", "{}"))
+          PY
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: droidtop-agent-python-${{ matrix.system }}
+          path: wheels/
+
   android:
     runs-on: ubuntu-24.04
     steps:
@@ -247,7 +319,7 @@ jobs:
 
   release:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test, android, linux-packages]
+    needs: [test, android, linux-packages, python]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

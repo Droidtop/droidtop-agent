@@ -94,6 +94,22 @@ impl Scan {
         self.games.iter().find(|f| droidtop_agent_core::library::title_key(&f.game.title) == wanted)
     }
 
+    /// Adds [`others`] (a desktop manager's own games) where this scan has no
+    /// game with the same key or folder: the scanner's record of a game wins.
+    pub fn join(&mut self, others: &[Found]) {
+        let folder = |p: &Path| p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase();
+        for other in others {
+            let same_key = self.games.iter().any(|f| f.game.key == other.game.key);
+            let same_folder = other.base.as_deref().is_some_and(|b| {
+                let b = folder(b);
+                self.games.iter().any(|f| f.base.as_deref().is_some_and(|fb| folder(fb) == b))
+            });
+            if !same_key && !same_folder {
+                self.games.push(other.clone());
+            }
+        }
+    }
+
     /// Everything the library records for this computer: its games and its
     /// installed applications.
     pub fn library(&self) -> Vec<ScannedGame> {

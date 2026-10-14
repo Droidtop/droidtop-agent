@@ -33,6 +33,7 @@ Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
 13. Repository layout and builds
 14. Decisions for the owner
 15. The window and the tray
+16. Inside a desktop manager (Pythia)
 
 ## 1. What droidtop already has
 
@@ -711,6 +712,9 @@ and skips folders it cannot read.
   headless machines and scripts.
 - `crates/android` (`droidtop-agent-android`): the `cdylib` with droidtop's
   JNI surface.
+- `crates/python` (`droidtop-agent-python`): the agent as a Python extension
+  module, `droidtop_agent`, for a desktop manager that is this computer's
+  agent while it runs (section 16).
 - CI (`.github/workflows/ci.yml`): build and test on Linux (x86_64 and
   aarch64), Windows and macOS (arm64, with the x86_64 build made beside it),
   plus the Android library for both ABIs. Each system's release has both
@@ -830,3 +834,49 @@ macOS, so nobody needs the command line.
   adapter) runs on threads of its own. Files are read when a page opens and
   every few seconds after that, never on every frame.
 
+## 16. Inside a desktop manager (Pythia)
+
+Owner, 2026-10-14: "pythia will NEVER call droidtop-agent. If it's running,
+it will BE our agent", and "We can step away from python whenever we want".
+[Pythia](https://github.com/bi0shacker001/pythia), the owner's desktop game
+library manager (largely based on Lutris), is this computer's agent while it
+runs. It does not speak to a separate agent program. It loads the agent
+itself, in its own process, so there is still one implementation of the
+identity, pairing, channel, transports, library, saves and scanner.
+
+- **`crates/python`** builds `droidtop_agent`, a Python extension module
+  (PyO3, the stable ABI from Python 3.10 on). Like droidtop's JNI library,
+  it has one call, `droidtop_agent.call(op, args_json)`, JSON in and JSON
+  out, with `{"error": ...}` on failure. It wraps the computer-side agent
+  (`droidtop_agent_computer::state::Agent`) that `droidtop-agent run` uses,
+  over the same files (section 3; `DROIDTOP_AGENT_HOME` works the same).
+  - `identity`, `settings`, `settings_set`
+  - `devices`, `unpair`, `primary`
+  - `pair` (the handheld's code), `pair_show` / `pair_status` /
+    `pair_cancel` (this computer shows a code)
+  - `serve`, `serving`
+  - `scan`, `rescan`, `library`, `set_mark`, `saves`
+  - `extra_games`
+- **One agent per computer.** `serve` starts the same service as
+  `droidtop-agent run`, on threads of its own. If another agent already
+  listens on port 47610 (droidtop-agent, its window, or another Pythia),
+  `serve` fails with that reason and the other one keeps serving. Since
+  both use the same files, either can take over from the other: the
+  pairings, the library's change log and the kept saves stay as they are.
+- **The manager's own games** (`extra_games`): the games Pythia tracks are
+  joined into every scan, as `ScannedGame`s with their folders. A game the
+  scanner already found, by key or by folder, keeps the scanner's record.
+  The rest become this computer's install facts like any other source's,
+  and their saves are found the same way (section 6).
+- **Wheels** come from CI's `python` job for Windows x86_64, Linux x86_64
+  and aarch64 (glibc 2.39, like the programs) and macOS arm64. Each is
+  installed and called once before it is offered. They are attached to
+  each release beside the programs.
+- **Next**, recorded on Droidtop/tracker#461:
+  - ownership of store games that are not installed, as a library fact;
+  - Pythia's cross-store identity (aliases and confirmed merges) in the
+    library model;
+  - credentials carried inside the channel and encrypted at rest on each
+    device;
+  - the manager's slow paths (reconciliation's duplicate search) as calls
+    here.

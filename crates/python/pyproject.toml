@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "droidtop-agent"
+description = "The computer's droidtop agent, loadable from Python"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-only" }
+dynamic = ["version"]
+
+[tool.maturin]
+# The wheel's version is the crate's; CI adds its run number.
+module-name = "droidtop_agent"

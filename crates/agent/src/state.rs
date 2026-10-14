@@ -323,6 +323,10 @@ pub struct Agent {
     /// What the rendezvous knows now: the address the NAT gives the WireGuard
     /// socket, and where to punch (crate::rendezvous).
     pub rendezvous: std::sync::Arc<Mutex<crate::rendezvous::Shared>>,
+    /// Games a desktop manager that runs this agent in its own process
+    /// tracks itself (Pythia, through `crates/python`): joined into every
+    /// scan where the scanner has not found them (docs/DESIGN.md section 16).
+    pub extra: Mutex<Vec<crate::scan::Found>>,
 }
 
 impl Agent {
@@ -351,6 +355,7 @@ impl Agent {
             scan: Mutex::new(None),
             ludusavi: Mutex::new(None),
             rendezvous: Default::default(),
+            extra: Mutex::new(Vec::new()),
             key,
             dirs,
         })
@@ -556,7 +561,8 @@ impl Agent {
     pub fn rescan(&self) -> usize {
         self.reload_settings();
         let settings = self.settings.lock().unwrap().clone();
-        let scan = crate::scan::scan(&settings, &self.dirs);
+        let mut scan = crate::scan::scan(&settings, &self.dirs);
+        scan.join(&self.extra.lock().unwrap());
         let launcher_marks = crate::scan::lutris::marks();
         let (device, name) = (self.peer_id(), self.name());
         let changes = self.edit_library(|lib| {
