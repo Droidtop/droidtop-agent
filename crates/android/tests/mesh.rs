@@ -9,6 +9,11 @@
 //!   H1 ── C1      H1 ── C2 ── H2 ── C3 ── H3
 //! ```
 //!
+//! A fourth computer, PC-A, is the real agent (`droidtop_agent_computer::state::Agent`
+//! over a game folder), paired with H1 and H3: it covers what the mocks cannot,
+//! the same game under the same key on a handheld and a computer, and the
+//! person's marks surviving the agent's restarts and rescans.
+//!
 //! It covers the library relaying across the mesh (one entry per game, with
 //! an install per device, and the person's organization of it), saves edited on two devices at once (the newest
 //! copy wins and the other device keeps its own), a preferred computer
@@ -23,6 +28,7 @@ use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
 use droidtop_agent::api::call;
+use droidtop_agent_computer::state::{Agent, Dirs};
 use droidtop_agent_core::channel::Channel;
 use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
@@ -118,6 +124,39 @@ fn start(name: &str, games: &[&str], paired: Vec<PeerId>) -> (&'static Computer,
     (computer, id, at)
 }
 
+/// A computer that is the real agent over a game folder, serving the handhelds
+/// in [`paired`]. Returns it, its id and address, and the places it keeps its
+/// state in (to open the agent again, as a restart does).
+fn start_agent(name: &str, games: &Path, paired: Vec<PeerId>) -> ((&'static Agent, PeerId, SocketAddr), Dirs) {
+    let root = temp(name);
+    let dirs = Dirs { config: root.join("config"), data: root.join("data"), computer: root.join("computer") };
+    for d in [&dirs.config, &dirs.data, &dirs.computer] {
+        fs::create_dir_all(d).unwrap();
+    }
+    let agent: &'static Agent = Box::leak(Box::new(Agent::open_in(dirs.clone()).unwrap()));
+    {
+        let mut settings = agent.settings.lock().unwrap();
+        settings.name = Some(name.into());
+        settings.game_folders = vec![games.to_path_buf()];
+    }
+    agent.save_settings().unwrap();
+    let seed = agent.key.seed();
+    let id = agent.peer_id();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let at = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let (key, paired) = (DeviceKey::from_seed(&seed).unwrap(), paired.clone());
+            thread::spawn(move || {
+                if let Ok(mut ch) = Channel::accept(stream, &key, |p| paired.contains(p)) {
+                    let _ = serve(&mut ch, agent);
+                }
+            });
+        }
+    });
+    ((agent, id, at), dirs)
+}
+
 /// A handheld: its key, its saves folder and its library file.
 struct Handheld {
     name: &'static str,
@@ -137,24 +176,28 @@ impl Handheld {
     fn save(&self) -> PathBuf {
         self.appdata().join("Game/slot.sav")
     }
-    fn args(&self, pc: &(&'static Computer, PeerId, SocketAddr)) -> Value {
+    fn args<C: Host + ?Sized>(&self, pc: &(&'static C, PeerId, SocketAddr)) -> Value {
         json!({ "seed": self.seed, "peer": pc.1.to_hex(), "addresses": [pc.2.to_string()], "name": self.name })
     }
-    fn library(&self, pc: &(&'static Computer, PeerId, SocketAddr)) -> Value {
+    fn library<C: Host + ?Sized>(&self, pc: &(&'static C, PeerId, SocketAddr)) -> Value {
         self.library_with(pc, json!({}))
     }
     /// A library exchange reporting [`marks`], the person's organization of
     /// games as droidtop keeps it.
-    fn library_with(&self, pc: &(&'static Computer, PeerId, SocketAddr), marks: Value) -> Value {
+    fn library_with<C: Host + ?Sized>(&self, pc: &(&'static C, PeerId, SocketAddr), marks: Value) -> Value {
+        self.library_scanning(pc, json!([]), marks)
+    }
+    /// A library exchange reporting the games [`scan`] lists as installed here, and [`marks`].
+    fn library_scanning<C: Host + ?Sized>(&self, pc: &(&'static C, PeerId, SocketAddr), scan: Value, marks: Value) -> Value {
         let mut args = self.args(pc);
         args["state"] = json!(self.dir.join("library.json"));
-        args["scan"] = json!([]);
+        args["scan"] = scan;
         args["marks"] = marks;
         let out: Value = serde_json::from_str(&call("sync_library", &args.to_string())).unwrap();
-        assert!(out.get("error").is_none() && out.get("unreachable").is_none(), "{} with {}: {out}", self.name, pc.0.name);
+        assert!(out.get("error").is_none() && out.get("unreachable").is_none(), "{} with {}: {out}", self.name, pc.0.name());
         out
     }
-    fn saves(&self, pc: &(&'static Computer, PeerId, SocketAddr), primary: bool) -> Value {
+    fn saves<C: Host + ?Sized>(&self, pc: &(&'static C, PeerId, SocketAddr), primary: bool) -> Value {
         let mut args = self.args(pc);
         args["game"] = json!({ "key": "steam:1", "title": "Game" });
         args["roots"] = json!({ "<winAppData>": self.appdata() });
@@ -162,7 +205,7 @@ impl Handheld {
         args["archive"] = json!(self.dir.join("archive"));
         args["primary"] = json!(primary);
         let out: Value = serde_json::from_str(&call("sync_saves", &args.to_string())).unwrap();
-        assert!(out.get("error").is_none() && out.get("unreachable").is_none(), "{} with {}: {out}", self.name, pc.0.name);
+        assert!(out.get("error").is_none() && out.get("unreachable").is_none(), "{} with {}: {out}", self.name, pc.0.name());
         out
     }
 }
@@ -226,6 +269,53 @@ fn three_handhelds_and_three_computers_in_a_partial_mesh() {
     h2.library(&c3);
     let told = h3.library_with(&c3, unset.clone());
     assert_eq!(told["marks"], json!({ "steam:1": { "rating": 0.8, "collections": ["Done", "Platformers"] } }), "{told}");
+
+    // The real agent, PC-A, shares H1 and H3 with the rest of the mesh. Its game
+    // folder holds the test game as a download names it: "DtSyncTest v1.1".
+    let games = temp("pc-a-games");
+    fs::create_dir_all(games.join("DtSyncTest v1.1")).unwrap();
+    fs::write(games.join("DtSyncTest v1.1/DtSyncTest.exe"), b"MZ").unwrap();
+    let (pca, dirs) = start_agent("PC-A", &games, vec![h1.id, h3.id]);
+    // A copy of the agent opened before anything happens, like the headless
+    // `run` while a window or a command line is used (Droidtop/tracker#528, #531).
+    let stale = Agent::open_in(dirs.clone()).unwrap();
+    let game = "title:dt sync test";
+    // H1 has the same game from a folder "DtSyncTest v1.0", titled the way droidtop
+    // titles it, and has favourited it.
+    let on_h1 = json!([{ "key": game, "title": "Dt Sync Test", "platform": "pc",
+        "install": { "installed": true, "version": "1.0", "path": "/sdcard/Download/dt-games/DtSyncTest v1.0", "launcher": "droidtop" } }]);
+    let favourite = json!({ game: { "favourite": true, "hidden": false, "collections": [] } });
+    h1.library_scanning(&pca, on_h1.clone(), favourite.clone());
+    // Droidtop/tracker#529: it is one game on both, so H1 knows the computer's v1.1 beside its own v1.0.
+    let h1_lib = Library::load(&h1.dir.join("library.json")).unwrap();
+    let versions: Vec<(&str, &str)> = h1_lib.games[game].versions.iter().map(|v| (v.device_name.as_str(), v.version.as_str())).collect();
+    assert!(versions.contains(&("PC-A", "1.1")) && versions.contains(&("H1", "1.0")), "{versions:?}");
+    assert_eq!(h1_lib.games[game].installs.len(), 2);
+    // Droidtop/tracker#531: the agent restarts and rescans twice, and the stale copy scans and records a
+    // visit as well; the favourite is still there.
+    let restarted = Agent::open_in(dirs.clone()).unwrap();
+    restarted.rescan();
+    stale.rescan();
+    stale.seen(&h1.id, None);
+    restarted.rescan();
+    let kept = Library::load(&dirs.data.join("library.json")).unwrap();
+    assert_eq!(kept.games[game].marks["favourite"].value, json!(true), "marks: {:?}", kept.games[game].marks);
+    assert_eq!(kept.games[game].installs.len(), 2);
+    // H3, three hops from H1, is told to write it, through PC-A.
+    let told = h3.library_with(&pca, json!({ game: { "favourite": false, "hidden": false, "collections": [] } }));
+    assert_eq!(told["marks"][game]["favourite"], json!(true), "{told}");
+    // PC to handheld: marks set on the computer (the window or `droidtop-agent mark`) reach H1.
+    assert!(restarted.set_mark(game, "hidden", json!(true)));
+    assert!(restarted.set_mark(game, "collections", json!(["Done"])));
+    let from_pc = h1.library_scanning(&pca, on_h1.clone(), favourite.clone());
+    assert_eq!(from_pc["marks"], json!({ game: { "hidden": true, "collections": ["Done"] } }), "{from_pc}");
+    // The computer loses its library (a restore of an old state): H1 sends everything again and the favourite returns.
+    fs::remove_file(dirs.data.join("library.json")).unwrap();
+    let marks_back = json!({ game: { "favourite": true, "hidden": true, "collections": ["Done"] } });
+    h1.library_scanning(&pca, on_h1, marks_back);
+    let healed = Library::load(&dirs.data.join("library.json")).unwrap();
+    assert_eq!(healed.games[game].marks["favourite"].value, json!(true), "{:?}", healed.games.get(game).map(|g| &g.marks));
+    assert_eq!(healed.games[game].marks["hidden"].value, json!(true));
 
     // Saves: PC-1's reach H1, then PC-2, then H2.
     write_at(&c1.0.save(), "pc-1 v1", 1_000);

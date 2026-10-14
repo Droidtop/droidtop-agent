@@ -158,7 +158,7 @@ pub fn run(agent: Arc<Agent>) {
             }
             // Look the paired handhelds up on Syncthing's schedule.
             let devices: Vec<(String, String)> =
-                agent.devices.lock().unwrap().iter().filter_map(|d| d.disco.clone().map(|id| (d.name.clone(), id))).collect();
+                agent.devices_now().iter().filter_map(|d| d.disco.clone().map(|id| (d.name.clone(), id))).collect();
             for (name, id) in devices {
                 if lookup_at.get(&id).is_some_and(|t| Instant::now() < *t) {
                     continue;

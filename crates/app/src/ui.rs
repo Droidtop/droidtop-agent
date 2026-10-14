@@ -8,10 +8,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use droidtop_agent_computer::host::file_key;
+use droidtop_agent_computer::scan::Found;
 use droidtop_agent_computer::state::{Agent, Settings};
 use droidtop_agent_computer::{autostart, pair, rendezvous, state};
 use droidtop_agent_core::keys::{short, PeerId};
 use droidtop_agent_core::library::now_ms;
+use droidtop_agent_core::proto::GameRef;
+use droidtop_agent_core::saves;
 use droidtop_agent_core::savesync;
 use eframe::egui::{self, Color32, RichText};
 
@@ -22,6 +26,9 @@ use crate::tray::{Action, Tray};
 pub enum Service {
     Starting,
     Running,
+    /// Another droidtop-agent on this computer is serving; this window shows
+    /// and changes the state it keeps in the same files.
+    Attached,
     Stopped(String),
 }
 
@@ -54,7 +61,7 @@ enum Pairing {
     /// This computer shows a code and waits.
     Showing {
         code: String,
-        addresses: Vec<String>,
+        places: Vec<pair::Place>,
         qr: Qr,
         until: Instant,
         cancel: Arc<AtomicBool>,
@@ -78,12 +85,37 @@ impl Qr {
     }
 }
 
-/// One conflict loser or refused save the agent kept.
-struct Archived {
-    game: String,
+/// One kept copy of a game's saves.
+#[derive(Clone)]
+struct Kept {
+    label: String,
     when: String,
     files: usize,
     path: PathBuf,
+    /// The newest copy from a device, rather than an older one it replaced.
+    newest: bool,
+    /// The person said they had looked at it.
+    reviewed: bool,
+    /// What `reviewed.txt` calls it.
+    name: String,
+}
+
+/// A game's kept copies; [`key`] is None when the library no longer has it.
+#[derive(Clone)]
+struct GameCopies {
+    key: Option<String>,
+    title: String,
+    dir: PathBuf,
+    copies: Vec<Kept>,
+}
+
+/// Where a game keeps its saves on this computer.
+#[derive(Clone)]
+struct SaveInfo {
+    patterns: Vec<String>,
+    /// The ones in [`patterns`] the person stated.
+    custom: Vec<String>,
+    files: Vec<(String, PathBuf)>,
 }
 
 /// The result of something running on a thread, shown on its page.
@@ -98,7 +130,16 @@ pub struct App {
     entered_code: String,
     library_filter: String,
     scanning: Arc<AtomicBool>,
-    archive: Vec<Archived>,
+    /// The game picked in the Library page, by key, and the key the collections draft is for.
+    selected: Option<String>,
+    draft_for: Option<String>,
+    collections_draft: String,
+    saves_filter: String,
+    saves_game: Option<(String, String)>,
+    save_info: Arc<Mutex<Option<SaveInfo>>>,
+    template_draft: String,
+    save_outcome: Outcome,
+    archive: Vec<GameCopies>,
     rendezvous: Option<rendezvous::Status>,
     loaded_at: Instant,
     plugin_outcome: Outcome,
@@ -119,6 +160,14 @@ impl App {
             entered_code: String::new(),
             library_filter: String::new(),
             scanning: Default::default(),
+            selected: None,
+            draft_for: None,
+            collections_draft: String::new(),
+            saves_filter: String::new(),
+            saves_game: None,
+            save_info: Default::default(),
+            template_draft: String::new(),
+            save_outcome: Default::default(),
             archive: Vec::new(),
             rendezvous: None,
             loaded_at: Instant::now() - Duration::from_secs(3600),
@@ -147,7 +196,11 @@ impl App {
         self.loaded_at = Instant::now();
         match self.page {
             Page::Status => self.rendezvous = state::read_json::<rendezvous::Status>(&self.agent.dirs.rendezvous()).ok(),
-            Page::Saves => self.archive = archived(&self.agent.dirs.archive()),
+            Page::Saves => {
+                let titles: std::collections::BTreeMap<String, (String, String)> =
+                    self.agent.library_now().games.iter().map(|(k, g)| (file_key(k), (k.clone(), g.title.clone()))).collect();
+                self.archive = archived(&self.agent.dirs.archive(), &titles);
+            }
             _ => {}
         }
     }
@@ -232,27 +285,108 @@ fn open_folder(path: &Path) {
     let _ = std::process::Command::new(program).arg(path).spawn();
 }
 
+/// "2026-10-08 22:45 UTC" for a stamp such as `20261008T224500Z`.
+fn pretty_stamp(stamp: &str) -> String {
+    match (stamp.get(0..4), stamp.get(4..6), stamp.get(6..8), stamp.get(9..11), stamp.get(11..13)) {
+        (Some(y), Some(mo), Some(d), Some(h), Some(mi)) => format!("{y}-{mo}-{d} {h}:{mi} UTC"),
+        _ => stamp.to_string(),
+    }
+}
+
+/// A launcher or store as the person knows it.
+fn source_name(raw: &str) -> String {
+    let key: String = raw.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+    match key.as_str() {
+        "" => String::new(),
+        "folder" | "gamefolders" => "Game folder".into(),
+        "romfolders" => "ROM folder".into(),
+        "steam" => "Steam".into(),
+        "gog" => "GOG".into(),
+        "epic" => "Epic".into(),
+        "amazon" => "Amazon Games".into(),
+        "itch" => "itch.io".into(),
+        "battlenet" => "Battle.net".into(),
+        "heroic" => "Heroic".into(),
+        "lutris" => "Lutris".into(),
+        "bottlesandminigalaxy" => "Bottles and Minigalaxy".into(),
+        _ => {
+            let mut chars = raw.chars();
+            chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
+        }
+    }
+}
+
+/// The folders a source's games sit in, a few of them.
+fn places_of(scan: &droidtop_agent_computer::scan::Scan, source: &str) -> String {
+    let wanted: String = source.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+    let mut places: Vec<String> = scan
+        .games
+        .iter()
+        .filter(|f| f.game.install.launcher.as_deref().is_some_and(|l| l == wanted))
+        .filter_map(|f| f.base.as_ref().and_then(|b| b.parent()).map(|p| p.display().to_string()))
+        .collect();
+    places.sort();
+    places.dedup();
+    let more = places.len().saturating_sub(2);
+    places.truncate(2);
+    let mut out = places.join("; ");
+    if more > 0 {
+        out.push_str(&format!(" and {more} more"));
+    }
+    out
+}
+
 /// The archive: per game, the newest copy kept from each device
-/// (`copies/<device>/`), then the older ones, newest first.
-fn archived(root: &Path) -> Vec<Archived> {
+/// (`copies/<device>/`), then the older ones, newest first. [`titles`] names
+/// each archive folder's game (`host::file_key` of its key, then key and title).
+fn archived(root: &Path, titles: &std::collections::BTreeMap<String, (String, String)>) -> Vec<GameCopies> {
     let mut out = Vec::new();
     let mut games: Vec<PathBuf> =
         std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     games.sort();
     for dir in games {
-        let game = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let mut copies: Vec<PathBuf> = std::fs::read_dir(dir.join("copies")).into_iter().flatten().flatten().map(|e| e.path()).collect();
-        copies.sort();
-        for copy in copies {
+        let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let reviewed: Vec<String> =
+            std::fs::read_to_string(dir.join("reviewed.txt")).unwrap_or_default().lines().map(str::to_string).collect();
+        let mut copies = Vec::new();
+        let mut newest: Vec<PathBuf> = std::fs::read_dir(dir.join("copies")).into_iter().flatten().flatten().map(|e| e.path()).collect();
+        newest.sort();
+        for copy in newest {
             let device = copy.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            out.push(Archived { game: game.clone(), when: format!("newest from {device}"), files: walk_count(&copy, 0), path: copy });
+            let when =
+                std::fs::metadata(&copy).and_then(|m| m.modified()).map(|t| pretty_stamp(&savesync::utc_stamp(t))).unwrap_or_default();
+            copies.push(Kept {
+                label: format!("Newest from {device}"),
+                when,
+                files: walk_count(&copy, 0),
+                path: copy,
+                newest: true,
+                reviewed: true,
+                name: device,
+            });
         }
         for older in savesync::archived(&dir).into_iter().rev() {
             let stamp = older.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let device = std::fs::read_to_string(older.join("device.txt")).unwrap_or_default();
             let files = walk_count(&older, 0).saturating_sub(usize::from(!device.is_empty()));
-            out.push(Archived { game: game.clone(), when: format!("{stamp}, older, from {}", device.trim()), files, path: older });
+            copies.push(Kept {
+                label: format!("Older, from {}", device.trim()),
+                when: pretty_stamp(&stamp),
+                files,
+                path: older,
+                newest: false,
+                reviewed: reviewed.contains(&stamp),
+                name: stamp,
+            });
         }
+        if copies.is_empty() {
+            continue;
+        }
+        let (key, title) = match titles.get(&folder) {
+            Some((key, title)) => (Some(key.clone()), title.clone()),
+            None => (None, "A game that is no longer in the library".to_string()),
+        };
+        out.push(GameCopies { key, title, dir, copies });
     }
     out
 }
@@ -277,6 +411,9 @@ impl App {
                 "Serving paired handhelds on this network (port {}). The handheld connects when a game starts or ends, or when you sync.",
                 droidtop_agent_core::PORT
             )),
+            Service::Attached => ui.label(
+                "Serving paired handhelds: droidtop-agent is already running on this computer. This window shows what it keeps and changes the same files.",
+            ),
             Service::Stopped(why) => ui.colored_label(ui.visuals().error_fg_color, why),
         };
         ui.label(
@@ -287,7 +424,7 @@ impl App {
         );
         ui.add_space(12.0);
         ui.strong("Paired handhelds");
-        let devices = self.agent.devices.lock().unwrap().clone();
+        let devices = self.agent.devices_now();
         if devices.is_empty() {
             ui.label("None yet.");
             if ui.button("Pair a handheld").clicked() {
@@ -317,6 +454,25 @@ impl App {
             self.forget = None;
         }
         ui.add_space(12.0);
+        ui.strong("Addresses handhelds can use");
+        ui.label(
+            RichText::new("On your network or a VPN, a handheld needs this address and the port. Pair with the first one that works.")
+                .weak(),
+        );
+        egui::Grid::new("addresses").striped(true).num_columns(2).show(ui, |ui| {
+            for place in pair::places(droidtop_agent_core::PORT) {
+                ui.label(RichText::new(&place.address).monospace());
+                ui.label(RichText::new(place.label).weak());
+                ui.end_row();
+            }
+            // The address the internet sees comes last: it only works from outside, through a forwarded port.
+            if let Some(mapped) = self.rendezvous.as_ref().and_then(|st| st.mapped.clone()) {
+                ui.label(RichText::new(mapped).monospace());
+                ui.label(RichText::new("from outside your network").weak());
+                ui.end_row();
+            }
+        });
+        ui.add_space(12.0);
         ui.strong("Away from home");
         let settings = self.agent.settings.lock().unwrap().clone();
         if !settings.rendezvous {
@@ -326,8 +482,8 @@ impl App {
         } else {
             match &self.rendezvous {
                 Some(st) => {
-                    if let Some(mapped) = &st.mapped {
-                        ui.label(format!("Your router shows this computer as {mapped}; handhelds find it through global discovery."));
+                    if st.mapped.is_some() {
+                        ui.label("Handhelds find this computer from outside through global discovery (its address is listed above).");
                     } else {
                         ui.label("Looking for this computer's address on the internet…");
                     }
@@ -355,12 +511,19 @@ impl App {
         ui.add_space(6.0);
         let mut pairing = self.pairing.lock().unwrap();
         match &*pairing {
-            Pairing::Showing { code, addresses, qr, until, .. } => {
+            Pairing::Showing { code, places, qr, until, .. } => {
                 ui.label("On the handheld: Settings > Computers > Pair a computer > Use a code from the computer, and type:");
                 ui.add_space(6.0);
                 egui::Grid::new("showing").num_columns(2).show(ui, |ui| {
                     ui.label("Address");
-                    ui.label(RichText::new(addresses.join("   or   ")).size(20.0).monospace());
+                    ui.vertical(|ui| {
+                        for place in places {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(&place.address).size(20.0).monospace());
+                                ui.label(RichText::new(&place.label).weak());
+                            });
+                        }
+                    });
                     ui.end_row();
                     ui.label("Code");
                     ui.label(RichText::new(format!("{} {}", &code[..3], &code[3..])).size(36.0).monospace().strong());
@@ -425,7 +588,7 @@ impl App {
                     let qr = Qr::of(&showing.invite(&self.agent)).unwrap_or(Qr { width: 0, dark: Vec::new() });
                     *pairing = Pairing::Showing {
                         code: showing.code.clone(),
-                        addresses: showing.addresses.clone(),
+                        places: showing.places.clone(),
                         qr,
                         until: showing.until,
                         cancel: cancel.clone(),
@@ -445,83 +608,465 @@ impl App {
         }
     }
 
+    fn rescan_in_background(&self) {
+        if self.scanning.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let (agent, flag) = (self.agent.clone(), self.scanning.clone());
+        std::thread::spawn(move || {
+            agent.rescan();
+            flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
+
+    /// Saves a change to the settings and looks again at what the computer has.
+    fn changed_settings(&self, change: impl FnOnce(&mut Settings)) {
+        change(&mut self.agent.settings.lock().unwrap());
+        let _ = self.agent.save_settings();
+        self.rescan_in_background();
+    }
+
     fn library(&mut self, ui: &mut egui::Ui) {
         ui.heading("Library");
         ui.add_space(6.0);
         let scanning = self.scanning.load(std::sync::atomic::Ordering::Relaxed);
         ui.horizontal(|ui| {
-            if ui.add_enabled(!scanning, egui::Button::new(if scanning { "Scanning…" } else { "Scan now" })).clicked() {
-                self.scanning.store(true, std::sync::atomic::Ordering::Relaxed);
-                let (agent, flag) = (self.agent.clone(), self.scanning.clone());
-                std::thread::spawn(move || {
-                    agent.rescan();
-                    flag.store(false, std::sync::atomic::Ordering::Relaxed);
-                });
+            if ui.add_enabled(!scanning, egui::Button::new(if scanning { "Looking…" } else { "Look again" })).clicked() {
+                self.rescan_in_background();
             }
-            ui.add(egui::TextEdit::singleline(&mut self.library_filter).hint_text("Filter").desired_width(200.0));
+            ui.label(RichText::new("The games on this computer, as droidtop on your handhelds sees them.").weak());
         });
-        let scan = self.agent.scan.lock().unwrap();
-        let Some((at, scan)) = scan.as_ref() else {
-            ui.label("No scan yet; it runs when the agent starts and every half hour.");
+        let settings = self.agent.settings.lock().unwrap().clone();
+        let guard = self.agent.scan.lock().unwrap();
+        let Some((at, scan)) = guard.as_ref() else {
+            ui.label("Looking for games…");
             return;
         };
-        ui.label(RichText::new(format!("Scanned {} min ago.", at.elapsed().as_secs() / 60)).weak());
+        ui.label(
+            RichText::new(format!(
+                "Last looked {} min ago; it looks again by itself every {} minutes.",
+                at.elapsed().as_secs() / 60,
+                settings.scan_minutes
+            ))
+            .weak(),
+        );
+        let mut switch_source: Option<(String, bool)> = None;
+        let mut switch_folder: Option<(PathBuf, bool)> = None;
+        let mut remove_folder: Option<(PathBuf, bool)> = None;
+        let mut add_folder: Option<bool> = None;
+
+        ui.add_space(10.0);
+        ui.strong("Where games are found");
+        ui.label(RichText::new("Switch a place off and its games leave the library on your handhelds too.").weak());
+        egui::Grid::new("sources").striped(true).num_columns(3).show(ui, |ui| {
+            for s in scan.sources.iter().filter(|s| s.name != "game folders" && s.name != "ROM folders") {
+                // A store this computer does not have is not worth a row.
+                if s.enabled && s.count == 0 {
+                    continue;
+                }
+                let mut on = s.enabled;
+                if ui.checkbox(&mut on, source_name(&s.name)).changed() {
+                    switch_source = Some((s.name.clone(), on));
+                }
+                ui.label(RichText::new(places_of(scan, &s.name)).weak().small());
+                ui.label(if s.enabled { format!("{} games", s.count) } else { "off".into() });
+                ui.end_row();
+            }
+        });
+        for (title, roms) in [("Game folders", false), ("ROM folders (laid out by ES-DE system name)", true)] {
+            ui.add_space(8.0);
+            ui.strong(title);
+            let rows: Vec<(PathBuf, bool)> = if roms {
+                settings.rom_folders.iter().map(|p| (p.clone(), false)).collect()
+            } else {
+                droidtop_agent_computer::scan::folders::all_roots(&settings)
+            };
+            if rows.is_empty() {
+                ui.label(RichText::new("None yet.").weak());
+            }
+            egui::Grid::new(title).striped(true).num_columns(4).show(ui, |ui| {
+                for (path, auto) in &rows {
+                    let enabled = !settings.disabled_folders.iter().any(|d| d == path);
+                    let mut on = enabled;
+                    if ui.checkbox(&mut on, path.display().to_string()).changed() {
+                        switch_folder = Some((path.clone(), on));
+                    }
+                    let count = scan
+                        .games
+                        .iter()
+                        .filter(|f| f.base.as_ref().is_some_and(|b| b.starts_with(path)) && f.game.key.starts_with("rom:") == roms)
+                        .count();
+                    ui.label(if enabled { format!("{count} games") } else { "off".into() });
+                    ui.label(RichText::new(if *auto { "found on its own" } else { "added by you" }).weak().small());
+                    if !auto && ui.small_button("Remove").clicked() {
+                        remove_folder = Some((path.clone(), roms));
+                    }
+                    ui.end_row();
+                }
+            });
+            if ui.button(if roms { "Add a ROM folder…" } else { "Add a game folder…" }).clicked() {
+                add_folder = Some(roms);
+            }
+        }
+
+        ui.add_space(12.0);
+        ui.strong(format!("Games ({})", scan.games.len()));
+        ui.add(egui::TextEdit::singleline(&mut self.library_filter).hint_text("Search").desired_width(260.0));
         let filter = self.library_filter.to_lowercase();
-        let wanted = |text: &str| filter.is_empty() || text.to_lowercase().contains(&filter);
-        ui.add_space(8.0);
-        egui::CollapsingHeader::new(format!("Games ({})", scan.games.len())).default_open(true).show(ui, |ui| {
+        let mut picked: Option<String> = None;
+        egui::ScrollArea::vertical().id_salt("games").max_height(260.0).show(ui, |ui| {
             egui::Grid::new("games").striped(true).num_columns(3).show(ui, |ui| {
-                for f in scan.games.iter().filter(|f| wanted(&f.game.title)) {
-                    ui.label(&f.game.title);
-                    ui.label(RichText::new(f.game.install.launcher.clone().unwrap_or_default()).weak());
+                for f in scan.games.iter().filter(|f| filter.is_empty() || f.game.title.to_lowercase().contains(&filter)) {
+                    let chosen = self.selected.as_deref() == Some(f.game.key.as_str());
+                    if ui.selectable_label(chosen, &f.game.title).clicked() {
+                        picked = Some(f.game.key.clone());
+                    }
+                    ui.label(RichText::new(source_name(f.game.install.launcher.as_deref().unwrap_or(""))).weak());
                     ui.label(RichText::new(f.game.install.path.clone().unwrap_or_default()).weak().small());
                     ui.end_row();
                 }
             });
         });
-        egui::CollapsingHeader::new(format!("Apps ({})", scan.apps.len())).show(ui, |ui| {
-            egui::Grid::new("apps").striped(true).num_columns(3).show(ui, |ui| {
-                for a in scan.apps.iter().filter(|a| wanted(&a.name)) {
-                    ui.label(&a.name);
-                    ui.label(RichText::new(a.source_label()).weak());
-                    ui.label(RichText::new(a.version.clone().unwrap_or_default()).weak());
-                    ui.end_row();
-                }
-            });
-        });
-        egui::CollapsingHeader::new(format!("Programs droidtop can sync with ({})", scan.programs.len())).show(ui, |ui| {
-            for p in &scan.programs {
-                ui.label(format!("{}: {}", p.name, p.note));
+        let selected_game = self.selected.as_ref().and_then(|k| scan.games.iter().find(|f| &f.game.key == k)).cloned();
+        let apps = scan.apps.len();
+        let programs: Vec<String> = scan.programs.iter().map(|p| format!("{}: {}", p.name, p.note)).collect();
+        let problems = scan.problems.clone();
+        drop(guard);
+
+        if let Some(key) = picked {
+            self.selected = Some(key);
+            self.draft_for = None;
+        }
+        if let Some(game) = selected_game {
+            self.game_marks(ui, &game);
+        }
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new(format!("Programs droidtop can sync with ({})", programs.len())).show(ui, |ui| {
+            for p in &programs {
+                ui.label(p);
             }
         });
-        if !scan.problems.is_empty() {
+        ui.label(
+            RichText::new(format!("{apps} other programs are installed here; they show in Apps on a handheld that asks for them."))
+                .weak()
+                .small(),
+        );
+        if !problems.is_empty() {
             ui.add_space(8.0);
             ui.strong("Could not read");
-            for p in &scan.problems {
+            for p in &problems {
                 ui.colored_label(ui.visuals().warn_fg_color, p);
             }
         }
+
+        if let Some((name, on)) = switch_source {
+            self.changed_settings(|s| {
+                s.disabled_sources.retain(|d| *d != name);
+                if !on {
+                    s.disabled_sources.push(name);
+                }
+            });
+        }
+        if let Some((path, on)) = switch_folder {
+            self.changed_settings(|s| {
+                s.disabled_folders.retain(|d| *d != path);
+                if !on {
+                    s.disabled_folders.push(path);
+                }
+            });
+        }
+        if let Some((path, roms)) = remove_folder {
+            self.changed_settings(|s| {
+                let list = if roms { &mut s.rom_folders } else { &mut s.game_folders };
+                list.retain(|f| *f != path);
+                s.disabled_folders.retain(|d| *d != path);
+            });
+        }
+        if let Some(roms) = add_folder {
+            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                self.changed_settings(|s| {
+                    let list = if roms { &mut s.rom_folders } else { &mut s.game_folders };
+                    if !list.contains(&folder) {
+                        list.push(folder);
+                    }
+                });
+            }
+        }
+    }
+
+    /// One game's details and the person's own marks on it, which travel to
+    /// every paired handheld like marks made there.
+    fn game_marks(&mut self, ui: &mut egui::Ui, game: &Found) {
+        let key = game.game.key.clone();
+        let marks = self.agent.library_now().games.get(&key).map(|r| r.marks.clone()).unwrap_or_default();
+        let flag = |field: &str| marks.get(field).and_then(|m| m.value.as_bool()).unwrap_or(false);
+        if self.draft_for.as_deref() != Some(key.as_str()) {
+            let names: Vec<String> = marks
+                .get("collections")
+                .and_then(|m| m.value.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            self.collections_draft = names.join(", ");
+            self.draft_for = Some(key.clone());
+        }
+        ui.add_space(8.0);
+        ui.group(|ui| {
+            ui.strong(&game.game.title);
+            ui.label(
+                RichText::new(format!(
+                    "{} · {}",
+                    source_name(game.game.install.launcher.as_deref().unwrap_or("")),
+                    game.game.install.path.clone().unwrap_or_default()
+                ))
+                .weak()
+                .small(),
+            );
+            ui.label(RichText::new("Your marks on this game: handhelds get them the next time they sync.").weak().small());
+            for (field, label) in [("favourite", "Favourite"), ("hidden", "Hidden")] {
+                let mut on = flag(field);
+                if ui.checkbox(&mut on, label).changed() {
+                    self.agent.set_mark(&key, field, serde_json::Value::Bool(on));
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.label("Collections");
+                ui.add(egui::TextEdit::singleline(&mut self.collections_draft).hint_text("Done, Platformers").desired_width(240.0));
+                if ui.button("Save").clicked() {
+                    let mut names: Vec<String> =
+                        self.collections_draft.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
+                    names.sort();
+                    names.dedup();
+                    self.agent.set_mark(&key, "collections", serde_json::json!(names));
+                }
+            });
+        });
     }
 
     fn saves(&mut self, ui: &mut egui::Ui) {
         ui.heading("Saves");
         ui.add_space(6.0);
         ui.label(
-            "When two devices both changed a game's saves, the newest copy wins (or the preferred device's: Settings). The other device's saves are not lost: each device keeps its newest overwritten copy, and a few older ones. These are the ones kept on this computer.",
+            "Saves are kept in step between this computer and your handhelds. When both changed a game's saves, the newest copy wins and the other is kept here, so nothing is lost.",
         );
         ui.add_space(8.0);
-        if self.archive.is_empty() {
-            ui.label("Nothing is kept.");
-        }
-        egui::Grid::new("archive").striped(true).num_columns(4).show(ui, |ui| {
-            for a in &self.archive {
-                ui.label(&a.game);
-                ui.label(&a.when);
-                ui.label(format!("{} files", a.files));
-                if ui.button("Open folder").clicked() {
-                    open_folder(&a.path);
+        let devices = self.agent.devices_now();
+        let mut preferred = self.agent.settings.lock().unwrap().primary_device.clone();
+        let before = preferred.clone();
+        ui.horizontal(|ui| {
+            ui.label("When both changed, prefer");
+            let chosen = preferred
+                .as_ref()
+                .and_then(|id| devices.iter().find(|d| &d.id == id))
+                .map(|d| format!("{}'s saves", d.name))
+                .unwrap_or_else(|| "the newest saves".into());
+            egui::ComboBox::from_id_salt("prefer").selected_text(chosen).show_ui(ui, |ui| {
+                ui.selectable_value(&mut preferred, None, "the newest saves");
+                for d in &devices {
+                    ui.selectable_value(&mut preferred, Some(d.id.clone()), format!("{}'s saves", d.name));
                 }
-                ui.end_row();
+            });
+        });
+        if preferred != before {
+            self.agent.settings.lock().unwrap().primary_device = preferred;
+            let _ = self.agent.save_settings();
+        }
+        let outcome = self.save_outcome.lock().unwrap().clone();
+        if let Some(outcome) = &outcome {
+            ui.add_space(6.0);
+            outcome_label(ui, outcome);
+        }
+
+        ui.add_space(10.0);
+        let to_review = self.archive.iter().filter(|g| g.copies.iter().any(|c| !c.newest && !c.reviewed)).count();
+        if to_review > 0 {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!("{to_review} games have an older copy kept after both sides changed. Look at them, then restore one or keep what is here."),
+            );
+        }
+        ui.strong("Find a game");
+        ui.add(egui::TextEdit::singleline(&mut self.saves_filter).hint_text("Search your games").desired_width(260.0));
+        let filter = self.saves_filter.to_lowercase();
+        let mut picked: Option<(String, String)> = None;
+        {
+            let guard = self.agent.scan.lock().unwrap();
+            let kept: Vec<&String> = self.archive.iter().filter_map(|g| g.key.as_ref()).collect();
+            let custom: Vec<String> = self.agent.saves.lock().unwrap().keys().cloned().collect();
+            let mut shown = 0;
+            ui.horizontal_wrapped(|ui| {
+                if let Some((_, scan)) = guard.as_ref() {
+                    for f in scan.games.iter() {
+                        let interesting = kept.contains(&&f.game.key) || custom.contains(&f.game.key);
+                        let matches = !filter.is_empty() && f.game.title.to_lowercase().contains(&filter);
+                        if ((filter.is_empty() && interesting) || matches) && shown < 40 {
+                            shown += 1;
+                            let chosen = self.saves_game.as_ref().map(|(k, _)| k) == Some(&f.game.key);
+                            if ui.selectable_label(chosen, &f.game.title).clicked() {
+                                picked = Some((f.game.key.clone(), f.game.title.clone()));
+                            }
+                        }
+                    }
+                }
+                if shown == 0 {
+                    let hint = if filter.is_empty() { "Search for a game, or pick one that has kept copies." } else { "No game matches." };
+                    ui.label(RichText::new(hint).weak());
+                }
+            });
+        }
+        if let Some((key, title)) = picked {
+            self.pick_saves_game(key, title);
+        }
+        if let Some((key, title)) = self.saves_game.clone() {
+            self.saves_detail(ui, &key, &title);
+        }
+        let orphans: Vec<&GameCopies> = self.archive.iter().filter(|g| g.key.is_none()).collect();
+        if !orphans.is_empty() {
+            ui.add_space(10.0);
+            ui.strong("Kept copies of games that are no longer in the library");
+            for g in orphans {
+                ui.horizontal(|ui| {
+                    ui.label(&g.title);
+                    if ui.small_button("Open folder").clicked() {
+                        open_folder(&g.dir);
+                    }
+                });
+            }
+        }
+    }
+
+    /// Looks up where a game's saves are, off the drawing thread.
+    fn pick_saves_game(&mut self, key: String, title: String) {
+        self.saves_game = Some((key.clone(), title.clone()));
+        let info: Arc<Mutex<Option<SaveInfo>>> = Default::default();
+        self.save_info = info.clone();
+        let agent = self.agent.clone();
+        std::thread::spawn(move || {
+            let game = GameRef { key: key.clone(), title };
+            let custom = agent.saves.lock().unwrap().get(&key).map(|u| u.patterns.clone()).unwrap_or_default();
+            let (patterns, files) = match agent.save_lookup(&game, false) {
+                Some((spec, roots, _)) => {
+                    let files = saves::collect(&spec, &roots);
+                    (spec.patterns, files)
+                }
+                None => (Vec::new(), Vec::new()),
+            };
+            *info.lock().unwrap() = Some(SaveInfo { patterns, custom, files });
+        });
+    }
+
+    fn saves_detail(&mut self, ui: &mut egui::Ui, key: &str, title: &str) {
+        ui.add_space(10.0);
+        ui.group(|ui| {
+            ui.strong(title);
+            let info = self.save_info.lock().unwrap().clone();
+            ui.add_space(4.0);
+            ui.label("Where its saves are");
+            match &info {
+                None => {
+                    ui.label(RichText::new("Looking…").weak());
+                }
+                Some(info) if info.patterns.is_empty() => {
+                    ui.label(RichText::new("Not known yet. Add the folder below and it will be synced.").weak());
+                }
+                Some(info) => {
+                    for p in &info.patterns {
+                        let how = if info.custom.contains(p) { "set by you" } else { "detected" };
+                        ui.label(RichText::new(format!("{p}   ({how})")).monospace().small());
+                    }
+                    ui.label(RichText::new(format!("{} files found now.", info.files.len())).weak());
+                    if let Some(folder) = info.files.first().and_then(|(_, p)| p.parent()) {
+                        if ui.small_button("Open folder").clicked() {
+                            open_folder(folder);
+                        }
+                    }
+                }
+            }
+            let mut remove: Option<String> = None;
+            if let Some(info) = &info {
+                for p in &info.custom {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("Yours: {p}")).monospace().small());
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(p.clone());
+                        }
+                    });
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.template_draft).hint_text("<winDocuments>/My Games/Name").desired_width(300.0));
+                if ui.add_enabled(!self.template_draft.trim().is_empty(), egui::Button::new("Add location")).clicked() {
+                    let template = self.template_draft.trim().to_string();
+                    let result = if saves::split(&template).is_none() {
+                        Err(format!("Start with one of: {}", saves::TOKENS.join(", ")))
+                    } else {
+                        self.agent.saves.lock().unwrap().entry(key.to_string()).or_default().patterns.push(template);
+                        self.agent.save_saves().map(|()| "Added.".to_string()).map_err(|e| e.to_string())
+                    };
+                    if result.is_ok() {
+                        self.template_draft.clear();
+                        self.pick_saves_game(key.to_string(), title.to_string());
+                    }
+                    *self.save_outcome.lock().unwrap() = Some(result);
+                }
+            });
+            ui.label(
+                RichText::new("A location starts with <winDocuments>, <winAppData>, <winLocalAppData> or <base> (the game's own folder).")
+                    .weak()
+                    .small(),
+            );
+            if let Some(p) = remove {
+                if let Some(u) = self.agent.saves.lock().unwrap().get_mut(key) {
+                    u.patterns.retain(|x| *x != p);
+                }
+                let _ = self.agent.save_saves();
+                self.pick_saves_game(key.to_string(), title.to_string());
+            }
+
+            ui.add_space(8.0);
+            ui.label("Copies kept on this computer");
+            match self.archive.iter().find(|g| g.key.as_deref() == Some(key)).cloned() {
+                None => {
+                    ui.label(RichText::new("Nothing is kept yet: a copy is kept when a sync would overwrite saves that differ.").weak());
+                }
+                Some(game) => {
+                    let mut restore: Option<PathBuf> = None;
+                    egui::Grid::new("copies").striped(true).num_columns(5).show(ui, |ui| {
+                        for c in &game.copies {
+                            ui.label(&c.label);
+                            ui.label(&c.when);
+                            ui.label(format!("{} files", c.files));
+                            ui.horizontal(|ui| {
+                                if ui.small_button("Restore").clicked() {
+                                    restore = Some(c.path.clone());
+                                }
+                                if ui.small_button("Open folder").clicked() {
+                                    open_folder(&c.path);
+                                }
+                            });
+                            if !c.newest && !c.reviewed {
+                                ui.colored_label(ui.visuals().warn_fg_color, "to look at");
+                            } else {
+                                ui.label("");
+                            }
+                            ui.end_row();
+                        }
+                    });
+                    if game.copies.iter().any(|c| !c.newest && !c.reviewed) && ui.button("Keep what is here (I have looked)").clicked() {
+                        let names: Vec<String> = game.copies.iter().filter(|c| !c.newest).map(|c| c.name.clone()).collect();
+                        let _ = std::fs::write(game.dir.join("reviewed.txt"), names.join("\n"));
+                        self.loaded_at = Instant::now() - Duration::from_secs(3600);
+                    }
+                    if let Some(copy) = restore {
+                        let (agent, outcome) = (self.agent.clone(), self.save_outcome.clone());
+                        let game_ref = GameRef { key: key.to_string(), title: title.to_string() };
+                        std::thread::spawn(move || {
+                            let result = agent
+                                .restore_saves(&game_ref, &copy)
+                                .map(|n| format!("Put {n} files back. What was here before is kept as a copy."));
+                            *outcome.lock().unwrap() = Some(result);
+                        });
+                    }
+                }
             }
         });
     }
@@ -591,7 +1136,7 @@ impl App {
             self.settings_outcome = Some(autostart::set(self.autostart));
             self.autostart = autostart::enabled();
         }
-        let devices = self.agent.devices.lock().unwrap().clone();
+        let devices = self.agent.devices_now();
         let draft = self.settings.get_or_insert_with(|| self.agent.settings.lock().unwrap().clone());
         let mut name = draft.name.clone().unwrap_or_default();
         ui.add_space(8.0);
@@ -723,12 +1268,25 @@ mod tests {
         for device in ["DESKTOP", "DESKTOP", "Retroid Pocket 5"] {
             savesync::keep_copy(std::iter::once(("<base>/save.dat".to_string(), save.clone())), &game, device).unwrap();
         }
-        let list = archived(&root);
-        let whens: Vec<&str> = list.iter().map(|a| a.when.as_str()).collect();
-        assert_eq!(&whens[..2], &["newest from DESKTOP", "newest from Retroid Pocket 5"]);
-        assert!(whens[2].ends_with("older, from DESKTOP"), "{whens:?}");
-        assert!(list.iter().all(|a| a.files == 1));
+        let titles =
+            std::collections::BTreeMap::from([("steam_440".to_string(), ("steam:440".to_string(), "Team Fortress 2".to_string()))]);
+        let list = archived(&root, &titles);
+        // One game, named by its title and not by its folder.
+        assert_eq!((list.len(), list[0].title.as_str(), list[0].key.as_deref()), (1, "Team Fortress 2", Some("steam:440")));
+        let labels: Vec<&str> = list[0].copies.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(&labels[..2], &["Newest from DESKTOP", "Newest from Retroid Pocket 5"]);
+        assert_eq!(labels[2], "Older, from DESKTOP");
+        assert!(list[0].copies.iter().all(|a| a.files == 1));
+        assert!(list[0].copies[2].when.ends_with("UTC"));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn stamps_read_as_dates_and_sources_as_names() {
+        assert_eq!(pretty_stamp("20261008T224500Z"), "2026-10-08 22:45 UTC");
+        assert_eq!(source_name("battlenet"), "Battle.net");
+        assert_eq!(source_name("folder"), "Game folder");
+        assert_eq!(source_name("Battle.net"), "Battle.net");
     }
 
     #[test]

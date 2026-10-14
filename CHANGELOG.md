@@ -6,6 +6,28 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- The window attaches to a running agent instead of competing with it, and
+  every copy of the agent (headless, window, command line) reads the paired
+  devices and the library from their files again when they changed and writes
+  them under a lock. Before, a copy that started earlier wrote its empty
+  device list over a pairing, so Status said "None yet", and wrote its old
+  library over marks (Droidtop/tracker#528, #531).
+- A folder named as one run of words (`DtSyncTest v1.1`) is titled
+  "Dt Sync Test" as droidtop titles it, so it is one game on the computer and
+  the handheld: the handheld sees the computer's v1.1 and its marks travel
+  (Droidtop/tracker#529). Games found under the old title are re-found under
+  the new one at the next scan.
+- A handheld whose computer lost its library sends everything again and takes
+  everything, so its favourites come back (Droidtop/tracker#531).
+- Marks can be set on the computer: favourite, hidden and collections in the
+  window's Library page, `droidtop-agent mark` and `marks` on a command line.
+- The window's Library page lists every place games are found with a switch
+  and a game count, adds and removes game and ROM folders with the system's
+  folder picker, and searches the games with each one's source and place.
+  Saves shows games by title, where their saves are (editable), each device's
+  newest copy and the older ones with their dates, restore, open folder, and
+  the preferred device.
+
 - A game's version can be copied between a handheld and a computer
   (`core::gamecopy`, `game_pull` and `game_push`; Droidtop/tracker#469 part
   3). It arrives as a new folder beside the game's others, resumable and

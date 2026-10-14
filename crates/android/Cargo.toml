@@ -16,3 +16,7 @@ droidtop-agent-core = { path = "../core" }
 jni = { version = "0.21", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# The mesh test runs the real agent as one of its computers.
+droidtop-agent = { path = "../agent" }

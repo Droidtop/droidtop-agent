@@ -19,7 +19,7 @@ mod battlenet;
 mod engines;
 mod epic;
 mod flashpoint;
-mod folders;
+pub mod folders;
 mod gog;
 pub mod installed;
 mod itch;
@@ -63,8 +63,18 @@ pub struct Program {
     pub note: String,
 }
 
+/// One source a scan reads (Steam, GOG, game folders...): whether the person
+/// has it on, and how many games it found.
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceReport {
+    pub name: String,
+    pub enabled: bool,
+    pub count: usize,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Scan {
+    pub sources: Vec<SourceReport>,
     pub games: Vec<Found>,
     /// The applications installed here, games aside (`installed`).
     pub apps: Vec<installed::InstalledApp>,
@@ -110,8 +120,16 @@ pub fn scan(settings: &Settings, dirs: &Dirs) -> Scan {
     ];
     let mut by_key: BTreeMap<String, Found> = BTreeMap::new();
     for (name, source) in sources {
+        let enabled = !settings.disabled_sources.iter().any(|d| d == name);
+        out.sources.push(SourceReport { name: name.to_string(), enabled, count: 0 });
+        if !enabled {
+            continue;
+        }
         match source(settings) {
             Ok(found) => {
+                if let Some(report) = out.sources.last_mut() {
+                    report.count = found.len();
+                }
                 for f in found {
                     // The first source to name a game keeps it: a store's own
                     // record beats a folder walk of the same install.

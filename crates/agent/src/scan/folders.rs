@@ -205,7 +205,34 @@ pub fn title_and_version(name: &str) -> (String, Option<String>) {
     if s.trim().is_empty() {
         return (name.to_string(), None);
     }
-    (s.trim().to_string(), version)
+    (split_run_together(s.trim()), version)
+}
+
+/// A title written as one run of words, `DtSyncTest`, read as the words it is
+/// made of, as droidtop reads a folder's name (`GameTitleParser`,
+/// Droidtop/tracker#282): a space where a lower-case letter meets a capital,
+/// and before the last capital of a capital run that starts a word. Only a
+/// name with no space in it. Both ends must make the same words or the same
+/// game is two games (Droidtop/tracker#529).
+pub fn split_run_together(title: &str) -> String {
+    if title.contains(' ') {
+        return title.to_string();
+    }
+    let chars: Vec<char> = title.chars().collect();
+    let mut out = String::with_capacity(title.len() + 4);
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 {
+            let prev = chars[i - 1];
+            let lower_then_capital = prev.is_ascii_lowercase() && c.is_ascii_uppercase();
+            let capital_run_ends =
+                prev.is_ascii_uppercase() && c.is_ascii_uppercase() && chars.get(i + 1).is_some_and(|n| n.is_ascii_lowercase());
+            if lower_then_capital || capital_run_ends {
+                out.push(' ');
+            }
+        }
+        out.push(*c);
+    }
+    out
 }
 
 /// [s] without the platform, store and edition words a download's name
@@ -487,18 +514,25 @@ fn found(path: &Path, engine: Option<&'static str>) -> Found {
 /// the top of each fixed drive (`~/Games` elsewhere). A folder inside
 /// another is walked once, as part of the outer one.
 pub fn roots(settings: &Settings) -> Vec<PathBuf> {
-    let mut all: Vec<PathBuf> = settings.game_folders.clone();
+    all_roots(settings).into_iter().map(|(path, _)| path).filter(|p| !settings.disabled_folders.iter().any(|d| same_path(d, p))).collect()
+}
+
+/// Every folder the scan knows of, with whether it was found on its own
+/// (a `Games` folder) rather than added by the person; the ones the person
+/// switched off included.
+pub fn all_roots(settings: &Settings) -> Vec<(PathBuf, bool)> {
+    let mut all: Vec<(PathBuf, bool)> = settings.game_folders.iter().map(|p| (p.clone(), false)).collect();
     for found in discovered() {
-        if !all.iter().any(|r| same_path(r, &found)) {
-            all.push(found);
+        if !all.iter().any(|(r, _)| same_path(r, &found)) {
+            all.push((found, true));
         }
     }
-    let canonical: Vec<PathBuf> = all.iter().map(|p| p.canonicalize().unwrap_or_else(|_| p.clone())).collect();
+    let canonical: Vec<PathBuf> = all.iter().map(|(p, _)| p.canonicalize().unwrap_or_else(|_| p.clone())).collect();
     let outermost: Vec<bool> = canonical.iter().map(|c| !canonical.iter().any(|o| o != c && c.starts_with(o))).collect();
     all.into_iter().zip(outermost).filter_map(|(p, keep)| keep.then_some(p)).collect()
 }
 
-fn same_path(a: &Path, b: &Path) -> bool {
+pub fn same_path(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
@@ -614,7 +648,10 @@ mod tests {
     #[test]
     fn titles_lose_the_version_a_download_adds() {
         assert_eq!(title_and_version("Eternum-0.9.5-pc"), ("Eternum".into(), Some("0.9.5".into())));
-        assert_eq!(title_and_version("LoveAndCorruption - v0.4.8 Public"), ("LoveAndCorruption".into(), Some("0.4.8".into())));
+        assert_eq!(title_and_version("LoveAndCorruption - v0.4.8 Public"), ("Love And Corruption".into(), Some("0.4.8".into())));
+        assert_eq!(title_and_version("DtSyncTest v1.1"), ("Dt Sync Test".into(), Some("1.1".into())));
+        assert_eq!(split_run_together("BeingADik"), "Being A Dik");
+        assert_eq!(split_run_together("GTA"), "GTA");
         assert_eq!(title_and_version("Harem_Hotel-v0.20_Pre-Alpha-pc"), ("Harem Hotel".into(), Some("0.20".into())));
         assert_eq!(title_and_version("Chubby_Story_Windows_1.15.0"), ("Chubby Story".into(), Some("1.15.0".into())));
         assert_eq!(title_and_version("Robolife 2 - Nova Duty v1.71"), ("Robolife 2 - Nova Duty".into(), Some("1.71".into())));
@@ -735,7 +772,7 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                ("EA/SimCity", "title:simcity"),
+                ("EA/SimCity", "title:sim city"),
                 ("GOG/Cyberpunk 2077", "gog:1423049311"),
                 ("Steam/steamapps/common/Big Game", "steam:42"),
                 ("Ubisoft/Far Cry 5", "title:far cry 5"),

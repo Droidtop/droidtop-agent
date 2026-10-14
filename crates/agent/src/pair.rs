@@ -30,6 +30,8 @@ pub struct Showing {
     pub code: String,
     /// `ip:port` for each of this computer's IPv4 addresses.
     pub addresses: Vec<String>,
+    /// Every address a handheld can use, labelled (see [`places`]), with this port.
+    pub places: Vec<Place>,
     pub until: Instant,
 }
 
@@ -42,6 +44,74 @@ impl Showing {
     }
 }
 
+/// An address a handheld can reach this computer at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    /// What kind of network it is on, in the person's words ("Local network",
+    /// "Tailscale", "ZeroTier", "VPN", "Virtual machines (WSL, Hyper-V, Docker)", "IPv6").
+    pub label: String,
+    /// `ip:port`, or `[ip]:port` for IPv6.
+    pub address: String,
+}
+
+/// Every address of this computer a handheld can use, with [`port`], one list
+/// for the pairing screens and the command line: each interface's IPv4
+/// address, then global IPv6 addresses. The address the internet sees is not
+/// among them (the Status page shows it last, as "from outside your network").
+pub fn places(port: u16) -> Vec<Place> {
+    let mut v4 = Vec::new();
+    let mut v6 = Vec::new();
+    for i in if_addrs::get_if_addrs().unwrap_or_default() {
+        if i.is_loopback() {
+            continue;
+        }
+        match i.ip() {
+            std::net::IpAddr::V4(ip) if !ip.is_link_local() => {
+                v4.push(Place { label: network_kind(&i.name, ip), address: format!("{ip}:{port}") });
+            }
+            std::net::IpAddr::V6(ip) if ip.segments()[0] & 0xe000 == 0x2000 => {
+                v6.push(Place { label: "IPv6".into(), address: format!("[{ip}]:{port}") });
+            }
+            _ => {}
+        }
+    }
+    // The ones on the person's own network first, then VPNs, then virtual machines' networks.
+    v4.sort_by_key(|p| match p.label.as_str() {
+        "Local network" => 0,
+        l if l.starts_with("Virtual") => 3,
+        "Tailscale" | "ZeroTier" | "VPN" => 1,
+        _ => 2,
+    });
+    v4.extend(v6);
+    v4
+}
+
+/// What an interface is, from its name and address.
+fn network_kind(name: &str, ip: std::net::Ipv4Addr) -> String {
+    let n = name.to_lowercase();
+    let o = ip.octets();
+    let label = if n.contains("tailscale") || (o[0] == 100 && (64..128).contains(&o[1])) {
+        "Tailscale"
+    } else if n.contains("zerotier") || n.starts_with("zt") {
+        "ZeroTier"
+    } else if n.contains("wireguard") || n.starts_with("wg") || n.contains("tun") || n.contains("vpn") || n.contains("ppp") {
+        "VPN"
+    } else if n.contains("vethernet")
+        || n.contains("wsl")
+        || n.contains("docker")
+        || n.starts_with("veth")
+        || n.starts_with("br-")
+        || n.contains("virtual")
+        || n.contains("vmnet")
+        || n.contains("hyper-v")
+    {
+        "Virtual machines (WSL, Hyper-V, Docker)"
+    } else {
+        "Local network"
+    };
+    label.into()
+}
+
 /// Opens the pairing port and makes a new code.
 pub fn listen() -> Result<Showing, String> {
     let listener = TcpListener::bind(("0.0.0.0", PAIR_PORT))
@@ -49,10 +119,9 @@ pub fn listen() -> Result<Showing, String> {
         .map_err(|e| format!("Could not open a port for pairing: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let addresses: Vec<String> = if_addrs::get_if_addrs()
-        .map(|all| all.into_iter().filter(|i| !i.is_loopback() && i.ip().is_ipv4()).map(|i| format!("{}:{port}", i.ip())).collect())
-        .unwrap_or_default();
-    Ok(Showing { listener, port, code: new_code(), addresses, until: Instant::now() + SHOW_FOR })
+    let all = places(port);
+    let addresses = all.iter().filter(|p| !p.address.starts_with('[')).map(|p| p.address.clone()).collect();
+    Ok(Showing { listener, port, code: new_code(), addresses, places: all, until: Instant::now() + SHOW_FOR })
 }
 
 /// Shows this computer's addresses and a new code on the console, and waits for a handheld.
@@ -60,8 +129,12 @@ pub fn show(agent: &Agent) -> Result<String, String> {
     let showing = listen()?;
     let (port, code) = (showing.port, &showing.code);
     println!("On droidtop: Settings > Computers > Pair a computer > Use a code from the computer.");
-    let addresses = &showing.addresses;
-    println!("Address: {}", if addresses.is_empty() { format!("this computer's address, port {port}") } else { addresses.join("  or  ") });
+    if showing.places.is_empty() {
+        println!("Address: this computer's address, port {port}");
+    }
+    for (i, place) in showing.places.iter().enumerate() {
+        println!("{} {}  ({})", if i == 0 { "Address:" } else { "     or:" }, place.address, place.label);
+    }
     println!("Code:    {} {}", &code[..3], &code[3..]);
     println!("(An Android emulator reaches this computer at 10.0.2.2:{port}.) Waiting up to 10 minutes; Ctrl+C stops.");
     wait(agent, showing, &AtomicBool::new(false))
@@ -135,4 +208,28 @@ pub fn pair(agent: &Agent, input: &str) -> Result<String, String> {
     }
     agent.add_device(paired.peer, &paired.name).map_err(|e| format!("Paired, but the pairing could not be saved: {e}"))?;
     Ok(paired.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn interfaces_are_named_for_what_they_are() {
+        assert_eq!(network_kind("Ethernet", Ipv4Addr::new(192, 168, 1, 20)), "Local network");
+        assert_eq!(network_kind("Tailscale", Ipv4Addr::new(100, 91, 90, 11)), "Tailscale");
+        assert_eq!(network_kind("eth9", Ipv4Addr::new(100, 100, 1, 1)), "Tailscale");
+        assert_eq!(network_kind("ZeroTier One Virtual Port", Ipv4Addr::new(10, 147, 17, 3)), "ZeroTier");
+        assert_eq!(network_kind("wg0", Ipv4Addr::new(10, 8, 0, 2)), "VPN");
+        assert!(network_kind("vEthernet (WSL)", Ipv4Addr::new(172, 25, 128, 1)).starts_with("Virtual"));
+    }
+
+    #[test]
+    fn the_list_has_the_port_and_no_loopback() {
+        for place in places(47612) {
+            assert!(place.address.ends_with(":47612"), "{place:?}");
+            assert!(!place.address.starts_with("127."), "{place:?}");
+        }
+    }
 }

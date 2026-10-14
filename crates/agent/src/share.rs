@@ -39,13 +39,10 @@ pub fn process(agent: &Agent) -> Result<(), String> {
 fn handle(agent: &Agent, share: &std::path::Path, from: &PeerId, envelope: Envelope, contents: &[u8]) {
     match envelope {
         Envelope::Library { changes } => {
-            let changed = {
-                let mut lib = agent.library.lock().unwrap();
-                changes.into_iter().filter(|c| lib.apply(c.clone())).count()
-            };
-            if changed > 0 {
-                let _ = agent.save_library();
-            }
+            agent.edit_library(|lib| {
+                let changed = changes.into_iter().filter(|c| lib.apply(c.clone())).count();
+                ((), changed > 0)
+            });
         }
         Envelope::Saves { game, base, files, primary_computer } => {
             let prefer = Prefer { here: agent.is_primary(from), there: primary_computer };
@@ -135,22 +132,23 @@ fn apply_saves(
 
 /// Leaves each paired device the library changes it has not been sent.
 fn send_library(agent: &Agent, share: &std::path::Path) -> Result<(), String> {
-    let devices: Vec<String> = agent.devices.lock().unwrap().iter().map(|d| d.id.clone()).collect();
+    let devices: Vec<String> = agent.devices_now().iter().map(|d| d.id.clone()).collect();
     for id in devices {
         let Ok(peer) = PeerId::from_hex(&id) else { continue };
         let (changes, seq) = {
-            let lib = agent.library.lock().unwrap();
+            let lib = agent.library_now();
             let pushed = lib.cursors.get(&id).map(|c| c.pushed).unwrap_or(0);
-            let (changes, seq) = lib.changes_since(pushed);
-            (changes, seq)
+            lib.changes_since(pushed)
         };
         if changes.is_empty() {
             continue;
         }
         let payload = mailbox::pack(&Envelope::Library { changes }, &[]).map_err(|e| e.to_string())?;
         mailbox::post(share, &agent.key, &peer, &payload).map_err(|e| e.to_string())?;
-        agent.library.lock().unwrap().cursors.entry(id).or_default().pushed = seq;
-        agent.save_library().map_err(|e| e.to_string())?;
+        agent.edit_library(|lib| {
+            lib.cursors.entry(id).or_default().pushed = seq;
+            ((), true)
+        });
     }
     Ok(())
 }

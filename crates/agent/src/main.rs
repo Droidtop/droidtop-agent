@@ -30,6 +30,11 @@ Usage:
   droidtop-agent folders               List game and ROM folders
   droidtop-agent folders add [--roms] <path>
   droidtop-agent folders remove <path>
+  droidtop-agent mark <game> favourite|hidden|completed on|off
+  droidtop-agent mark <game> collections <name>[,<name>...]
+  droidtop-agent marks <game>          Your marks on a game, from this computer (they reach your handhelds
+                                       when they sync, like marks made on a handheld); <game> is a key such
+                                       as steam:440 or a title in quotes
   droidtop-agent saves <game>          Where a game keeps its saves here, and the files found
                                        (<game> is a key such as steam:440, or a title)
   droidtop-agent saves add <game> <template>...
@@ -107,6 +112,33 @@ fn main() {
         ["folders", "add", "--roms", path] => folders(&agent, path, true, true),
         ["folders", "add", path] => folders(&agent, path, false, true),
         ["folders", "remove", path] => folders(&agent, path, false, false),
+        ["mark", game, field @ ("favourite" | "hidden" | "completed"), on @ ("on" | "off")] => {
+            let key = game_ref(game).key;
+            agent.set_mark(&key, field, serde_json::Value::Bool(*on == "on"));
+            println!("{key}: {field} {on}");
+            Ok(())
+        }
+        ["mark", game, "collections", names @ ..] if !names.is_empty() => {
+            let mut list: Vec<String> = names.join(" ").split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
+            list.sort();
+            list.dedup();
+            let key = game_ref(game).key;
+            agent.set_mark(&key, "collections", serde_json::json!(list));
+            println!("{key}: collections {}", list.join(", "));
+            Ok(())
+        }
+        ["marks", game] => {
+            let key = game_ref(game).key;
+            match agent.library_now().games.get(&key) {
+                Some(record) if !record.marks.is_empty() => {
+                    for (field, m) in &record.marks {
+                        println!("{field}: {}", m.value);
+                    }
+                }
+                _ => println!("No marks are set on that game."),
+            }
+            Ok(())
+        }
         ["saves", "add", game, templates @ ..] if !templates.is_empty() => saves_add(&agent, game, templates),
         ["saves", "remove", game] => {
             let removed = agent.saves.lock().unwrap().remove(&game_ref(game).key).is_some();
@@ -233,7 +265,7 @@ fn main() {
         }
         ["primary", id] => {
             let matches: Vec<String> =
-                agent.devices.lock().unwrap().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
+                agent.devices_now().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
             match matches.as_slice() {
                 [one] => {
                     agent.settings.lock().unwrap().primary_device = Some(one.clone());
@@ -261,7 +293,7 @@ fn main() {
 }
 
 fn devices(agent: &Agent) {
-    let devices = agent.devices.lock().unwrap();
+    let devices = agent.devices_now();
     if devices.is_empty() {
         println!("No handheld is paired. On droidtop open Settings > Computers > Pair a computer, then run: droidtop-agent pair <code>");
     }
@@ -273,8 +305,7 @@ fn devices(agent: &Agent) {
 }
 
 fn unpair(agent: &Agent, id: &str) -> Result<(), String> {
-    let matches: Vec<String> =
-        agent.devices.lock().unwrap().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
+    let matches: Vec<String> = agent.devices_now().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
     match matches.as_slice() {
         [one] => {
             let peer = PeerId::from_hex(one).map_err(|e| e.to_string())?;

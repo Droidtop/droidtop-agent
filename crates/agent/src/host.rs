@@ -102,6 +102,29 @@ impl Agent {
     }
 }
 
+impl Agent {
+    /// Puts a kept copy of a game's saves back where the game keeps them
+    /// here. What is there now is kept first as this computer's own copy, so
+    /// a restore can be undone.
+    pub fn restore_saves(&self, game: &GameRef, copy: &Path) -> std::result::Result<usize, String> {
+        let (spec, roots, _) = self.save_lookup(game, false).ok_or("No save location is known for this game; add one first.")?;
+        let archive = self.dirs.archive().join(file_key(&game.key));
+        // The copy being restored may itself be this computer's newest copy, which keeping would move.
+        if !copy.starts_with(droidtop_agent_core::savesync::copy_dir(&archive, &self.name())) {
+            droidtop_agent_core::savesync::keep_copy(
+                droidtop_agent_core::saves::collect(&spec, &roots).into_iter(),
+                &archive,
+                &self.name(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if !copy.is_dir() {
+            return Err("That copy is no longer kept: older copies are dropped as newer ones come.".into());
+        }
+        droidtop_agent_core::savesync::restore_copy(copy, &roots).map_err(|e| e.to_string())
+    }
+}
+
 /// Where this computer's WireGuard answers from outside the LAN: the
 /// endpoint the person forwarded, and every global IPv6 address it has
 /// (no NAT in the way, only a firewall that lets the port in).
@@ -183,17 +206,14 @@ impl Host for Agent {
 
     fn library_pull(&self, _peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)> {
         self.fresh_scan(120);
-        Ok(self.library.lock().unwrap().changes_since(since))
+        Ok(self.library_now().changes_since(since))
     }
 
     fn library_push(&self, _peer: &PeerId, changes: Vec<Change>) -> Result<()> {
-        let changed = {
-            let mut lib = self.library.lock().unwrap();
-            changes.into_iter().filter(|c| lib.apply(c.clone())).count()
-        };
-        if changed > 0 {
-            self.save_library()?;
-        }
+        self.edit_library(|lib| {
+            let changed = changes.into_iter().filter(|c| lib.apply(c.clone())).count();
+            ((), changed > 0)
+        });
         Ok(())
     }
 

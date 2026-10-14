@@ -15,7 +15,7 @@ use droidtop_agent_core::channel::Channel;
 use droidtop_agent_core::context::{baseline_when_deferred, merge, AdapterOffer, ContextDecl, Records};
 use droidtop_agent_core::discovery::{self, Announce};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
-use droidtop_agent_core::library::{Cursor, Library, Marks, ScannedGame};
+use droidtop_agent_core::library::{Change, Cursor, Library, Marks, ScannedGame};
 use droidtop_agent_core::mailbox::{self, Envelope};
 use droidtop_agent_core::pairing::{self, PairInvite};
 use droidtop_agent_core::proto::{GameRef, Request, Response};
@@ -577,6 +577,28 @@ impl LocalLibrary {
     }
 }
 
+fn push_changes(ch: &mut Channel<impl Read + Write>, changes: Vec<Change>) -> Result<(), Failure> {
+    if changes.is_empty() {
+        return Ok(());
+    }
+    ch.send_json(&Request::LibraryPush { changes })?;
+    match ch.recv_json::<Response>()? {
+        Response::Ok => Ok(()),
+        Response::Error { message } => Err(Failure::Error(message)),
+        other => Err(Failure::Error(format!("the computer answered {other:?}"))),
+    }
+}
+
+/// What the computer changed after [`since`], and its own number to ask from next.
+fn pull_changes(ch: &mut Channel<impl Read + Write>, since: u64) -> Result<(Vec<Change>, u64), Failure> {
+    ch.send_json(&Request::LibraryPull { since })?;
+    match ch.recv_json::<Response>()? {
+        Response::LibraryChanges { changes, cursor } => Ok((changes, cursor)),
+        Response::Error { message } => Err(Failure::Error(message)),
+        other => Err(Failure::Error(format!("the computer answered {other:?}"))),
+    }
+}
+
 fn sync_library(args: &Value) -> Outcome {
     let key = key_of(args)?;
     let peer_hex = args["peer"].as_str().unwrap_or_default().to_string();
@@ -586,21 +608,20 @@ fn sync_library(args: &Value) -> Outcome {
     let ch = &mut s.ch;
     let cursor: Cursor = lib.cursors.get(&peer_hex).copied().unwrap_or_default();
     let (outgoing, seq) = lib.changes_since(cursor.pushed);
-    let pushed = outgoing.len();
-    if !outgoing.is_empty() {
-        ch.send_json(&Request::LibraryPush { changes: outgoing })?;
-        match ch.recv_json::<Response>()? {
-            Response::Ok => {}
-            Response::Error { message } => return Err(Failure::Error(message)),
-            other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
-        }
+    let mut pushed = outgoing.len();
+    push_changes(ch, outgoing)?;
+    let (mut incoming, their) = pull_changes(ch, cursor.pulled)?;
+    // The computer's log is shorter than it was when this device last pulled
+    // it: it lost its library (a restore, a reinstall). What this device
+    // sent before is gone from it, so send everything again and take
+    // everything it has; both are applied newest-wins, so nothing is
+    // doubled (Droidtop/tracker#531).
+    if their < cursor.pulled {
+        let (everything, _) = lib.changes_since(0);
+        pushed = everything.len();
+        push_changes(ch, everything)?;
+        incoming = pull_changes(ch, 0)?.0;
     }
-    ch.send_json(&Request::LibraryPull { since: cursor.pulled })?;
-    let (incoming, their) = match ch.recv_json::<Response>()? {
-        Response::LibraryChanges { changes, cursor } => (changes, cursor),
-        Response::Error { message } => return Err(Failure::Error(message)),
-        other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
-    };
     let pulled = incoming.iter().filter(|c| lib.apply((*c).clone())).count();
     lib.cursors.insert(peer_hex, Cursor { pulled: their, pushed: seq });
     local.save()?;

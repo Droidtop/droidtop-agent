@@ -81,7 +81,7 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
         };
         thread::spawn(move || {
             let peers = || -> Vec<PeerId> {
-                a.devices.lock().unwrap().iter().filter_map(|d| PeerId::from_hex(&d.id).ok()).filter(|p| a.is_trusted(p)).collect()
+                a.devices_now().iter().filter_map(|d| PeerId::from_hex(&d.id).ok()).filter(|p| a.is_trusted(p)).collect()
             };
             let on_stream = |peer: PeerId, mut stream: tunnel::TunnelStream| {
                 let a = a.clone();

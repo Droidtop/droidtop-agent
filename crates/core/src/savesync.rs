@@ -495,6 +495,46 @@ pub fn keep_copy(files: impl Iterator<Item = (String, PathBuf)>, archive_dir: &P
     write_set(files, &dest)
 }
 
+/// The files of a kept copy, as canonical names (`<winAppData>/Game/slot.sav`)
+/// and where they are in the archive.
+pub fn copy_files(copy: &Path) -> Vec<(String, PathBuf)> {
+    fn walk(dir: &Path, name: &str, out: &mut Vec<(String, PathBuf)>, depth: usize) {
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let child = format!("{name}/{}", entry.file_name().to_string_lossy());
+            if path.is_dir() && depth < 16 {
+                walk(&path, &child, out, depth + 1);
+            } else if path.is_file() {
+                out.push((child, path));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    // The first level is the root token without its brackets (`winAppData`);
+    // a file there is the copy's own bookkeeping (`device.txt`).
+    for entry in fs::read_dir(copy).into_iter().flatten().flatten().filter(|e| e.path().is_dir()) {
+        walk(&entry.path(), &format!("<{}>", entry.file_name().to_string_lossy()), &mut out, 0);
+    }
+    out.sort();
+    out
+}
+
+/// Puts a kept copy back where the game keeps its saves on this device,
+/// [`roots`] saying where each root token is. Returns how many files it wrote;
+/// a file whose root is not here is left out.
+pub fn restore_copy(copy: &Path, roots: &Roots) -> Result<usize> {
+    let mut written = 0;
+    for (name, from) in copy_files(copy) {
+        let Some(to) = saves::local_path(&name, roots) else { continue };
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&from, &to)?;
+        written += 1;
+    }
+    Ok(written)
+}
+
 /// The dated archive, oldest first.
 pub fn archived(archive_dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = fs::read_dir(archive_dir)

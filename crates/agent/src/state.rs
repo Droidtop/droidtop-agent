@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::Instant;
+use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant, SystemTime};
 
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::Library;
@@ -155,6 +155,13 @@ pub struct Settings {
     /// STUN servers (`host:port`); `default` is the list Syncthing uses.
     #[serde(default = "default_list")]
     pub stun_servers: Vec<String>,
+    /// Game folders the person switched off in the Library page: they stay
+    /// listed (a folder found on its own, or one they added) but a scan skips them.
+    #[serde(default)]
+    pub disabled_folders: Vec<PathBuf>,
+    /// Launchers and stores the person switched off (`steam`, `gog`...).
+    #[serde(default)]
+    pub disabled_sources: Vec<String>,
 }
 
 /// A fresh install's settings are the serde defaults (rendezvous on, Syncthing's servers).
@@ -251,6 +258,50 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+/// What a file looked like when it was read: modified time and length.
+type Stamp = Option<(SystemTime, u64)>;
+
+fn stamp(path: &Path) -> Stamp {
+    fs::metadata(path).ok().and_then(|m| Some((m.modified().ok()?, m.len())))
+}
+
+/// A lock file beside a state file, so the headless agent, the window and a
+/// command line run at the same time change it one after another and never
+/// write back a copy that is out of date (Droidtop/tracker#528, #531).
+struct FileLock(PathBuf);
+
+impl FileLock {
+    fn take(of: &Path) -> FileLock {
+        let lock = of.with_extension("lock");
+        let started = Instant::now();
+        loop {
+            match fs::OpenOptions::new().write(true).create_new(true).open(&lock) {
+                Ok(_) => break,
+                Err(_) => {
+                    // A lock left by a process that died is not waited for.
+                    let stale = fs::metadata(&lock)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > Duration::from_secs(30));
+                    if stale || started.elapsed() > Duration::from_secs(10) {
+                        let _ = fs::remove_file(&lock);
+                    } else {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
+            }
+        }
+        FileLock(lock)
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 pub struct Agent {
     pub dirs: Dirs,
     pub key: DeviceKey,
@@ -258,9 +309,15 @@ pub struct Agent {
     /// still answered until every paired handheld has heard of the move.
     pub previous: Option<DeviceKey>,
     pub settings: Mutex<Settings>,
-    pub devices: Mutex<Vec<Device>>,
+    /// The paired devices as last read; [`Agent::devices_now`] and
+    /// [`Agent::edit_devices`] keep it current with the file.
+    devices: Mutex<Vec<Device>>,
+    devices_stamp: Mutex<Stamp>,
     pub saves: Mutex<BTreeMap<String, UserSaves>>,
-    pub library: Mutex<Library>,
+    /// The library as last read; [`Agent::library_now`] and
+    /// [`Agent::edit_library`] keep it current with the file.
+    library: Mutex<Library>,
+    library_stamp: Mutex<Stamp>,
     pub scan: Mutex<Option<(Instant, Scan)>>,
     pub ludusavi: Mutex<Option<crate::ludusavi::Index>>,
     /// What the rendezvous knows now: the address the NAT gives the WireGuard
@@ -270,7 +327,11 @@ pub struct Agent {
 
 impl Agent {
     pub fn open() -> io::Result<Agent> {
-        let dirs = Dirs::locate()?;
+        Agent::open_in(Dirs::locate()?)
+    }
+
+    /// The agent over [`dirs`] (`open` is this over the system's places).
+    pub fn open_in(dirs: Dirs) -> io::Result<Agent> {
         let devices: Vec<Device> = read_json(&dirs.peers())?;
         migrate(&dirs, !devices.is_empty())?;
         // windowcast's identity file, so a computer running both has one key
@@ -281,9 +342,11 @@ impl Agent {
         let library = Library::load(&dirs.library())?;
         Ok(Agent {
             settings: Mutex::new(read_json(&dirs.settings())?),
+            devices_stamp: Mutex::new(stamp(&dirs.peers())),
             devices: Mutex::new(devices),
             saves: Mutex::new(read_json(&dirs.saves())?),
             previous,
+            library_stamp: Mutex::new(stamp(&dirs.library())),
             library: Mutex::new(library),
             scan: Mutex::new(None),
             ludusavi: Mutex::new(None),
@@ -309,7 +372,7 @@ impl Agent {
     /// A paired device's name, or the start of its id.
     pub fn device_name(&self, peer: &PeerId) -> String {
         let id = peer.to_hex();
-        self.devices.lock().unwrap().iter().find(|d| d.id == id).map(|d| d.name.clone()).unwrap_or_else(|| id[..16].to_string())
+        self.devices_now().iter().find(|d| d.id == id).map(|d| d.name.clone()).unwrap_or_else(|| id[..16].to_string())
     }
 
     /// Whether [`peer`] is paired: the trusted list on disk, which
@@ -330,14 +393,13 @@ impl Agent {
         if self.previous.is_none() {
             return;
         }
-        let all = {
-            let mut devices = self.devices.lock().unwrap();
-            if let Some(d) = devices.iter_mut().find(|d| d.id == peer.to_hex()) {
+        let all = self.edit_devices(|devices| {
+            let found = devices.iter_mut().find(|d| d.id == peer.to_hex());
+            if let Some(d) = found {
                 d.moved = true;
             }
-            devices.iter().all(|d| d.moved)
-        };
-        let _ = self.save_devices();
+            (devices.iter().all(|d| d.moved), true)
+        });
         if all {
             let _ = fs::remove_file(self.dirs.previous_identity());
         }
@@ -347,23 +409,80 @@ impl Agent {
         write_json(&self.dirs.settings(), &*self.settings.lock().unwrap())
     }
 
+    /// Takes in settings another copy of the agent (the window, a command
+    /// line) saved since this one read them.
+    pub fn reload_settings(&self) {
+        if let Ok(fresh) = read_json::<Settings>(&self.dirs.settings()) {
+            *self.settings.lock().unwrap() = fresh;
+        }
+    }
+
     pub fn save_saves(&self) -> io::Result<()> {
         write_json(&self.dirs.saves(), &*self.saves.lock().unwrap())
     }
 
-    pub fn save_devices(&self) -> io::Result<()> {
-        write_json(&self.dirs.peers(), &*self.devices.lock().unwrap())
+    /// The paired devices, as the file holds them now: the headless agent,
+    /// the window and a command line each have their own copy of this
+    /// state, and a pairing made by one is seen by the others.
+    pub fn devices_now(&self) -> Vec<Device> {
+        let mut devices = self.devices.lock().unwrap();
+        let mut seen = self.devices_stamp.lock().unwrap();
+        let on_disk = stamp(&self.dirs.peers());
+        if on_disk != *seen {
+            if let Ok(fresh) = read_json::<Vec<Device>>(&self.dirs.peers()) {
+                *devices = fresh;
+            }
+            *seen = on_disk;
+        }
+        devices.clone()
     }
 
-    pub fn save_library(&self) -> io::Result<()> {
-        self.library.lock().unwrap().save(&self.dirs.library())
+    /// Changes the paired devices from the file's current state and writes
+    /// them back; [`f`] returns its result and whether it changed anything.
+    pub fn edit_devices<R>(&self, f: impl FnOnce(&mut Vec<Device>) -> (R, bool)) -> R {
+        let _lock = FileLock::take(&self.dirs.peers());
+        self.devices_now();
+        let mut devices = self.devices.lock().unwrap();
+        let (result, changed) = f(&mut devices);
+        if changed && write_json(&self.dirs.peers(), &*devices).is_ok() {
+            *self.devices_stamp.lock().unwrap() = stamp(&self.dirs.peers());
+        }
+        result
+    }
+
+    /// The library, as the file holds it now (see [`Agent::devices_now`]).
+    /// Do not hold it across a call that edits the library.
+    pub fn library_now(&self) -> MutexGuard<'_, Library> {
+        let mut library = self.library.lock().unwrap();
+        let mut seen = self.library_stamp.lock().unwrap();
+        let on_disk = stamp(&self.dirs.library());
+        if on_disk != *seen {
+            if let Ok(fresh) = Library::load(&self.dirs.library()) {
+                *library = fresh;
+            }
+            *seen = on_disk;
+        }
+        library
+    }
+
+    /// Changes the library from the file's current state and writes it back,
+    /// one process at a time; [`f`] returns its result and whether it changed
+    /// anything. This is the only way the agent writes `library.json`, so a
+    /// copy that is out of date is never written over newer marks or installs.
+    pub fn edit_library<R>(&self, f: impl FnOnce(&mut Library) -> (R, bool)) -> R {
+        let _lock = FileLock::take(&self.dirs.library());
+        let mut library = self.library_now();
+        let (result, changed) = f(&mut library);
+        if changed && library.save(&self.dirs.library()).is_ok() {
+            *self.library_stamp.lock().unwrap() = stamp(&self.dirs.library());
+        }
+        result
     }
 
     /// Pins a newly paired device and remembers its name.
     pub fn add_device(&self, peer: PeerId, name: &str) -> io::Result<()> {
         TrustStore::update(&self.dirs.trust(), |t| t.pin(peer)).map_err(|e| io::Error::other(e.to_string()))?;
-        {
-            let mut devices = self.devices.lock().unwrap();
+        self.edit_devices(|devices| {
             devices.retain(|d| d.id != peer.to_hex());
             devices.push(Device {
                 id: peer.to_hex(),
@@ -374,15 +493,19 @@ impl Agent {
                 disco: None,
                 moved: true,
             });
-        }
-        self.save_devices()
+            ((), true)
+        });
+        Ok(())
     }
 
     /// Forgets a device: unpinned, so it can no longer connect.
     pub fn remove_device(&self, peer: &PeerId) -> io::Result<()> {
         TrustStore::update(&self.dirs.trust(), |t| t.revoke(peer)).map_err(|e| io::Error::other(e.to_string()))?;
-        self.devices.lock().unwrap().retain(|d| d.id != peer.to_hex());
-        self.save_devices()
+        self.edit_devices(|devices| {
+            devices.retain(|d| d.id != peer.to_hex());
+            ((), true)
+        });
+        Ok(())
     }
 
     /// Records the global discovery ID a paired device stated in its hello.
@@ -390,43 +513,58 @@ impl Agent {
         if !droidtop_agent_core::rendezvous::valid_device_id(disco) {
             return;
         }
-        let mut devices = self.devices.lock().unwrap();
-        let Some(d) = devices.iter_mut().find(|d| d.id == peer.to_hex()) else { return };
-        if d.disco.as_deref() == Some(disco) {
-            return;
-        }
-        d.disco = Some(disco.to_string());
-        drop(devices);
-        let _ = self.save_devices();
+        self.edit_devices(|devices| match devices.iter_mut().find(|d| d.id == peer.to_hex()) {
+            Some(d) if d.disco.as_deref() != Some(disco) => {
+                d.disco = Some(disco.to_string());
+                ((), true)
+            }
+            _ => ((), false),
+        });
     }
 
     pub fn seen(&self, peer: &PeerId, address: Option<String>) {
-        let mut devices = self.devices.lock().unwrap();
-        if let Some(d) = devices.iter_mut().find(|d| d.id == peer.to_hex()) {
-            d.last_seen_ms = droidtop_agent_core::library::now_ms();
-            if address.is_some() {
-                d.last_address = address;
+        self.edit_devices(|devices| match devices.iter_mut().find(|d| d.id == peer.to_hex()) {
+            Some(d) => {
+                d.last_seen_ms = droidtop_agent_core::library::now_ms();
+                if address.is_some() {
+                    d.last_address = address;
+                }
+                ((), true)
             }
-        }
-        drop(devices);
-        let _ = self.save_devices();
+            None => ((), false),
+        });
     }
 
     /// Scans this computer, records what changed in the library, and keeps
     /// the scan for save lookups. Returns how many library changes it made.
+    /// The scan only ever writes this computer's own installs: marks the
+    /// person set (here or on a handheld) are not touched by it.
     pub fn rescan(&self) -> usize {
+        self.reload_settings();
         let settings = self.settings.lock().unwrap().clone();
         let scan = crate::scan::scan(&settings, &self.dirs);
         let launcher_marks = crate::scan::lutris::marks();
-        let changes = {
-            let mut lib = self.library.lock().unwrap();
-            lib.update_device(&self.peer_id(), &self.name(), scan.library()) + self.note_launcher_marks(&mut lib, launcher_marks)
-        };
-        if changes > 0 {
-            let _ = self.save_library();
-        }
+        let (device, name) = (self.peer_id(), self.name());
+        let changes = self.edit_library(|lib| {
+            let n = lib.update_device(&device, &name, scan.library()) + self.note_launcher_marks(lib, launcher_marks);
+            (n, n > 0)
+        });
         *self.scan.lock().unwrap() = Some((Instant::now(), scan));
         changes
+    }
+
+    /// Sets one of the person's marks on a game from this computer (a
+    /// favourite, a collection...): it travels to every paired device like
+    /// one made on a handheld.
+    pub fn set_mark(&self, game: &str, field: &str, value: serde_json::Value) -> bool {
+        let device = self.peer_id();
+        self.edit_library(|lib| {
+            if lib.games.get(game).and_then(|r| r.marks.get(field)).is_some_and(|m| m.value == value) {
+                return (false, false);
+            }
+            let changed = lib.mark(&device, game, field, value);
+            (changed, changed)
+        })
     }
 
     /// The person's marks in launchers on this computer (Lutris's favourites
@@ -482,6 +620,29 @@ mod tests {
         fs::write(d.own_identity(), &seed).unwrap();
         TrustStore::update(&d.own_trust(), |t| t.pin(*trusted)).unwrap();
         seed
+    }
+
+    /// The headless agent, the window and a command line are separate
+    /// processes with a copy of this state each (Droidtop/tracker#528, #531):
+    /// none writes back what it read at the start over what another saved.
+    #[test]
+    fn copies_of_the_agent_running_together_do_not_overwrite_each_other() {
+        let d = dirs("together");
+        let serving = Agent::open_in(d.clone()).unwrap();
+        let window = Agent::open_in(d.clone()).unwrap();
+        // A handheld is paired by one copy after the other started.
+        let handheld = DeviceKey::generate().peer_id();
+        window.add_device(handheld, "Handheld").unwrap();
+        // The serving copy notes the handheld's visit: it used to write its empty list over the pairing.
+        serving.seen(&handheld, Some("10.0.2.15".into()));
+        assert_eq!(window.devices_now().len(), 1);
+        assert_eq!(serving.devices_now()[0].last_address.as_deref(), Some("10.0.2.15"));
+        // A favourite arrives through the window's copy; the serving copy's scan does not lose it.
+        assert!(window.set_mark("title:dt sync test", "favourite", serde_json::json!(true)));
+        serving.edit_library(|_| ((), true));
+        let again = Agent::open_in(d).unwrap();
+        assert_eq!(again.library_now().games["title:dt sync test"].marks["favourite"].value, serde_json::json!(true));
+        assert_eq!(serving.library_now().games["title:dt sync test"].marks.len(), 1);
     }
 
     #[test]

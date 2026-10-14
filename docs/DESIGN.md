@@ -344,6 +344,18 @@ marks on a game are shared.
     folder, never a store's install folders. The computer rescans when one
     arrives.
   - droidtop runs it as a job, with progress (`game_pull`, `game_push`).
+- **Games meet by key, so both ends must make the same key from the same
+  folder name.** A folder game with no store id is keyed by its title
+  (`title_key`). droidtop reads a name written as one run of words,
+  `DtSyncTest`, as "Dt Sync Test" (`GameTitleParser.splitRunTogether`,
+  Droidtop/tracker#282); the scanner does the same (`split_run_together`),
+  or the same folder was two games, one per device, and neither a computer's
+  newer version nor a mark reached the other (Droidtop/tracker#529).
+- **A computer that lost its library is told.** A handheld that pulls from a
+  computer and finds its sequence number lower than the one it pulled up to
+  before knows the computer lost state (a restore, a reinstall). It sends
+  everything it has again and pulls everything; both are newest-wins, so
+  nothing is doubled (Droidtop/tracker#531).
 - **Play time:** each device reports its own total and last played time. A
   game's total is the sum, and its last played time is the latest. Nothing
   overwrites another device's numbers.
@@ -758,9 +770,18 @@ and skips folders it cannot read.
 The owner's ask (2026-10-10): a tray app and window on Windows, Linux and
 macOS, so nobody needs the command line.
 
-- **One agent, two front ends.** `droidtop-agent-app` runs the same service as
-  `droidtop-agent run`, in its own process, and shows it. If another copy of
-  the agent already listens, the window says so and does not serve.
+- **One agent, any number of front ends.** `droidtop-agent-app` runs the same
+  service as `droidtop-agent run`, in its own process. If another copy of the
+  agent already listens, the window attaches to it: it does not serve, says
+  that the running agent serves, and shows and changes the same files.
+  Copies of the agent in different processes (the headless one, the window,
+  a command line) each hold the paired devices and the library in memory, so
+  they never write a copy back that they read earlier: `devices.json` and
+  `library.json` are read again when their file changed (`Agent::devices_now`,
+  `Agent::library_now`) and every change is read, changed and written under a
+  lock file (`edit_devices`, `edit_library`). A copy that wrote its start-up
+  state back used to empty the paired devices and drop marks
+  (Droidtop/tracker#528, #531).
 - **The stack is windowcast's reference app's:** egui through eframe (OpenGL
   via glow). The tray uses `tray-icon` on Windows and macOS. On Linux it is
   a StatusNotifierItem over D-Bus (`ksni`, pure Rust), so the Linux build
@@ -775,12 +796,29 @@ macOS, so nobody needs the command line.
   - **Pair a handheld:** type the code the handheld shows, or "Show a code":
     this computer listens (TCP 47612) and shows its addresses, the code and
     a QR code of the same invitation. Stop ends it.
-  - **Library:** what the last scan found (games, installed apps, programs
-    it can sync with, sources it could not read), a filter, and Scan now.
-  - **Saves:** the copies the agent kept: this computer's side when it lost
-    to a newer or preferred copy, and the copies it kept from handhelds' save
-    letters, with the dated older ones (section 9). Each opens in the file
-    manager. Settings names the primary handheld.
+  - **Library:** every place games are found, each with its game count and
+    a switch: the stores and launchers the scan reads (only those it found
+    something in, and any the person switched off), the game folders found on
+    their own (a `Games` folder at the top of each fixed drive) and the ones
+    the person added (Add a game folder opens the system's folder picker;
+    Remove), and ROM folders. A switched-off place is skipped by the scan
+    (`Settings::disabled_sources`, `disabled_folders`), so its games leave
+    the library on every handheld too. Below: the games with a search, each
+    with its source and location; picking one shows its favourite and hidden
+    marks and its collections, which the person can change here (they travel
+    like marks made on a handheld, section 7; `droidtop-agent mark` does the
+    same from a command line). Then the programs droidtop can sync with and
+    the sources that could not be read.
+  - **Saves:** which device's saves win when both changed (the newest, or a
+    named handheld's); a search for a game; and for the picked game where its
+    saves are (detected or stated by the person, with the files found now),
+    adding or removing a location, and the copies kept on this computer
+    (the newest from each device with its date, then the dated older ones,
+    section 9). Each can be restored (what is there now is first kept as this
+    computer's own copy, so a restore can be undone) or opened in the file
+    manager. An older copy kept after both sides changed is marked "to look
+    at" until the person restores one or says they have looked (`reviewed.txt`
+    in the game's archive folder). Games are shown by title, never by key.
   - **Plugin data:** adapters plugins offered (Install or Decline; a declined
     plugin's offer for that context is not kept again) and the ones
     installed (Remove).

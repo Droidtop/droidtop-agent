@@ -27,20 +27,27 @@ fn main() {
     };
 
     // The service: the same as `droidtop-agent run`. If it cannot listen
-    // (another copy of the agent is already running), the window says so.
+    // because another copy of the agent is already running, the window
+    // attaches to that one instead of competing with it.
     let service: Arc<Mutex<ui::Service>> = Arc::new(Mutex::new(ui::Service::Starting));
     {
         let (agent, service) = (agent.clone(), service.clone());
         std::thread::spawn(move || {
             *service.lock().unwrap() = ui::Service::Running;
-            let result = droidtop_agent_computer::serve::run(agent);
-            *service.lock().unwrap() = ui::Service::Stopped(match result {
+            let result = droidtop_agent_computer::serve::run(agent.clone());
+            let stopped: String = match result {
                 Ok(()) => "The agent stopped.".into(),
                 Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                    "Another copy of droidtop-agent is already running on this computer, so this one is not serving.".into()
+                    // The running agent serves; this window shows its state from
+                    // the files they share. It looks at the computer once itself,
+                    // so the Library page has something to show.
+                    *service.lock().unwrap() = ui::Service::Attached;
+                    agent.rescan();
+                    return;
                 }
                 Err(e) => format!("The agent could not listen: {e}"),
-            });
+            };
+            *service.lock().unwrap() = ui::Service::Stopped(stopped);
         });
     }
 
