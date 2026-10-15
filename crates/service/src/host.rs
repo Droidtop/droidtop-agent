@@ -10,8 +10,8 @@ use droidtop_agent_core::proto::{GameRef, Launch};
 use droidtop_agent_core::saves::{prefix_roots, Roots, SaveSpec};
 use droidtop_agent_core::server::Host;
 use droidtop_agent_core::{Error, Result};
+use droidtop_agent_scan::Found;
 
-use crate::scan::Found;
 use crate::state::Agent;
 
 /// This computer's folder for each token, for a game found by the scan.
@@ -93,7 +93,7 @@ impl Agent {
             return Some((SaveSpec { patterns: user.patterns }, roots, found));
         }
         let title = found.as_ref().map(|f| f.game.title.clone()).unwrap_or_else(|| game.title.clone());
-        if let Some(patterns) = crate::ludusavi::custom_games(&crate::scan::apps::ludusavi_config()).remove(&title_key(&title)) {
+        if let Some(patterns) = crate::ludusavi::custom_games(&droidtop_agent_scan::apps::ludusavi_config()).remove(&title_key(&title)) {
             return Some((SaveSpec { patterns }, roots, found));
         }
         let folder = found.as_ref().and_then(|f| f.base.as_deref()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
@@ -278,7 +278,7 @@ mod tests {
                 install: Default::default(),
             },
             base: Some(PathBuf::from("/games/G")),
-            prefix: Some(crate::scan::Prefix { drive_c: PathBuf::from("/pfx/drive_c"), user: "steamuser".into() }),
+            prefix: Some(droidtop_agent_scan::Prefix { drive_c: PathBuf::from("/pfx/drive_c"), user: "steamuser".into() }),
             engine: None,
         };
         let roots = roots_for(Some(&found), None);

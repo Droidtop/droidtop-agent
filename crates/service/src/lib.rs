@@ -10,7 +10,6 @@ pub mod launch;
 pub mod ludusavi;
 pub mod pair;
 pub mod rendezvous;
-pub mod scan;
 pub mod serve;
 pub mod share;
 pub mod state;

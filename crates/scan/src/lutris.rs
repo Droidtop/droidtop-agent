@@ -10,14 +10,14 @@ use std::path::PathBuf;
 use droidtop_agent_core::library::title_key;
 
 use super::{columns, home, DbCopy, Found};
-use crate::state::Settings;
+use crate::Options;
 
 fn database() -> Option<PathBuf> {
     let h = home();
     [h.join(".local/share/lutris/pga.db"), h.join(".var/app/net.lutris.Lutris/data/lutris/pga.db")].into_iter().find(|p| p.is_file())
 }
 
-pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(_settings: &Options) -> Result<Vec<Found>, String> {
     let Some(path) = database() else { return Ok(Vec::new()) };
     let db = DbCopy::open(&path)?;
     let game_dirs = super::prefixes::lutris_game_dirs();

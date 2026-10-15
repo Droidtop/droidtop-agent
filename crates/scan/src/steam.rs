@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{env_dir, first_dir, home, pc_game, vdf, Found, Prefix};
-use crate::state::Settings;
+use crate::Options;
 
 /// Where the Steam client is on this computer.
 pub fn roots() -> Vec<PathBuf> {
@@ -81,7 +81,7 @@ fn is_tool(id: &str, name: &str) -> bool {
         || name.starts_with("Steamworks Common Redistributables")
 }
 
-pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(_settings: &Options) -> Result<Vec<Found>, String> {
     let mut out = Vec::new();
     for root in roots() {
         for lib in libraries(&root) {

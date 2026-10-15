@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 use regex::{Regex, RegexBuilder};
 use serde_json::Value;
 
-const DATABASE: &str = include_str!("../../data/engines-database.json");
+const DATABASE: &str = include_str!("../data/engines-database.json");
 
 /// One row of the database: an engine and the rules that recognise it.
 pub struct Engine {

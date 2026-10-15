@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use super::{env_dir, home, pc_game, Found};
-use crate::state::Settings;
+use crate::Options;
 
 fn launcher_manifests() -> Vec<Found> {
     let Some(data) = env_dir("ProgramData") else { return Vec::new() };
@@ -69,7 +69,7 @@ fn legendary() -> Vec<Found> {
     out
 }
 
-pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(_settings: &Options) -> Result<Vec<Found>, String> {
     let mut out = launcher_manifests();
     out.extend(legendary());
     Ok(out)

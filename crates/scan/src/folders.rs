@@ -38,7 +38,7 @@ use serde_json::Value;
 
 use super::engines::{self, extension, Detector, Listing, Rules};
 use super::{flashpoint, pc_game, roms, steam, Found};
-use crate::state::Settings;
+use crate::Options;
 
 /// How many folders below a root the walk looks, not counting part and
 /// version folders (droidtop's `MAX_SCAN_DEPTH`).
@@ -513,14 +513,14 @@ fn found(path: &Path, engine: Option<&'static str>) -> Found {
 /// The game folders a scan walks: the person's, and a `Games` folder at
 /// the top of each fixed drive (`~/Games` elsewhere). A folder inside
 /// another is walked once, as part of the outer one.
-pub fn roots(settings: &Settings) -> Vec<PathBuf> {
+pub fn roots(settings: &Options) -> Vec<PathBuf> {
     all_roots(settings).into_iter().map(|(path, _)| path).filter(|p| !settings.disabled_folders.iter().any(|d| same_path(d, p))).collect()
 }
 
 /// Every folder the scan knows of, with whether it was found on its own
 /// (a `Games` folder) rather than added by the person; the ones the person
 /// switched off included.
-pub fn all_roots(settings: &Settings) -> Vec<(PathBuf, bool)> {
+pub fn all_roots(settings: &Options) -> Vec<(PathBuf, bool)> {
     let mut all: Vec<(PathBuf, bool)> = settings.game_folders.iter().map(|p| (p.clone(), false)).collect();
     for found in discovered() {
         if !all.iter().any(|(r, _)| same_path(r, &found)) {
@@ -591,7 +591,7 @@ pub fn walk(root: &Path) -> Vec<Found> {
     out
 }
 
-pub fn scan(settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(settings: &Options) -> Result<Vec<Found>, String> {
     let mut out = Vec::new();
     for root in roots(settings) {
         out.extend(walk(&root));

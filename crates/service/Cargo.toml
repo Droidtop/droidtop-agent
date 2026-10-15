@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 droidtop-agent-core = { path = "../core" }
+droidtop-agent-scan = { path = "../scan" }
 windowcast-identity.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -23,20 +24,13 @@ serde_yaml.workspace = true
 # Fetches the Ludusavi manifest when the person asks for it or a save lookup
 # needs it; nothing else in the agent goes to the network on its own.
 ureq.workspace = true
-# Launcher databases (itch, Amazon, Lutris).
-rusqlite.workspace = true
-# The file-head rules of droidtop's engines database are regular expressions.
-regex.workspace = true
 dirs.workspace = true
 gethostname.workspace = true
-# Installed applications: Store package manifests (Windows) and bundles'
-# Info.plist (macOS, XML or binary). Both parsers are tested on every system.
-roxmltree.workspace = true
+# The LaunchAgent that starts the agent at sign-in on macOS.
 plist.workspace = true
 # This computer's addresses, for the WireGuard endpoints it tells the handheld.
 if-addrs.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+# The per-user Run key that starts the agent at sign-in.
 winreg.workspace = true
-# Which drives are fixed disks, for the `Games` folders the scan walks unasked.
-windows-sys.workspace = true

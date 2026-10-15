@@ -4,10 +4,10 @@
 //! scan finds.
 
 use super::Found;
-use crate::state::Settings;
+use crate::Options;
 
 #[cfg(windows)]
-pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(_settings: &Options) -> Result<Vec<Found>, String> {
     use std::path::PathBuf;
     use winreg::enums::HKEY_LOCAL_MACHINE;
     let mut out = Vec::new();
@@ -30,6 +30,6 @@ pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
 }
 
 #[cfg(not(windows))]
-pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(_settings: &Options) -> Result<Vec<Found>, String> {
     Ok(Vec::new())
 }

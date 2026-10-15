@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use super::{env_dir, home, Program};
-use crate::state::Settings;
+use crate::Options;
 
 fn app(id: &str, name: &str, path: PathBuf, note: &str) -> Option<Program> {
     path.exists().then(|| Program { id: id.into(), name: name.into(), path, note: note.into() })
@@ -32,7 +32,7 @@ pub fn ludusavi_config() -> PathBuf {
     dirs::config_dir().unwrap_or_default().join("ludusavi/config.yaml")
 }
 
-pub fn scan(_settings: &Settings) -> Vec<Program> {
+pub fn scan(_settings: &Options) -> Vec<Program> {
     let h = home();
     let appdata = env_dir("APPDATA").unwrap_or_else(|| h.join("AppData/Roaming"));
     let docs = dirs::document_dir().unwrap_or_else(|| h.join("Documents"));

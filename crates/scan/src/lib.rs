@@ -2,6 +2,10 @@
 //! from the files launchers and stores leave behind. No store APIs, no
 //! network. Each source is read on its own, so one that fails (a schema
 //! change, an unreadable file) costs its games and not the whole scan.
+//!
+//! A crate of its own (docs/DESIGN.md section 13): it needs only the
+//! folders it is told about ([`Options`]), never the agent's state, so the
+//! running agent and a desktop manager (Pythia) call the same scanner.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,7 +15,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use droidtop_agent_core::library::{Install, ScannedGame};
 use serde::Serialize;
 
-use crate::state::{Dirs, Settings};
+/// What a scan looks at besides the stores and launchers it finds itself:
+/// the person's game and ROM folders, and what they switched off.
+#[derive(Debug, Clone, Default)]
+pub struct Options {
+    /// Folders whose subfolders are games.
+    pub game_folders: Vec<PathBuf>,
+    /// Folders laid out by ES-DE system name.
+    pub rom_folders: Vec<PathBuf>,
+    /// Game folders switched off: listed, but not walked.
+    pub disabled_folders: Vec<PathBuf>,
+    /// Launchers and stores switched off, by source name (`Steam`, `GOG`...).
+    pub disabled_sources: Vec<String>,
+}
 
 mod amazon;
 pub mod apps;
@@ -118,9 +134,12 @@ impl Scan {
 }
 
 /// One source of games: what it found, or why it could not read.
-type Source = fn(&Settings) -> Result<Vec<Found>, String>;
+type Source = fn(&Options) -> Result<Vec<Found>, String>;
 
-pub fn scan(settings: &Settings, dirs: &Dirs) -> Scan {
+/// Scans this computer: every store and launcher it finds, and the folders
+/// [`settings`] names. Slow (it walks the game folders); never call it from a
+/// thread that draws.
+pub fn scan(settings: &Options) -> Scan {
     let mut out = Scan::default();
     let sources: Vec<(&str, Source)> = vec![
         ("Steam", steam::scan),
@@ -169,7 +188,6 @@ pub fn scan(settings: &Settings, dirs: &Dirs) -> Scan {
     let game_folders: Vec<PathBuf> = out.games.iter().filter_map(|f| f.base.clone()).collect();
     out.apps = installed::scan(&game_folders);
     out.programs = apps::scan(settings);
-    let _ = dirs;
     out
 }
 

@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use super::{env_dir, home, pc_game, DbCopy, Found};
-use crate::state::Settings;
+use crate::Options;
 
 fn database() -> Option<PathBuf> {
     let h = home();
@@ -15,7 +15,7 @@ fn database() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(_settings: &Options) -> Result<Vec<Found>, String> {
     let Some(path) = database() else { return Ok(Vec::new()) };
     let db = DbCopy::open(&path)?;
     let mut stmt = db

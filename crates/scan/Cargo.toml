@@ -1,0 +1,33 @@
+[package]
+name = "droidtop-agent-scan"
+description = "The computer's scanner: the games and applications installed, from the files stores, launchers and game folders leave behind"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "droidtop_agent_scan"
+path = "src/lib.rs"
+
+[dependencies]
+droidtop-agent-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+# Heroic's and Lutris's YAML game configs.
+serde_yaml.workspace = true
+# Launcher databases (itch, Amazon, Lutris, Flashpoint).
+rusqlite.workspace = true
+# The file-head rules of droidtop's engines database are regular expressions.
+regex.workspace = true
+dirs.workspace = true
+# Installed applications: Store package manifests (Windows) and bundles'
+# Info.plist (macOS, XML or binary). Both parsers are tested on every system.
+roxmltree.workspace = true
+plist.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg.workspace = true
+# Which drives are fixed disks, for the `Games` folders the scan walks unasked.
+windows-sys.workspace = true

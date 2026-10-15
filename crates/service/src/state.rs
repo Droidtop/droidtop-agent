@@ -10,10 +10,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::Library;
+use droidtop_agent_scan::Scan;
 use serde::{Deserialize, Serialize};
 use windowcast_identity::{Identity, TrustStore};
-
-use crate::scan::Scan;
 
 /// Where the agent keeps its files.
 #[derive(Debug, Clone)]
@@ -175,6 +174,16 @@ impl Default for Settings {
     }
 }
 
+/// What the scanner looks at, from the person's settings.
+pub fn scan_options(settings: &Settings) -> droidtop_agent_scan::Options {
+    droidtop_agent_scan::Options {
+        game_folders: settings.game_folders.clone(),
+        rom_folders: settings.rom_folders.clone(),
+        disabled_folders: settings.disabled_folders.clone(),
+        disabled_sources: settings.disabled_sources.clone(),
+    }
+}
+
 /// A plugin the person let supply a context's adapter, and what is installed.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct Approval {
@@ -330,7 +339,7 @@ pub struct Agent {
     /// Games a desktop manager that runs this agent in its own process
     /// tracks itself (Pythia, through `crates/python`): joined into every
     /// scan where the scanner has not found them (docs/DESIGN.md section 16).
-    pub extra: Mutex<Vec<crate::scan::Found>>,
+    pub extra: Mutex<Vec<droidtop_agent_scan::Found>>,
 }
 
 impl Agent {
@@ -570,9 +579,9 @@ impl Agent {
     pub fn rescan(&self) -> usize {
         self.reload_settings();
         let settings = self.settings.lock().unwrap().clone();
-        let mut scan = crate::scan::scan(&settings, &self.dirs);
+        let mut scan = droidtop_agent_scan::scan(&scan_options(&settings));
         scan.join(&self.extra.lock().unwrap());
-        let launcher_marks = crate::scan::lutris::marks();
+        let launcher_marks = droidtop_agent_scan::lutris::marks();
         let (device, name) = (self.peer_id(), self.name());
         let changes = self.edit_library(|lib| {
             let n = lib.update_device(&device, &name, scan.library()) + self.note_launcher_marks(lib, launcher_marks);

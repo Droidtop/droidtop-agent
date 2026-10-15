@@ -16,13 +16,13 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use droidtop_agent_service::pair;
-use droidtop_agent_service::scan::Found;
-use droidtop_agent_service::state::{Agent, Settings};
 use droidtop_agent_core::keys::PeerId;
 use droidtop_agent_core::library::ScannedGame;
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
+use droidtop_agent_scan::Found;
+use droidtop_agent_service::pair;
+use droidtop_agent_service::state::{Agent, Settings};
 use pyo3::prelude::*;
 use serde::Deserialize;
 use serde_json::{json, Value};

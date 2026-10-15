@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use droidtop_agent_core::library::title_key;
 
 use super::{home, pc_game, prefixes, Found};
-use crate::state::Settings;
+use crate::Options;
 
 /// Bottles' data folders: native and Flatpak.
 fn bottles_dirs() -> Vec<PathBuf> {
@@ -94,7 +94,7 @@ pub fn minigalaxy(configs: &[PathBuf]) -> Vec<Found> {
     out
 }
 
-pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(_settings: &Options) -> Result<Vec<Found>, String> {
     let mut out = bottles(&bottles_dirs());
     out.extend(minigalaxy(&minigalaxy_configs()));
     Ok(out)

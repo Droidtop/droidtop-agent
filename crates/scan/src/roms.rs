@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 use droidtop_agent_core::library::{title_key, Install, ScannedGame};
 
 use super::{home, Found};
-use crate::state::Settings;
+use crate::Options;
 
 /// File types that are games in a system folder; artwork, saves and notes are not.
 const ROM_TYPES: &[&str] = &[
@@ -40,7 +40,7 @@ fn esde_rom_folder() -> Option<PathBuf> {
 
 /// droidtop's platforms database (`data/platforms-database.json`, a copy of
 /// droidtop-platforms' file): each system's id and the file types it runs.
-const PLATFORMS: &str = include_str!("../../data/platforms-database.json");
+const PLATFORMS: &str = include_str!("../data/platforms-database.json");
 
 /// Folder names droidtop reads as another system's id
 /// (`ConsoleRomProvider.SYSTEM_ID_ALIASES`).
@@ -131,7 +131,7 @@ pub(super) fn system_roms(system: &str, dir: &Path, depth: usize, out: &mut Vec<
     }
 }
 
-pub fn scan(settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(settings: &Options) -> Result<Vec<Found>, String> {
     let mut roots = settings.rom_folders.clone();
     if let Some(esde) = esde_rom_folder() {
         if !roots.contains(&esde) {
@@ -162,7 +162,7 @@ mod tests {
         fs::create_dir_all(root.join("snes")).unwrap();
         fs::write(root.join("snes/Super Game (USA).sfc"), b"rom").unwrap();
         fs::write(root.join("snes/Super Game (USA).srm"), b"save").unwrap();
-        let settings = Settings { rom_folders: vec![root.clone()], ..Default::default() };
+        let settings = Options { rom_folders: vec![root.clone()], ..Default::default() };
         let found = scan(&settings).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].game.key, "rom:snes/super game usa");

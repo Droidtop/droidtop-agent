@@ -389,8 +389,8 @@ pub mod linux {
     /// Snap's exports in case the session does not list them. The flag marks
     /// Snap's folder.
     pub fn folders() -> Vec<(PathBuf, bool)> {
-        let home = crate::scan::home();
-        let data_home = crate::scan::env_dir("XDG_DATA_HOME").unwrap_or_else(|| home.join(".local/share"));
+        let home = crate::home();
+        let data_home = crate::env_dir("XDG_DATA_HOME").unwrap_or_else(|| home.join(".local/share"));
         let data_dirs =
             std::env::var("XDG_DATA_DIRS").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| "/usr/local/share:/usr/share".into());
         let mut roots = vec![data_home.clone()];
@@ -448,7 +448,7 @@ pub mod mac {
     use std::path::{Path, PathBuf};
 
     pub fn folders() -> Vec<PathBuf> {
-        let home = crate::scan::home();
+        let home = crate::home();
         vec![
             PathBuf::from("/Applications"),
             PathBuf::from("/Applications/Utilities"),

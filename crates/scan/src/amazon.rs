@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use super::{columns, env_dir, home, pc_game, DbCopy, Found};
-use crate::state::Settings;
+use crate::Options;
 
 fn app_database() -> Result<Vec<Found>, String> {
     let Some(local) = env_dir("LOCALAPPDATA") else { return Ok(Vec::new()) };
@@ -75,7 +75,7 @@ fn nile() -> Vec<Found> {
     out
 }
 
-pub fn scan(_settings: &Settings) -> Result<Vec<Found>, String> {
+pub fn scan(_settings: &Options) -> Result<Vec<Found>, String> {
     let mut out = app_database()?;
     out.extend(nile());
     Ok(out)
