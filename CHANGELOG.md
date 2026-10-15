@@ -6,6 +6,14 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- What the running agent does is an event a host program can read, not
+  only a printed line: `droidtop_agent.service.events(since=0, wait=0)`
+  gives each with its number, time, level, kind (`launch`, `session`,
+  `saves`, `library`, `arrived`...), message and what it is about, so
+  Pythia can log and show handhelds' launches, syncs and arriving games.
+  `droidtop-agent run` prints what it printed before, plus a line when a
+  session ends and when saves or library changes moved (docs/DESIGN.md
+  section 16, Droidtop/tracker#461).
 - A launcher's own folder (Battle.net, the EA app, Origin, GOG Galaxy's
   client, Ubisoft Connect, Epic's Launcher) in a game folder is no longer
   a game; `droidtop_agent.scan.launcher_folder(path)` gives the same rule

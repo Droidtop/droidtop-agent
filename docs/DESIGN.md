@@ -902,7 +902,7 @@ identity, pairing, channel, transports, library, saves and scanner.
       None: section 11)
     - `saves`: `lookup(key, title="", fetch=False)`, `copies`,
       `restore(key, path, title="")`
-    - `service`: `serve`, `serving`
+    - `service`: `serve`, `serving`, `events(since=0, wait=0)`
 - **One agent per computer.** `serve` starts the same service as
   `droidtop-agent run`, on threads of its own. If another agent already
   listens on port 47610 (droidtop-agent, its window, or another Pythia),
@@ -910,6 +910,20 @@ identity, pairing, channel, transports, library, saves and scanner.
   both use the same files, either can take over from the other: the
   pairings, the library's change log, the kept saves and the manager's
   games stay as they are, with nothing to migrate.
+- **Events for the host.** What the service does is an event, not only a
+  printed line, so the program hosting it can log and show it (a handheld
+  asking to start a game, a session ending or refused, saves and library
+  changes synced, a game folder arriving, a transport stopping).
+  `droidtop_agent_service::events` keeps the last 500, numbered, on the
+  `Agent`; each has `seq`, `ms`, `level` (`info`, `warn`), `kind`, the
+  `message` the command line prints (each event is still printed, so
+  `droidtop-agent run`'s output is unchanged), and what it is about by name
+  (`peer`, `device`, `title`, `key`...). A host reads from the last `seq`
+  it saw; `events(since, wait)` waits up to `wait` seconds for one without
+  holding the interpreter. Read, not pushed: a Python callback on the
+  agent's threads would take the interpreter in the middle of a session.
+  Save syncs are reported once per game at the end of a session, through
+  core's `Host::saves_synced`, since a handheld's sync is many requests.
 - **The manager's own games** (`set_manager_games`): the games Pythia
   tracks, as library records with their folders, are kept in the agent's
   data folder (`manager-games.json`, with the manager's name) and joined

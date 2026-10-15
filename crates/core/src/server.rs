@@ -46,6 +46,10 @@ pub trait Host: Send + Sync {
     }
     /// A game folder a handheld sent is in place.
     fn game_arrived(&self, _game: &GameRef, _folder: &std::path::Path) {}
+    /// At the end of a session in which [`peer`] synced [`game`]'s saves:
+    /// how many save files this computer sent and received, and how many it
+    /// removed because the handheld's set no longer has them.
+    fn saves_synced(&self, _peer: &PeerId, _game: &GameRef, _sent: usize, _received: usize, _removed: usize) {}
     /// Whether [`peer`] is this computer's primary handheld, whose saves it
     /// prefers when both sides changed.
     fn primary(&self, _peer: &PeerId) -> bool {
@@ -75,6 +79,29 @@ pub fn serve<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host) -> Result<()
 /// [`serve`] for a session the handheld opened to an identity this computer
 /// is moving away from: its hello reply carries [`moved`].
 pub fn serve_moved<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host, moved: Option<crate::moved::Moved>) -> Result<()> {
+    let peer = ch.peer();
+    let mut synced = HashMap::new();
+    let result = session(ch, host, moved, &mut synced);
+    for (game, Synced { sent, received, removed }) in synced {
+        host.saves_synced(&peer, &game, sent, received, removed);
+    }
+    result
+}
+
+/// Save files a session moved for one game.
+#[derive(Default)]
+struct Synced {
+    sent: usize,
+    received: usize,
+    removed: usize,
+}
+
+fn session<S: Read + Write>(
+    ch: &mut Channel<S>,
+    host: &dyn Host,
+    moved: Option<crate::moved::Moved>,
+    synced: &mut HashMap<GameRef, Synced>,
+) -> Result<()> {
     let peer = ch.peer();
     let mut specs: HashMap<GameRef, Option<(SaveSpec, Roots)>> = HashMap::new();
     let mut known: HashMap<GameRef, Manifest> = HashMap::new();
@@ -121,6 +148,7 @@ pub fn serve_moved<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host, moved:
                         Ok(file) => {
                             ch.send_json(&Response::File { file: file.clone() })?;
                             send_contents(ch, &path, file.size)?;
+                            synced.entry(game).or_default().sent += 1;
                             continue;
                         }
                         Err(e) => Err(e),
@@ -137,7 +165,10 @@ pub fn serve_moved<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host, moved:
                     _ => None,
                 };
                 match target {
-                    Some(target) => receive_file(ch, &file, &target).map(|()| Response::Ok),
+                    Some(target) => receive_file(ch, &file, &target).map(|()| {
+                        synced.entry(game).or_default().received += 1;
+                        Response::Ok
+                    }),
                     None => {
                         let mut left = file.size;
                         while left > 0 {
@@ -148,7 +179,10 @@ pub fn serve_moved<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host, moved:
                 }
             }
             Request::SaveApply { game, remove, archive } => match spec_of(&game) {
-                Some((spec, roots)) => apply(host, &game, &spec, &roots, &remove, archive).map(|()| Response::Ok),
+                Some((spec, roots)) => apply(host, &game, &spec, &roots, &remove, archive).map(|removed| {
+                    synced.entry(game).or_default().removed += removed;
+                    Response::Ok
+                }),
                 None => Err(Error::Protocol("this computer knows no saves for that game".into())),
             },
             Request::GameFiles { game } => match host.game_folder(&game) {
@@ -194,22 +228,24 @@ pub fn serve_moved<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host, moved:
     }
 }
 
-fn apply(host: &dyn Host, game: &GameRef, spec: &SaveSpec, roots: &Roots, remove: &[String], archive: bool) -> Result<()> {
+/// Returns how many files it removed.
+fn apply(host: &dyn Host, game: &GameRef, spec: &SaveSpec, roots: &Roots, remove: &[String], archive: bool) -> Result<usize> {
     // This computer's changed set is overwritten: it keeps it as its own copy first.
     if archive {
         keep_copy(saves::collect(spec, roots).into_iter(), &host.archive_dir(game), &host.name())?;
     }
+    let mut removed = 0;
     for name in remove {
         if !spec.matches(name) {
             continue;
         }
         if let Some(path) = saves::local_path(name, roots) {
             match fs::remove_file(&path) {
-                Ok(()) => {}
+                Ok(()) => removed += 1,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e.into()),
             }
         }
     }
-    Ok(())
+    Ok(removed)
 }

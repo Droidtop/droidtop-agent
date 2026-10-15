@@ -13,6 +13,7 @@ use droidtop_agent_saves::Saves;
 use droidtop_agent_scan::{Found, Scan};
 use droidtop_agent_store::{Dirs, Settings, Store};
 
+use crate::events::Events;
 use crate::manager::{ManagerGame, ManagerGames};
 
 /// What the scanner looks at, from the person's settings.
@@ -34,6 +35,8 @@ pub struct Agent {
     /// What the rendezvous knows now: the address the NAT gives the WireGuard
     /// socket, and where to punch (crate::rendezvous).
     pub rendezvous: std::sync::Arc<Mutex<crate::rendezvous::Shared>>,
+    /// What the running agent did, for the program that hosts it.
+    pub events: Events,
 }
 
 impl Agent {
@@ -48,6 +51,7 @@ impl Agent {
             saves: Saves::open(store.dirs.saves(), store.dirs.data.clone())?,
             scan: Mutex::new(None),
             rendezvous: Default::default(),
+            events: Events::default(),
             store,
         })
     }
@@ -72,7 +76,7 @@ impl Agent {
         self.store.reload_settings();
         let settings = self.store.settings.lock().unwrap().clone();
         let mut scan = droidtop_agent_scan::scan(&scan_options(&settings));
-        scan.join(&ManagerGames::load(&self.store.dirs).usable(&self.store.dirs));
+        scan.join(&ManagerGames::load(&self.store.dirs).usable(&self.store.dirs, &self.events));
         let launcher_marks = droidtop_agent_scan::lutris::marks();
         let (device, name) = (self.store.peer_id(), self.store.name());
         let changes = self.store.edit_library(|lib| {

@@ -16,6 +16,9 @@ use droidtop_agent_core::library::ScannedGame;
 use droidtop_agent_scan::Found;
 use droidtop_agent_store::{read_json, write_json, Dirs};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+
+use crate::events::Events;
 
 /// One game a desktop manager tracks: the library's record of it, and its folder.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -44,12 +47,16 @@ impl ManagerGames {
 
     /// The games a scan joins: each with a folder that passes [`folder_allowed`]
     /// or with none. The others are left out and said once per scan.
-    pub fn usable(&self, dirs: &Dirs) -> Vec<Found> {
+    pub fn usable(&self, dirs: &Dirs, events: &Events) -> Vec<Found> {
         self.games
             .iter()
             .filter(|g| match g.base.as_deref().map(|b| folder_allowed(b, dirs)) {
                 Some(Err(why)) => {
-                    eprintln!("Left out {} from {}: {why}", g.game.title, self.manager);
+                    events.warn(
+                        "manager",
+                        format!("Left out {} from {}: {why}", g.game.title, self.manager),
+                        json!({ "title": g.game.title, "key": g.game.key, "manager": self.manager }),
+                    );
                     false
                 }
                 _ => true,
@@ -109,8 +116,11 @@ mod tests {
             ],
         };
         list.save(&dirs).unwrap();
-        let kept: Vec<String> = ManagerGames::load(&dirs).usable(&dirs).into_iter().map(|f| f.game.key).collect();
+        let events = Events::default();
+        let kept: Vec<String> = ManagerGames::load(&dirs).usable(&dirs, &events).into_iter().map(|f| f.game.key).collect();
         assert_eq!(kept, ["title:some game", "title:no folder"]);
+        let left_out: Vec<String> = events.since(0).iter().map(|e| e.detail["key"].as_str().unwrap().to_string()).collect();
+        assert_eq!(left_out, ["title:gone", "title:agent", "title:home"]);
         assert!(folder_allowed(&root.join("games"), &dirs).is_ok());
         assert!(folder_allowed(&root, &dirs).is_err(), "it holds the agent's files");
         let _ = std::fs::remove_dir_all(&root);

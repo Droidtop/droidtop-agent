@@ -13,6 +13,7 @@ use crate::{agent, run};
 pub fn fill(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serve, m)?)?;
     m.add_function(wrap_pyfunction!(serving, m)?)?;
+    m.add_function(wrap_pyfunction!(events, m)?)?;
     Ok(())
 }
 
@@ -68,5 +69,28 @@ fn serving(py: Python<'_>) -> PyResult<PyObject> {
             Some(Ok(())) => json!({ "state": "serving" }),
             Some(Err(e)) => json!({ "state": "stopped", "reason": e }),
         })
+    })
+}
+
+/// What the service did after event `since` (0: all it still keeps, the
+/// last 500), oldest first: each with its `seq`, `ms` (when, since 1970),
+/// `level` (`info` or `warn`), `kind` (`listening`, `session`, `launch`,
+/// `saves`, `library`, `arrived`, `discovery`, `wireguard`, `rendezvous`,
+/// `share` or `manager`), `message` (the line `droidtop-agent run` prints)
+/// and what it is about (`peer`, `device`, `title`, `key`, `changes`...).
+/// Pass the last `seq` read as `since` next time. With `wait` (seconds) it
+/// waits that long for an event when there is none yet, without holding
+/// the interpreter, so a thread can follow the service with
+/// `while True: new = events(since=seen, wait=30)`.
+#[pyfunction]
+#[pyo3(signature = (since = 0, wait = 0.0))]
+fn events(py: Python<'_>, since: u64, wait: f64) -> PyResult<PyObject> {
+    run(py, move || {
+        let a = agent()?;
+        let got = match Duration::try_from_secs_f64(wait) {
+            Ok(wait) if !wait.is_zero() => a.events.wait_since(since, wait),
+            _ => a.events.since(since),
+        };
+        serde_json::to_value(got).map_err(|e| e.to_string())
     })
 }

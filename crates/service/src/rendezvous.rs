@@ -105,7 +105,11 @@ pub struct Status {
 pub fn run(agent: Arc<Agent>) {
     thread::spawn(move || {
         let Ok(cert) = rendezvous::certificate(&agent.store.key) else {
-            eprintln!("Rendezvous is off: this computer's discovery certificate could not be made.");
+            agent.events.warn(
+                "rendezvous",
+                "Rendezvous is off: this computer's discovery certificate could not be made.".into(),
+                serde_json::json!({}),
+            );
             return;
         };
         let mut status = Status { disco: Some(cert.device_id()), ..Default::default() };

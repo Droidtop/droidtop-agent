@@ -24,6 +24,8 @@ struct TestHost {
     library: Mutex<Library>,
     records: Mutex<Records>,
     app_running: bool,
+    /// What each session reported through `saves_synced`: game key, sent, received, removed.
+    synced: Mutex<Vec<(String, usize, usize, usize)>>,
 }
 
 impl Host for TestHost {
@@ -35,6 +37,9 @@ impl Host for TestHost {
     }
     fn archive_dir(&self, _game: &GameRef) -> PathBuf {
         self.archive.clone()
+    }
+    fn saves_synced(&self, _peer: &PeerId, game: &GameRef, sent: usize, received: usize, removed: usize) {
+        self.synced.lock().unwrap().push((game.key.clone(), sent, received, removed));
     }
     fn library_pull(&self, _peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)> {
         Ok(self.library.lock().unwrap().changes_since(since))
@@ -141,15 +146,18 @@ fn saves_sync_both_ways_and_the_newest_copy_wins() {
         library: Mutex::new(Library::default()),
         records: Mutex::new(Records::new()),
         app_running: false,
+        synced: Mutex::new(Vec::new()),
     }));
 
     // First sync: the handheld has nothing, so the computer's saves come down.
     let first = sync(host, &hh_roots, &state, None);
     assert!(matches!(first, Outcome::Copied { from: Side::There, files: 2, .. }), "{first:?}");
     assert_eq!(fs::read(hh_game.join("slots/one.sav")).unwrap(), b"pc save 1");
+    assert_eq!(host.synced.lock().unwrap().drain(..).collect::<Vec<_>>(), [("steam:1".into(), 2, 0, 0)]);
 
-    // Nothing changed: up to date.
+    // Nothing changed: up to date, and no files moved.
     assert!(matches!(sync(host, &hh_roots, &state, None), Outcome::UpToDate { files: 2 }));
+    assert!(host.synced.lock().unwrap().is_empty());
 
     // Played on the handheld: the new save goes up, a deleted file is deleted there.
     fs::write(hh_game.join("slots/one.sav"), b"handheld save 2").unwrap();
@@ -158,6 +166,7 @@ fn saves_sync_both_ways_and_the_newest_copy_wins() {
     assert!(matches!(up, Outcome::Copied { from: Side::Here, files: 1, removed: 1, .. }), "{up:?}");
     assert_eq!(fs::read(pc_game.join("slots/one.sav")).unwrap(), b"handheld save 2");
     assert!(!pc_game.join("settings.ini").exists());
+    assert_eq!(host.synced.lock().unwrap().drain(..).collect::<Vec<_>>(), [("steam:1".into(), 0, 1, 1)]);
 
     // Played on both: the newest copy wins, and the computer keeps its own.
     write_at(&hh_game.join("slots/one.sav"), b"handheld save 3", 2_000_000_000);
@@ -218,6 +227,7 @@ fn saves_left_in_the_share_state_what_they_were_made_against() {
         library: Mutex::new(Library::default()),
         records: Mutex::new(Records::new()),
         app_running: false,
+        synced: Mutex::new(Vec::new()),
     }));
     let game = GameRef { key: "steam:1".into(), title: "Game".into() };
     let baseline = state.join("baseline.json");
@@ -292,6 +302,7 @@ fn library_and_context_travel_over_the_channel() {
         library: Mutex::new(pc_lib),
         records: Mutex::new(records),
         app_running: false,
+        synced: Mutex::new(Vec::new()),
     }));
     let pulled = session(host, |ch| {
         ch.send_json(&Request::LibraryPull { since: 0 }).unwrap();

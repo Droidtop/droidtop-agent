@@ -13,6 +13,7 @@ use droidtop_agent_core::manifest::{self, FileEntry, Manifest};
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 use droidtop_agent_core::savesync::{keep_copy, winner, Prefer, Side};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::Agent;
@@ -24,12 +25,16 @@ pub fn process(agent: &Agent) -> Result<(), String> {
     }
     let (letters, failed) = mailbox::collect(&share, &agent.store.key, |p| agent.store.is_trusted(p)).map_err(|e| e.to_string())?;
     for (path, why) in failed {
-        eprintln!("Left {} in the share: {why}", path.display());
+        agent.events.warn("share", format!("Left {} in the share: {why}", path.display()), json!({ "path": path }));
     }
     for letter in letters {
         match mailbox::unpack(&letter.payload) {
             Ok((envelope, contents)) => handle(agent, &share, &letter.from, envelope, contents),
-            Err(e) => eprintln!("A message from {} could not be read: {e}", letter.from),
+            Err(e) => agent.events.warn(
+                "share",
+                format!("A message from {} could not be read: {e}", agent.store.device_name(&letter.from)),
+                json!({ "peer": letter.from.to_hex() }),
+            ),
         }
         let _ = fs::remove_file(&letter.path);
     }
@@ -39,22 +44,43 @@ pub fn process(agent: &Agent) -> Result<(), String> {
 fn handle(agent: &Agent, share: &std::path::Path, from: &PeerId, envelope: Envelope, contents: &[u8]) {
     match envelope {
         Envelope::Library { changes } => {
-            agent.store.edit_library(|lib| {
+            let changed = agent.store.edit_library(|lib| {
                 let changed = changes.into_iter().filter(|c| lib.apply(c.clone())).count();
-                ((), changed > 0)
+                (changed, changed > 0)
             });
+            if changed > 0 {
+                let device = agent.store.device_name(from);
+                agent.events.info(
+                    "library",
+                    format!("Library: {changed} changes from {device} through the cloud share."),
+                    json!({ "peer": from.to_hex(), "device": device, "received": changed }),
+                );
+            }
         }
         Envelope::Saves { game, base, files, primary_computer } => {
             let prefer = Prefer { here: agent.store.is_primary(from), there: primary_computer };
             let sender = agent.store.device_name(from);
-            if let Err(reason) = apply_saves(agent, &game, base, &files, contents, prefer, &sender) {
-                let reply = Envelope::SavesRefused { game, reason };
-                if let Ok(payload) = mailbox::pack(&reply, &[]) {
-                    let _ = mailbox::post(share, &agent.store.key, from, &payload);
+            let detail = json!({ "peer": from.to_hex(), "device": sender, "title": game.title, "key": game.key });
+            match apply_saves(agent, &game, base, &files, contents, prefer, &sender) {
+                Ok(true) => agent.events.info("saves", format!("Saves of {} from {sender} through the cloud share.", game.title), detail),
+                Ok(false) => {}
+                Err(reason) => {
+                    agent.events.warn("saves", format!("Saves of {} from {sender} not taken: {reason}", game.title), detail);
+                    let reply = Envelope::SavesRefused { game, reason };
+                    if let Ok(payload) = mailbox::pack(&reply, &[]) {
+                        let _ = mailbox::post(share, &agent.store.key, from, &payload);
+                    }
                 }
             }
         }
-        Envelope::SavesRefused { game, reason } => eprintln!("{} could not take the saves of {}: {reason}", from, game.title),
+        Envelope::SavesRefused { game, reason } => {
+            let device = agent.store.device_name(from);
+            agent.events.warn(
+                "saves",
+                format!("{device} could not take the saves of {}: {reason}", game.title),
+                json!({ "peer": from.to_hex(), "device": device, "title": game.title, "key": game.key, "error": reason }),
+            );
+        }
     }
 }
 
@@ -62,7 +88,7 @@ fn handle(agent: &Agent, share: &std::path::Path, from: &PeerId, envelope: Envel
 /// too since the set's baseline, the newest copy wins as in a live sync (a
 /// preferred side first), and the losing set is kept as its device's copy:
 /// this computer's under its own name, or the handheld's under [`sender`],
-/// with a refusal back to it.
+/// with a refusal back to it. Ok(false) when the set was already here.
 fn apply_saves(
     agent: &Agent,
     game: &GameRef,
@@ -71,7 +97,7 @@ fn apply_saves(
     contents: &[u8],
     prefer: Prefer,
     sender: &str,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let (spec, roots, _) = agent.save_lookup(game, false).ok_or("this computer knows no save location for the game")?;
     let current = manifest::build(saves::collect(&spec, &roots), &Manifest::new());
     let mut offset = 0usize;
@@ -88,7 +114,7 @@ fn apply_saves(
     let incoming = manifest::from_entries(files.to_vec());
     // Already the same here (a live sync got there first): nothing to do.
     if manifest::same(&current, &incoming) {
-        return Ok(());
+        return Ok(false);
     }
     let archive = agent.store.dirs.archive().join(droidtop_agent_saves::file_key(&game.key));
     if !manifest::same(&current, &manifest::from_entries(base)) {
@@ -127,7 +153,7 @@ fn apply_saves(
             }
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Leaves each paired device the library changes it has not been sent.

@@ -16,12 +16,17 @@ use droidtop_agent_core::keys::{short, PeerId};
 use droidtop_agent_core::server::{serve, serve_moved};
 use droidtop_agent_core::tunnel;
 use droidtop_agent_core::PORT;
+use serde_json::json;
 
 use crate::Agent;
 
 pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", PORT))?;
-    println!("{} ({}) is listening on port {PORT}.", agent.store.name(), short(&agent.store.peer_id()));
+    agent.events.info(
+        "listening",
+        format!("{} ({}) is listening on port {PORT}.", agent.store.name(), short(&agent.store.peer_id())),
+        json!({ "name": agent.store.name(), "id": agent.store.peer_id().to_hex(), "port": PORT }),
+    );
     let stop = Arc::new(AtomicBool::new(false));
 
     match UdpSocket::bind(("0.0.0.0", PORT)) {
@@ -31,11 +36,15 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
             thread::spawn(move || {
                 let name = a.store.name();
                 if let Err(e) = discovery::answer_agent_queries(&sock, &a.store.key, &name, PORT, |p| a.store.is_trusted(p), &stop) {
-                    eprintln!("Discovery stopped: {e}");
+                    a.events.warn("discovery", format!("Discovery stopped: {e}"), json!({}));
                 }
             });
         }
-        Err(e) => eprintln!("Handhelds will not find this computer by broadcast ({e}); they can still use its address."),
+        Err(e) => agent.events.warn(
+            "discovery",
+            format!("Handhelds will not find this computer by broadcast ({e}); they can still use its address."),
+            json!({}),
+        ),
     }
 
     {
@@ -43,7 +52,7 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
         thread::spawn(move || loop {
             let changes = a.rescan();
             if changes > 0 {
-                println!("Library: {changes} changes from the scan.");
+                a.events.info("library", format!("Library: {changes} changes from the scan."), json!({ "changes": changes }));
             }
             let minutes = a.store.settings.lock().unwrap().scan_minutes.max(5);
             thread::sleep(Duration::from_secs(minutes * 60));
@@ -54,7 +63,7 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
         let a = agent.clone();
         thread::spawn(move || loop {
             if let Err(e) = crate::share::process(&a) {
-                eprintln!("Cloud share: {e}");
+                a.events.warn("share", format!("Cloud share: {e}"), json!({}));
             }
             thread::sleep(Duration::from_secs(60));
         });
@@ -90,16 +99,19 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
                     match Channel::accept(stream, &a.store.key, |p| *p == peer && a.store.is_trusted(p)) {
                         Ok(mut ch) => {
                             a.store.seen(&peer, None);
-                            if let Err(e) = serve(&mut ch, &*a) {
-                                eprintln!("Session with {} through WireGuard ended: {e}", short(&peer));
-                            }
+                            let served = serve(&mut ch, &*a);
+                            session_ended(&a, &peer, " through WireGuard", served);
                         }
-                        Err(e) => eprintln!("Refused a WireGuard session from {}: {e}", short(&peer)),
+                        Err(e) => a.events.warn(
+                            "session",
+                            format!("Refused a WireGuard session from {}: {e}", short(&peer)),
+                            json!({ "peer": peer.to_hex() }),
+                        ),
                     }
                 });
             };
             if let Err(e) = tunnel::serve(&a.store.key, udp, peers, on_stream, &stop, hooks.as_mut()) {
-                eprintln!("WireGuard stopped: {e}");
+                a.events.warn("wireguard", format!("WireGuard stopped: {e}"), json!({}));
             }
         });
     }
@@ -118,7 +130,8 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
             let (mut ch, which) = match Channel::accept_any(stream, &keys, |p| a.store.is_trusted(p)) {
                 Ok(accepted) => accepted,
                 Err(e) => {
-                    eprintln!("Refused a connection from {}: {e}", address.unwrap_or_default());
+                    let address = address.unwrap_or_default();
+                    a.events.warn("session", format!("Refused a connection from {address}: {e}"), json!({ "address": address }));
                     return;
                 }
             };
@@ -130,10 +143,19 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
             } else {
                 serve_moved(&mut ch, &*a, a.store.moved())
             };
-            if let Err(e) = served {
-                eprintln!("Session with {} ended: {e}", short(&peer));
-            }
+            session_ended(&a, &peer, "", served);
         });
     }
     Ok(())
+}
+
+/// A session with [`peer`] is over: said as a warning when it broke off.
+/// [`via`] names the transport when it was not the LAN.
+fn session_ended(agent: &Agent, peer: &PeerId, via: &str, served: droidtop_agent_core::Result<()>) {
+    let device = agent.store.device_name(peer);
+    let detail = |error: Option<String>| json!({ "peer": peer.to_hex(), "device": device, "error": error });
+    match served {
+        Ok(()) => agent.events.info("session", format!("Session with {device}{via} ended."), detail(None)),
+        Err(e) => agent.events.warn("session", format!("Session with {device}{via} ended: {e}"), detail(Some(e.to_string()))),
+    }
 }

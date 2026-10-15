@@ -5,6 +5,7 @@
 
 mod agent;
 pub mod autostart;
+pub mod events;
 pub mod host;
 pub mod launch;
 pub mod manager;

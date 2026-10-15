@@ -11,6 +11,7 @@ use droidtop_agent_core::saves::{Roots, SaveSpec};
 use droidtop_agent_core::server::Host;
 use droidtop_agent_core::{Error, Result};
 use droidtop_agent_saves::file_key;
+use serde_json::json;
 
 use crate::Agent;
 
@@ -47,7 +48,12 @@ impl Host for Agent {
         self.store.reload_settings();
         let installed = || self.fresh_scan(300).find(&game.key).is_some_and(|f| f.game.install.installed);
         let outcome = crate::launch::launch(self.store.may_launch(peer), installed, game, &crate::launch::Local);
-        println!("{} asked to start {:?} ({:?}): {outcome:?}", self.store.device_name(peer), game.title, game.key);
+        let device = self.store.device_name(peer);
+        self.events.info(
+            "launch",
+            format!("{device} asked to start {:?} ({:?}): {outcome:?}", game.title, game.key),
+            json!({ "peer": peer.to_hex(), "device": device, "title": game.title, "key": game.key, "outcome": outcome }),
+        );
         outcome
     }
 
@@ -67,8 +73,31 @@ impl Host for Agent {
     }
 
     fn game_arrived(&self, game: &GameRef, folder: &Path) {
-        println!("{} arrived in {}.", game.title, folder.display());
+        self.events.info(
+            "arrived",
+            format!("{} arrived in {}.", game.title, folder.display()),
+            json!({ "title": game.title, "key": game.key, "folder": folder }),
+        );
         self.rescan();
+    }
+
+    fn saves_synced(&self, peer: &PeerId, game: &GameRef, sent: usize, received: usize, removed: usize) {
+        let device = self.store.device_name(peer);
+        let mut done = Vec::new();
+        if received > 0 {
+            done.push(format!("took {received} save files from {device}"));
+        }
+        if removed > 0 {
+            done.push(format!("removed {removed} that {device} no longer has"));
+        }
+        if sent > 0 {
+            done.push(format!("sent {sent} to {device}"));
+        }
+        self.events.info(
+            "saves",
+            format!("Saves of {}: {}.", game.title, done.join(", ")),
+            json!({ "peer": peer.to_hex(), "device": device, "title": game.title, "key": game.key, "sent": sent, "received": received, "removed": removed }),
+        );
     }
 
     fn endpoints(&self) -> Vec<String> {
@@ -110,16 +139,33 @@ impl Host for Agent {
         dir
     }
 
-    fn library_pull(&self, _peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)> {
+    fn library_pull(&self, peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)> {
         self.fresh_scan(120);
-        Ok(self.store.library_now().changes_since(since))
+        let (changes, cursor) = self.store.library_now().changes_since(since);
+        if !changes.is_empty() {
+            let device = self.store.device_name(peer);
+            self.events.info(
+                "library",
+                format!("Library: sent {} changes to {device}.", changes.len()),
+                json!({ "peer": peer.to_hex(), "device": device, "sent": changes.len() }),
+            );
+        }
+        Ok((changes, cursor))
     }
 
-    fn library_push(&self, _peer: &PeerId, changes: Vec<Change>) -> Result<()> {
-        self.store.edit_library(|lib| {
+    fn library_push(&self, peer: &PeerId, changes: Vec<Change>) -> Result<()> {
+        let changed = self.store.edit_library(|lib| {
             let changed = changes.into_iter().filter(|c| lib.apply(c.clone())).count();
-            ((), changed > 0)
+            (changed, changed > 0)
         });
+        if changed > 0 {
+            let device = self.store.device_name(peer);
+            self.events.info(
+                "library",
+                format!("Library: {changed} changes from {device}."),
+                json!({ "peer": peer.to_hex(), "device": device, "received": changed }),
+            );
+        }
         Ok(())
     }
 
