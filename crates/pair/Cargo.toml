@@ -1,0 +1,18 @@
+[package]
+name = "droidtop-agent-pair"
+description = "Pairing a handheld from the computer: typing the code the handheld shows, or showing one for it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "droidtop_agent_pair"
+path = "src/lib.rs"
+
+[dependencies]
+droidtop-agent-core = { path = "../core" }
+droidtop-agent-store = { path = "../store" }
+# This computer's addresses, for the pairing screens.
+if-addrs.workspace = true

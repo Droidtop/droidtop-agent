@@ -6,6 +6,10 @@
 //!   the handheld connects (Pair a computer > "Use a code from the computer").
 //!   For a handheld this computer cannot reach: one behind an emulator's or a
 //!   guest network's NAT.
+//!
+//! A crate of its own (docs/DESIGN.md section 13): it needs only this
+//! computer's [`Store`], so the window, the command line and a desktop
+//! manager (Pythia) pair the same way.
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};

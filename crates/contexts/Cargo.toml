@@ -1,0 +1,20 @@
+[package]
+name = "droidtop-agent-contexts"
+description = "Context adapters on the computer: the programs plugins publish to sync their supporting state, offered, approved, installed and run"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "droidtop_agent_contexts"
+path = "src/lib.rs"
+
+[dependencies]
+droidtop-agent-core = { path = "../core" }
+droidtop-agent-store = { path = "../store" }
+serde_json.workspace = true
+sha2.workspace = true
+# Fetches an adapter a plugin offered, once the person approved it.
+ureq.workspace = true

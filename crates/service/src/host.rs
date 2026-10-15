@@ -125,16 +125,19 @@ impl Host for Agent {
 
     fn context_pull(&self, context: &str, offer: Option<&AdapterOffer>) -> Result<Records> {
         if let Some(offer) = offer {
-            crate::contexts::consider_offer(&self.store, context, offer).map_err(Error::Protocol)?;
+            droidtop_agent_contexts::consider_offer(&self.store, context, offer).map_err(Error::Protocol)?;
         }
-        crate::contexts::adapter(&self.store, context)
+        droidtop_agent_contexts::adapter(&self.store, context)
             .ok_or_else(|| no_adapter(context, offer.is_some_and(|o| o.for_this_system().is_some())))?
             .pull()
             .map_err(Error::Protocol)
     }
 
     fn context_push(&self, context: &str, changes: Vec<RecordChange>) -> Result<Option<String>> {
-        crate::contexts::adapter(&self.store, context).ok_or_else(|| no_adapter(context, false))?.push(changes).map_err(Error::Protocol)
+        droidtop_agent_contexts::adapter(&self.store, context)
+            .ok_or_else(|| no_adapter(context, false))?
+            .push(changes)
+            .map_err(Error::Protocol)
     }
 }
 

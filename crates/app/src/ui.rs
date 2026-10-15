@@ -14,9 +14,10 @@ use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 use droidtop_agent_saves::copies::{self, GameCopies, Kept};
 use droidtop_agent_scan::Found;
-use droidtop_agent_service::{autostart, contexts, pair, rendezvous, scan_options, Agent};
+use droidtop_agent_service::{autostart, rendezvous, scan_options, Agent};
 use droidtop_agent_store::{read_json, Settings};
 use eframe::egui::{self, Color32, RichText};
+use {droidtop_agent_contexts as contexts, droidtop_agent_pair as pair};
 
 use crate::tray::{Action, Tray};
 

@@ -17,4 +17,6 @@ droidtop-agent-core = { path = "../core" }
 droidtop-agent-service = { path = "../service" }
 droidtop-agent-store = { path = "../store" }
 droidtop-agent-saves = { path = "../saves" }
+droidtop-agent-pair = { path = "../pair" }
+droidtop-agent-contexts = { path = "../contexts" }
 serde_json.workspace = true

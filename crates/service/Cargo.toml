@@ -13,14 +13,13 @@ path = "src/lib.rs"
 
 [dependencies]
 droidtop-agent-core = { path = "../core" }
+droidtop-agent-contexts = { path = "../contexts" }
 droidtop-agent-saves = { path = "../saves" }
 droidtop-agent-scan = { path = "../scan" }
 droidtop-agent-store = { path = "../store" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-# Fetches a context adapter a plugin offered, once the person approved it.
-ureq.workspace = true
 dirs.workspace = true
 # The LaunchAgent that starts the agent at sign-in on macOS.
 plist.workspace = true

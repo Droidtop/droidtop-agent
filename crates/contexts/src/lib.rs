@@ -19,6 +19,10 @@
 //! An adapter reads only the fields its context declares and writes only
 //! the ones that may travel to the computer, and it writes only while the
 //! app that owns the data is closed.
+//!
+//! A crate of its own (docs/DESIGN.md section 13), over this computer's
+//! store: the running agent runs adapters for handhelds, the window and
+//! the command line approve and remove them.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
