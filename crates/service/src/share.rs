@@ -15,14 +15,14 @@ use droidtop_agent_core::saves;
 use droidtop_agent_core::savesync::{keep_copy, winner, Prefer, Side};
 use sha2::{Digest, Sha256};
 
-use crate::state::Agent;
+use crate::Agent;
 
 pub fn process(agent: &Agent) -> Result<(), String> {
-    let Some(share) = agent.settings.lock().unwrap().share.clone() else { return Ok(()) };
+    let Some(share) = agent.store.settings.lock().unwrap().share.clone() else { return Ok(()) };
     if !share.is_dir() {
         return Err(format!("{} is not there", share.display()));
     }
-    let (letters, failed) = mailbox::collect(&share, &agent.key, |p| agent.is_trusted(p)).map_err(|e| e.to_string())?;
+    let (letters, failed) = mailbox::collect(&share, &agent.store.key, |p| agent.store.is_trusted(p)).map_err(|e| e.to_string())?;
     for (path, why) in failed {
         eprintln!("Left {} in the share: {why}", path.display());
     }
@@ -39,18 +39,18 @@ pub fn process(agent: &Agent) -> Result<(), String> {
 fn handle(agent: &Agent, share: &std::path::Path, from: &PeerId, envelope: Envelope, contents: &[u8]) {
     match envelope {
         Envelope::Library { changes } => {
-            agent.edit_library(|lib| {
+            agent.store.edit_library(|lib| {
                 let changed = changes.into_iter().filter(|c| lib.apply(c.clone())).count();
                 ((), changed > 0)
             });
         }
         Envelope::Saves { game, base, files, primary_computer } => {
-            let prefer = Prefer { here: agent.is_primary(from), there: primary_computer };
-            let sender = agent.device_name(from);
+            let prefer = Prefer { here: agent.store.is_primary(from), there: primary_computer };
+            let sender = agent.store.device_name(from);
             if let Err(reason) = apply_saves(agent, &game, base, &files, contents, prefer, &sender) {
                 let reply = Envelope::SavesRefused { game, reason };
                 if let Ok(payload) = mailbox::pack(&reply, &[]) {
-                    let _ = mailbox::post(share, &agent.key, from, &payload);
+                    let _ = mailbox::post(share, &agent.store.key, from, &payload);
                 }
             }
         }
@@ -90,7 +90,7 @@ fn apply_saves(
     if manifest::same(&current, &incoming) {
         return Ok(());
     }
-    let archive = agent.dirs.archive().join(crate::host::file_key(&game.key));
+    let archive = agent.store.dirs.archive().join(crate::host::file_key(&game.key));
     if !manifest::same(&current, &manifest::from_entries(base)) {
         if winner(&incoming, &current, prefer) == Side::There {
             // This computer's copy stays; the handheld's is kept beside it.
@@ -108,7 +108,7 @@ fn apply_saves(
             }
             return Err(format!("this computer's saves were newer, so they stay; yours are kept on it in {}", archive.display()));
         }
-        keep_copy(saves::collect(&spec, &roots).into_iter(), &archive, &agent.name()).map_err(|e| e.to_string())?;
+        keep_copy(saves::collect(&spec, &roots).into_iter(), &archive, &agent.store.name()).map_err(|e| e.to_string())?;
     }
     for (f, blob) in files.iter().zip(blobs) {
         let path = saves::local_path(&f.name, &roots).ok_or("no place for a file")?;
@@ -132,11 +132,11 @@ fn apply_saves(
 
 /// Leaves each paired device the library changes it has not been sent.
 fn send_library(agent: &Agent, share: &std::path::Path) -> Result<(), String> {
-    let devices: Vec<String> = agent.devices_now().iter().map(|d| d.id.clone()).collect();
+    let devices: Vec<String> = agent.store.devices_now().iter().map(|d| d.id.clone()).collect();
     for id in devices {
         let Ok(peer) = PeerId::from_hex(&id) else { continue };
         let (changes, seq) = {
-            let lib = agent.library_now();
+            let lib = agent.store.library_now();
             let pushed = lib.cursors.get(&id).map(|c| c.pushed).unwrap_or(0);
             lib.changes_since(pushed)
         };
@@ -144,8 +144,8 @@ fn send_library(agent: &Agent, share: &std::path::Path) -> Result<(), String> {
             continue;
         }
         let payload = mailbox::pack(&Envelope::Library { changes }, &[]).map_err(|e| e.to_string())?;
-        mailbox::post(share, &agent.key, &peer, &payload).map_err(|e| e.to_string())?;
-        agent.edit_library(|lib| {
+        mailbox::post(share, &agent.store.key, &peer, &payload).map_err(|e| e.to_string())?;
+        agent.store.edit_library(|lib| {
             lib.cursors.entry(id).or_default().pushed = seq;
             ((), true)
         });

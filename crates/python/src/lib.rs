@@ -22,7 +22,8 @@ use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 use droidtop_agent_scan::Found;
 use droidtop_agent_service::pair;
-use droidtop_agent_service::state::{Agent, Settings};
+use droidtop_agent_service::Agent;
+use droidtop_agent_store::Settings;
 use pyo3::prelude::*;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -82,18 +83,21 @@ fn run(op: &str, args: &Value) -> Result<Value, String> {
     match op {
         "identity" => {
             let a = agent()?;
-            Ok(json!({ "name": a.name(), "id": a.peer_id().to_hex(), "config": a.dirs.config, "data": a.dirs.data }))
+            Ok(
+                json!({ "name": a.store.name(), "id": a.store.peer_id().to_hex(), "config": a.store.dirs.config, "data": a.store.dirs.data }),
+            )
         }
-        "settings" => serde_json::to_value(&*agent()?.settings.lock().unwrap()).map_err(|e| e.to_string()),
+        "settings" => serde_json::to_value(&*agent()?.store.settings.lock().unwrap()).map_err(|e| e.to_string()),
         "settings_set" => settings_set(args),
         "devices" => {
             let a = agent()?;
-            let primary = a.settings.lock().unwrap().primary_device.clone();
+            let primary = a.store.settings.lock().unwrap().primary_device.clone();
             let devices: Vec<Value> = a
+                .store
                 .devices_now()
                 .into_iter()
                 .map(|d| {
-                    let trusted = PeerId::from_hex(&d.id).is_ok_and(|p| a.is_trusted(&p));
+                    let trusted = PeerId::from_hex(&d.id).is_ok_and(|p| a.store.is_trusted(&p));
                     let is_primary = primary.as_deref() == Some(d.id.as_str());
                     let mut v = serde_json::to_value(&d).unwrap_or(Value::Null);
                     v["trusted"] = json!(trusted);
@@ -106,7 +110,7 @@ fn run(op: &str, args: &Value) -> Result<Value, String> {
         "unpair" => {
             let a = agent()?;
             let peer = one_device(&a, text(args, "id")?)?;
-            a.remove_device(&peer).map_err(|e| e.to_string())?;
+            a.store.remove_device(&peer).map_err(|e| e.to_string())?;
             Ok(json!({}))
         }
         "primary" => {
@@ -115,13 +119,13 @@ fn run(op: &str, args: &Value) -> Result<Value, String> {
                 Some(id) => Some(one_device(&a, id)?.to_hex()),
                 None => None,
             };
-            a.settings.lock().unwrap().primary_device = id;
-            a.save_settings().map_err(|e| e.to_string())?;
+            a.store.settings.lock().unwrap().primary_device = id;
+            a.store.save_settings().map_err(|e| e.to_string())?;
             Ok(json!({}))
         }
         "pair" => {
             let a = agent()?;
-            let name = pair::pair(&a, text(args, "code")?)?;
+            let name = pair::pair(&a.store, text(args, "code")?)?;
             Ok(json!({ "paired": name }))
         }
         "pair_show" => pair_show(),
@@ -151,9 +155,10 @@ fn run(op: &str, args: &Value) -> Result<Value, String> {
             let max_age = args.get("max_age_s").and_then(Value::as_u64).unwrap_or(0);
             serde_json::to_value(agent()?.fresh_scan(max_age)).map_err(|e| e.to_string())
         }
-        "library" => serde_json::to_value(&agent()?.library_now().games).map_err(|e| e.to_string()),
+        "library" => serde_json::to_value(&agent()?.store.library_now().games).map_err(|e| e.to_string()),
         "set_mark" => {
-            let changed = agent()?.set_mark(text(args, "game")?, text(args, "field")?, args.get("value").cloned().unwrap_or(Value::Null));
+            let changed =
+                agent()?.store.set_mark(text(args, "game")?, text(args, "field")?, args.get("value").cloned().unwrap_or(Value::Null));
             Ok(json!({ "changed": changed }))
         }
         "saves" => {
@@ -177,7 +182,7 @@ fn run(op: &str, args: &Value) -> Result<Value, String> {
 /// The paired device whose id starts with [`id`].
 fn one_device(a: &Agent, id: &str) -> Result<PeerId, String> {
     let id = id.to_lowercase();
-    let matches: Vec<String> = a.devices_now().into_iter().filter(|d| d.id.starts_with(&id)).map(|d| d.id).collect();
+    let matches: Vec<String> = a.store.devices_now().into_iter().filter(|d| d.id.starts_with(&id)).map(|d| d.id).collect();
     match matches.as_slice() {
         [one] => PeerId::from_hex(one).map_err(|e| e.to_string()),
         [] => Err("No paired handheld has that id.".into()),
@@ -189,13 +194,13 @@ fn one_device(a: &Agent, id: &str) -> Result<PeerId, String> {
 fn settings_set(args: &Value) -> Result<Value, String> {
     let a = agent()?;
     let Some(changes) = args.as_object() else { return Err("settings_set takes an object".into()) };
-    let mut current = serde_json::to_value(&*a.settings.lock().unwrap()).map_err(|e| e.to_string())?;
+    let mut current = serde_json::to_value(&*a.store.settings.lock().unwrap()).map_err(|e| e.to_string())?;
     for (k, v) in changes {
         current[k] = v.clone();
     }
     let settings: Settings = serde_json::from_value(current).map_err(|e| format!("those settings are not valid: {e}"))?;
-    *a.settings.lock().unwrap() = settings;
-    a.save_settings().map_err(|e| e.to_string())?;
+    *a.store.settings.lock().unwrap() = settings;
+    a.store.save_settings().map_err(|e| e.to_string())?;
     Ok(json!({}))
 }
 
@@ -245,14 +250,14 @@ fn pair_show() -> Result<Value, String> {
         "port": showing.port,
         "addresses": showing.addresses,
         "places": showing.places.iter().map(|p| json!({ "label": p.label, "address": p.address })).collect::<Vec<_>>(),
-        "invite": showing.invite(&a),
+        "invite": showing.invite(&a.store),
     });
     let cancel = Arc::new(AtomicBool::new(false));
     let outcome = Arc::new(Mutex::new(None));
     {
         let (cancel, outcome) = (cancel.clone(), outcome.clone());
         thread::spawn(move || {
-            let result = pair::wait(&a, showing, &cancel);
+            let result = pair::wait(&a.store, showing, &cancel);
             *outcome.lock().unwrap() = Some(result);
         });
     }

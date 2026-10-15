@@ -12,7 +12,7 @@ use droidtop_agent_core::server::Host;
 use droidtop_agent_core::{Error, Result};
 use droidtop_agent_scan::Found;
 
-use crate::state::Agent;
+use crate::Agent;
 
 /// This computer's folder for each token, for a game found by the scan.
 pub fn roots_for(found: Option<&Found>, base: Option<PathBuf>) -> Roots {
@@ -68,10 +68,10 @@ impl Agent {
     pub fn ludusavi_index(&self, fetch: bool) -> Option<crate::ludusavi::Index> {
         let mut slot = self.ludusavi.lock().unwrap();
         if slot.is_none() {
-            *slot = crate::ludusavi::load(&self.dirs.data);
+            *slot = crate::ludusavi::load(&self.store.dirs.data);
         }
         if slot.is_none() && fetch {
-            match crate::ludusavi::update(&self.dirs.data) {
+            match crate::ludusavi::update(&self.store.dirs.data) {
                 Ok(index) => *slot = Some(index),
                 Err(e) => eprintln!("{e}"),
             }
@@ -108,13 +108,13 @@ impl Agent {
     /// a restore can be undone.
     pub fn restore_saves(&self, game: &GameRef, copy: &Path) -> std::result::Result<usize, String> {
         let (spec, roots, _) = self.save_lookup(game, false).ok_or("No save location is known for this game; add one first.")?;
-        let archive = self.dirs.archive().join(file_key(&game.key));
+        let archive = self.store.dirs.archive().join(file_key(&game.key));
         // The copy being restored may itself be this computer's newest copy, which keeping would move.
-        if !copy.starts_with(droidtop_agent_core::savesync::copy_dir(&archive, &self.name())) {
+        if !copy.starts_with(droidtop_agent_core::savesync::copy_dir(&archive, &self.store.name())) {
             droidtop_agent_core::savesync::keep_copy(
                 droidtop_agent_core::saves::collect(&spec, &roots).into_iter(),
                 &archive,
-                &self.name(),
+                &self.store.name(),
             )
             .map_err(|e| e.to_string())?;
         }
@@ -145,20 +145,20 @@ pub fn endpoints(public: Option<&str>) -> Vec<String> {
 
 impl Host for Agent {
     fn name(&self) -> String {
-        Agent::name(self)
+        self.store.name()
     }
 
     fn primary(&self, peer: &PeerId) -> bool {
-        self.is_primary(peer)
+        self.store.is_primary(peer)
     }
 
     fn launch_game(&self, peer: &PeerId, game: &GameRef) -> Launch {
         // The settings are read again: the window or a command line may have
         // changed the switch since this process started.
-        self.reload_settings();
+        self.store.reload_settings();
         let installed = || self.fresh_scan(300).find(&game.key).is_some_and(|f| f.game.install.installed);
-        let outcome = crate::launch::launch(self.may_launch(peer), installed, game, &crate::launch::Local);
-        println!("{} asked to start {:?} ({:?}): {outcome:?}", self.device_name(peer), game.title, game.key);
+        let outcome = crate::launch::launch(self.store.may_launch(peer), installed, game, &crate::launch::Local);
+        println!("{} asked to start {:?} ({:?}): {outcome:?}", self.store.device_name(peer), game.title, game.key);
         outcome
     }
 
@@ -171,7 +171,7 @@ impl Host for Agent {
     /// A version a handheld sends goes to the person's first game folder:
     /// never into a store's own install folders.
     fn game_inbox(&self) -> std::result::Result<PathBuf, String> {
-        self.settings.lock().unwrap().game_folders.iter().find(|f| f.is_dir()).cloned().ok_or_else(|| {
+        self.store.settings.lock().unwrap().game_folders.iter().find(|f| f.is_dir()).cloned().ok_or_else(|| {
             "this computer has no game folder to put it in: add one in droidtop-agent's Settings (or droidtop-agent folders add <path>)"
                 .into()
         })
@@ -183,7 +183,7 @@ impl Host for Agent {
     }
 
     fn endpoints(&self) -> Vec<String> {
-        let mut out = endpoints(self.settings.lock().unwrap().public_endpoint.as_deref());
+        let mut out = endpoints(self.store.settings.lock().unwrap().public_endpoint.as_deref());
         // The address STUN found for the WireGuard socket: enough on its own
         // when this side's NAT lets a known peer's packets in.
         if let Some(mapped) = self.rendezvous.lock().unwrap().mapped {
@@ -194,15 +194,15 @@ impl Host for Agent {
     }
 
     fn disco_id(&self) -> Option<String> {
-        if !self.settings.lock().unwrap().rendezvous {
+        if !self.store.settings.lock().unwrap().rendezvous {
             return None;
         }
-        droidtop_agent_core::rendezvous::certificate(&self.key).ok().map(|c| c.device_id())
+        droidtop_agent_core::rendezvous::certificate(&self.store.key).ok().map(|c| c.device_id())
     }
 
     fn hello(&self, peer: &PeerId, disco: Option<&str>) {
         if let Some(disco) = disco {
-            self.device_disco(peer, disco);
+            self.store.device_disco(peer, disco);
         }
     }
 
@@ -211,7 +211,7 @@ impl Host for Agent {
     }
 
     fn archive_dir(&self, game: &GameRef) -> PathBuf {
-        let dir = self.dirs.archive().join(file_key(&game.key));
+        let dir = self.store.dirs.archive().join(file_key(&game.key));
         // The folder is named for the key; the title is kept beside the copies so the
         // Saves page can name a game the library does not list (Droidtop/tracker#528).
         let title = dir.join("title.txt");
@@ -223,11 +223,11 @@ impl Host for Agent {
 
     fn library_pull(&self, _peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)> {
         self.fresh_scan(120);
-        Ok(self.library_now().changes_since(since))
+        Ok(self.store.library_now().changes_since(since))
     }
 
     fn library_push(&self, _peer: &PeerId, changes: Vec<Change>) -> Result<()> {
-        self.edit_library(|lib| {
+        self.store.edit_library(|lib| {
             let changed = changes.into_iter().filter(|c| lib.apply(c.clone())).count();
             ((), changed > 0)
         });
@@ -236,16 +236,16 @@ impl Host for Agent {
 
     fn context_pull(&self, context: &str, offer: Option<&AdapterOffer>) -> Result<Records> {
         if let Some(offer) = offer {
-            self.consider_offer(context, offer).map_err(Error::Protocol)?;
+            crate::contexts::consider_offer(&self.store, context, offer).map_err(Error::Protocol)?;
         }
-        self.adapter(context)
+        crate::contexts::adapter(&self.store, context)
             .ok_or_else(|| no_adapter(context, offer.is_some_and(|o| o.for_this_system().is_some())))?
             .pull()
             .map_err(Error::Protocol)
     }
 
     fn context_push(&self, context: &str, changes: Vec<RecordChange>) -> Result<Option<String>> {
-        self.adapter(context).ok_or_else(|| no_adapter(context, false))?.push(changes).map_err(Error::Protocol)
+        crate::contexts::adapter(&self.store, context).ok_or_else(|| no_adapter(context, false))?.push(changes).map_err(Error::Protocol)
     }
 }
 

@@ -9,7 +9,7 @@
 //!   H1 ── C1      H1 ── C2 ── H2 ── C3 ── H3
 //! ```
 //!
-//! A fourth computer, PC-A, is the real agent (`droidtop_agent_service::state::Agent`
+//! A fourth computer, PC-A, is the real agent (`droidtop_agent_service::Agent`
 //! over a game folder), paired with H1 and H3: it covers what the mocks cannot,
 //! the same game under the same key on a handheld and a computer, and the
 //! person's marks surviving the agent's restarts and rescans.
@@ -37,7 +37,8 @@ use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves::{Roots, SaveSpec};
 use droidtop_agent_core::savesync::copy_dir;
 use droidtop_agent_core::server::{serve, serve_moved, Host};
-use droidtop_agent_service::state::{Agent, Dirs};
+use droidtop_agent_service::Agent;
+use droidtop_agent_store::Dirs;
 use serde_json::{json, Value};
 
 fn temp(name: &str) -> PathBuf {
@@ -135,13 +136,13 @@ fn start_agent(name: &str, games: &Path, paired: Vec<PeerId>) -> ((&'static Agen
     }
     let agent: &'static Agent = Box::leak(Box::new(Agent::open_in(dirs.clone()).unwrap()));
     {
-        let mut settings = agent.settings.lock().unwrap();
+        let mut settings = agent.store.settings.lock().unwrap();
         settings.name = Some(name.into());
         settings.game_folders = vec![games.to_path_buf()];
     }
-    agent.save_settings().unwrap();
-    let seed = agent.key.seed();
-    let id = agent.peer_id();
+    agent.store.save_settings().unwrap();
+    let seed = agent.store.key.seed();
+    let id = agent.store.peer_id();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let at = listener.local_addr().unwrap();
     thread::spawn(move || {
@@ -296,7 +297,7 @@ fn three_handhelds_and_three_computers_in_a_partial_mesh() {
     let restarted = Agent::open_in(dirs.clone()).unwrap();
     restarted.rescan();
     stale.rescan();
-    stale.seen(&h1.id, None);
+    stale.store.seen(&h1.id, None);
     restarted.rescan();
     let kept = Library::load(&dirs.data.join("library.json")).unwrap();
     assert_eq!(kept.games[game].marks["favourite"].value, json!(true), "marks: {:?}", kept.games[game].marks);
@@ -305,8 +306,8 @@ fn three_handhelds_and_three_computers_in_a_partial_mesh() {
     let told = h3.library_with(&pca, json!({ game: { "favourite": false, "hidden": false, "collections": [] } }));
     assert_eq!(told["marks"][game]["favourite"], json!(true), "{told}");
     // PC to handheld: marks set on the computer (the window or `droidtop-agent mark`) reach H1.
-    assert!(restarted.set_mark(game, "hidden", json!(true)));
-    assert!(restarted.set_mark(game, "collections", json!(["Done"])));
+    assert!(restarted.store.set_mark(game, "hidden", json!(true)));
+    assert!(restarted.store.set_mark(game, "collections", json!(["Done"])));
     let from_pc = h1.library_scanning(&pca, on_h1.clone(), favourite.clone());
     assert_eq!(from_pc["marks"], json!({ game: { "hidden": true, "collections": ["Done"] } }), "{from_pc}");
     // The computer loses its library (a restore of an old state): H1 sends everything again and the favourite returns.

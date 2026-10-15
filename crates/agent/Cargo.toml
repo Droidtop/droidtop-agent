@@ -15,4 +15,5 @@ path = "src/main.rs"
 [dependencies]
 droidtop-agent-core = { path = "../core" }
 droidtop-agent-service = { path = "../service" }
+droidtop-agent-store = { path = "../store" }
 serde_json.workspace = true

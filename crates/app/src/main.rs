@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use droidtop_agent_service::state::Agent;
+use droidtop_agent_service::Agent;
 
 mod icon;
 mod tray;

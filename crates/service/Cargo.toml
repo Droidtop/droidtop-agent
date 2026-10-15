@@ -14,7 +14,7 @@ path = "src/lib.rs"
 [dependencies]
 droidtop-agent-core = { path = "../core" }
 droidtop-agent-scan = { path = "../scan" }
-windowcast-identity.workspace = true
+droidtop-agent-store = { path = "../store" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -25,7 +25,6 @@ serde_yaml.workspace = true
 # needs it; nothing else in the agent goes to the network on its own.
 ureq.workspace = true
 dirs.workspace = true
-gethostname.workspace = true
 # The LaunchAgent that starts the agent at sign-in on macOS.
 plist.workspace = true
 # This computer's addresses, for the WireGuard endpoints it tells the handheld.

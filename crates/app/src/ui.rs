@@ -15,8 +15,8 @@ use droidtop_agent_core::saves;
 use droidtop_agent_core::savesync;
 use droidtop_agent_scan::Found;
 use droidtop_agent_service::host::file_key;
-use droidtop_agent_service::state::{Agent, Settings};
-use droidtop_agent_service::{autostart, pair, rendezvous, state};
+use droidtop_agent_service::{autostart, contexts, pair, rendezvous, scan_options, Agent};
+use droidtop_agent_store::{read_json, Settings};
 use eframe::egui::{self, Color32, RichText};
 
 use crate::tray::{Action, Tray};
@@ -195,11 +195,11 @@ impl App {
         }
         self.loaded_at = Instant::now();
         match self.page {
-            Page::Status => self.rendezvous = state::read_json::<rendezvous::Status>(&self.agent.dirs.rendezvous()).ok(),
+            Page::Status => self.rendezvous = read_json::<rendezvous::Status>(&self.agent.store.dirs.rendezvous()).ok(),
             Page::Saves => {
                 let titles: std::collections::BTreeMap<String, (String, String)> =
-                    self.agent.library_now().games.iter().map(|(k, g)| (file_key(k), (k.clone(), g.title.clone()))).collect();
-                self.archive = archived(&self.agent.dirs.archive(), &titles);
+                    self.agent.store.library_now().games.iter().map(|(k, g)| (file_key(k), (k.clone(), g.title.clone()))).collect();
+                self.archive = archived(&self.agent.store.dirs.archive(), &titles);
             }
             _ => {}
         }
@@ -225,11 +225,11 @@ impl eframe::App for App {
         egui::SidePanel::left("pages").resizable(false).exact_width(170.0).show(ctx, |ui| {
             ui.add_space(8.0);
             ui.heading("droidtop-agent");
-            ui.label(RichText::new(self.agent.name()).weak());
+            ui.label(RichText::new(self.agent.store.name()).weak());
             ui.add_space(12.0);
             for (page, label) in Page::ALL {
                 let badge = match page {
-                    Page::Plugins => self.agent.adapter_offers().len(),
+                    Page::Plugins => contexts::adapter_offers(&self.agent.store).len(),
                     _ => 0,
                 };
                 let text = if badge > 0 { format!("{label}  ({badge})") } else { label.to_string() };
@@ -442,7 +442,7 @@ impl App {
         );
         ui.add_space(12.0);
         ui.strong("Paired handhelds");
-        let devices = self.agent.devices_now();
+        let devices = self.agent.store.devices_now();
         if devices.is_empty() {
             ui.label("None yet.");
             if ui.button("Pair a handheld").clicked() {
@@ -467,7 +467,7 @@ impl App {
         });
         if let Some(id) = forget_now {
             if let Ok(peer) = PeerId::from_hex(&id) {
-                let _ = self.agent.remove_device(&peer);
+                let _ = self.agent.store.remove_device(&peer);
             }
             self.forget = None;
         }
@@ -492,7 +492,7 @@ impl App {
         });
         ui.add_space(12.0);
         ui.strong("Away from home");
-        let settings = self.agent.settings.lock().unwrap().clone();
+        let settings = self.agent.store.settings.lock().unwrap().clone();
         if !settings.rendezvous {
             ui.label(
                 "Off: paired handhelds reach this computer only on this network, through a forwarded port, or through the cloud folder.",
@@ -521,7 +521,7 @@ impl App {
             ui.label(format!("Cloud folder: {}", share.display()));
         }
         ui.add_space(12.0);
-        ui.label(RichText::new(format!("This computer's id: {}", short(&self.agent.peer_id()))).weak());
+        ui.label(RichText::new(format!("This computer's id: {}", short(&self.agent.store.peer_id()))).weak());
     }
 
     fn pair(&mut self, ui: &mut egui::Ui) {
@@ -592,7 +592,7 @@ impl App {
             *pairing = Pairing::Connecting;
             let (agent, state, text) = (self.agent.clone(), self.pairing.clone(), self.entered_code.trim().to_string());
             std::thread::spawn(move || {
-                let result = pair::pair(&agent, &text);
+                let result = pair::pair(&agent.store, &text);
                 *state.lock().unwrap() = match result {
                     Ok(name) => Pairing::Paired(name),
                     Err(e) => Pairing::Failed(e),
@@ -603,7 +603,7 @@ impl App {
             match pair::listen() {
                 Ok(showing) => {
                     let cancel = Arc::new(AtomicBool::new(false));
-                    let qr = Qr::of(&showing.invite(&self.agent)).unwrap_or(Qr { width: 0, dark: Vec::new() });
+                    let qr = Qr::of(&showing.invite(&self.agent.store)).unwrap_or(Qr { width: 0, dark: Vec::new() });
                     *pairing = Pairing::Showing {
                         code: showing.code.clone(),
                         places: showing.places.clone(),
@@ -613,7 +613,7 @@ impl App {
                     };
                     let (agent, state) = (self.agent.clone(), self.pairing.clone());
                     std::thread::spawn(move || {
-                        let result = pair::wait(&agent, showing, &cancel);
+                        let result = pair::wait(&agent.store, showing, &cancel);
                         *state.lock().unwrap() = match result {
                             Ok(name) => Pairing::Paired(name),
                             Err(_) if cancel.load(std::sync::atomic::Ordering::Relaxed) => Pairing::Idle,
@@ -639,8 +639,8 @@ impl App {
 
     /// Saves a change to the settings and looks again at what the computer has.
     fn changed_settings(&self, change: impl FnOnce(&mut Settings)) {
-        change(&mut self.agent.settings.lock().unwrap());
-        let _ = self.agent.save_settings();
+        change(&mut self.agent.store.settings.lock().unwrap());
+        let _ = self.agent.store.save_settings();
         self.rescan_in_background();
     }
 
@@ -654,7 +654,7 @@ impl App {
             }
             ui.label(RichText::new("The games on this computer, as droidtop on your handhelds sees them.").weak());
         });
-        let settings = self.agent.settings.lock().unwrap().clone();
+        let settings = self.agent.store.settings.lock().unwrap().clone();
         let guard = self.agent.scan.lock().unwrap();
         let Some((at, scan)) = guard.as_ref() else {
             ui.label("Looking for games…");
@@ -697,7 +697,7 @@ impl App {
             let rows: Vec<(PathBuf, bool)> = if roms {
                 settings.rom_folders.iter().map(|p| (p.clone(), false)).collect()
             } else {
-                droidtop_agent_scan::folders::all_roots(&state::scan_options(&settings))
+                droidtop_agent_scan::folders::all_roots(&scan_options(&settings))
             };
             if rows.is_empty() {
                 ui.label(RichText::new("None yet.").weak());
@@ -816,7 +816,7 @@ impl App {
     /// every paired handheld like marks made there.
     fn game_marks(&mut self, ui: &mut egui::Ui, game: &Found) {
         let key = game.game.key.clone();
-        let marks = self.agent.library_now().games.get(&key).map(|r| r.marks.clone()).unwrap_or_default();
+        let marks = self.agent.store.library_now().games.get(&key).map(|r| r.marks.clone()).unwrap_or_default();
         let flag = |field: &str| marks.get(field).and_then(|m| m.value.as_bool()).unwrap_or(false);
         if self.draft_for.as_deref() != Some(key.as_str()) {
             let names: Vec<String> = marks
@@ -843,7 +843,7 @@ impl App {
             for (field, label) in [("favourite", "Favourite"), ("hidden", "Hidden")] {
                 let mut on = flag(field);
                 if ui.checkbox(&mut on, label).changed() {
-                    self.agent.set_mark(&key, field, serde_json::Value::Bool(on));
+                    self.agent.store.set_mark(&key, field, serde_json::Value::Bool(on));
                 }
             }
             ui.horizontal(|ui| {
@@ -854,7 +854,7 @@ impl App {
                         self.collections_draft.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
                     names.sort();
                     names.dedup();
-                    self.agent.set_mark(&key, "collections", serde_json::json!(names));
+                    self.agent.store.set_mark(&key, "collections", serde_json::json!(names));
                 }
             });
         });
@@ -867,8 +867,8 @@ impl App {
             "Saves are kept in step between this computer and your handhelds. When both changed a game's saves, the newest copy wins and the other is kept here, so nothing is lost.",
         );
         ui.add_space(8.0);
-        let devices = self.agent.devices_now();
-        let mut preferred = self.agent.settings.lock().unwrap().primary_device.clone();
+        let devices = self.agent.store.devices_now();
+        let mut preferred = self.agent.store.settings.lock().unwrap().primary_device.clone();
         let before = preferred.clone();
         ui.horizontal(|ui| {
             ui.label("When both changed, prefer");
@@ -885,8 +885,8 @@ impl App {
             });
         });
         if preferred != before {
-            self.agent.settings.lock().unwrap().primary_device = preferred;
-            let _ = self.agent.save_settings();
+            self.agent.store.settings.lock().unwrap().primary_device = preferred;
+            let _ = self.agent.store.save_settings();
         }
         let outcome = self.save_outcome.lock().unwrap().clone();
         if let Some(outcome) = &outcome {
@@ -1095,7 +1095,7 @@ impl App {
         if let Some(outcome) = self.plugin_outcome.lock().unwrap().as_ref() {
             outcome_label(ui, outcome);
         }
-        let offers = self.agent.adapter_offers();
+        let offers = contexts::adapter_offers(&self.agent.store);
         if !offers.is_empty() {
             ui.add_space(8.0);
             ui.strong("Waiting for you");
@@ -1112,12 +1112,13 @@ impl App {
                                 let (agent, outcome, context) = (self.agent.clone(), self.plugin_outcome.clone(), context.clone());
                                 *outcome.lock().unwrap() = Some(Ok(format!("Fetching the {context} adapter…")));
                                 std::thread::spawn(move || {
-                                    let result = agent.approve(&context);
+                                    let result = contexts::approve(&agent.store, &context);
                                     *outcome.lock().unwrap() = Some(result);
                                 });
                             }
                             if ui.button("Decline").clicked() {
-                                let result = self.agent.decline(&context).map(|()| format!("Declined the {context} adapter."));
+                                let result =
+                                    contexts::decline(&self.agent.store, &context).map(|()| format!("Declined the {context} adapter."));
                                 *self.plugin_outcome.lock().unwrap() = Some(result);
                             }
                         });
@@ -1128,7 +1129,7 @@ impl App {
                 }
             });
         }
-        let adapters = self.agent.settings.lock().unwrap().adapters.clone();
+        let adapters = self.agent.store.settings.lock().unwrap().adapters.clone();
         ui.add_space(8.0);
         ui.strong("Installed");
         if adapters.is_empty() {
@@ -1139,8 +1140,8 @@ impl App {
                 ui.label(&context);
                 ui.label(RichText::new(program.display().to_string()).weak().small());
                 if ui.button("Remove").clicked() {
-                    self.agent.settings.lock().unwrap().adapters.remove(&context);
-                    let _ = self.agent.save_settings();
+                    self.agent.store.settings.lock().unwrap().adapters.remove(&context);
+                    let _ = self.agent.store.save_settings();
                 }
             });
         }
@@ -1153,13 +1154,13 @@ impl App {
             self.settings_outcome = Some(autostart::set(self.autostart));
             self.autostart = autostart::enabled();
         }
-        let devices = self.agent.devices_now();
-        let draft = self.settings.get_or_insert_with(|| self.agent.settings.lock().unwrap().clone());
+        let devices = self.agent.store.devices_now();
+        let draft = self.settings.get_or_insert_with(|| self.agent.store.settings.lock().unwrap().clone());
         let mut name = draft.name.clone().unwrap_or_default();
         ui.add_space(8.0);
         egui::Grid::new("settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label("This computer's name");
-            ui.add(egui::TextEdit::singleline(&mut name).hint_text(self.agent.name()));
+            ui.add(egui::TextEdit::singleline(&mut name).hint_text(self.agent.store.name()));
             ui.end_row();
             ui.label("Rescan every");
             ui.add(egui::DragValue::new(&mut draft.scan_minutes).range(5..=1440).suffix(" min"));
@@ -1243,14 +1244,15 @@ impl App {
             }
         }
         ui.add_space(12.0);
-        let changed = *draft != *self.agent.settings.lock().unwrap();
+        let changed = *draft != *self.agent.store.settings.lock().unwrap();
         if ui.add_enabled(changed, egui::Button::new("Save")).clicked() {
             let valid = draft.public_endpoint.as_deref().is_none_or(|e| e.parse::<std::net::SocketAddr>().is_ok());
             self.settings_outcome = Some(if !valid {
                 Err("The forwarded port is an address and port, such as 203.0.113.7:47611.".into())
             } else {
-                *self.agent.settings.lock().unwrap() = draft.clone();
+                *self.agent.store.settings.lock().unwrap() = draft.clone();
                 self.agent
+                    .store
                     .save_settings()
                     .map(|()| "Saved. A new rescan interval or away-from-home setting applies from the next start.".into())
                     .map_err(|e| e.to_string())

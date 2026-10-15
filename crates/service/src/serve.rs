@@ -17,11 +17,11 @@ use droidtop_agent_core::server::{serve, serve_moved};
 use droidtop_agent_core::tunnel;
 use droidtop_agent_core::PORT;
 
-use crate::state::Agent;
+use crate::Agent;
 
 pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", PORT))?;
-    println!("{} ({}) is listening on port {PORT}.", agent.name(), short(&agent.peer_id()));
+    println!("{} ({}) is listening on port {PORT}.", agent.store.name(), short(&agent.store.peer_id()));
     let stop = Arc::new(AtomicBool::new(false));
 
     match UdpSocket::bind(("0.0.0.0", PORT)) {
@@ -29,8 +29,8 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
             let a = agent.clone();
             let stop = stop.clone();
             thread::spawn(move || {
-                let name = a.name();
-                if let Err(e) = discovery::answer_agent_queries(&sock, &a.key, &name, PORT, |p| a.is_trusted(p), &stop) {
+                let name = a.store.name();
+                if let Err(e) = discovery::answer_agent_queries(&sock, &a.store.key, &name, PORT, |p| a.store.is_trusted(p), &stop) {
                     eprintln!("Discovery stopped: {e}");
                 }
             });
@@ -45,7 +45,7 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
             if changes > 0 {
                 println!("Library: {changes} changes from the scan.");
             }
-            let minutes = a.settings.lock().unwrap().scan_minutes.max(5);
+            let minutes = a.store.settings.lock().unwrap().scan_minutes.max(5);
             thread::sleep(Duration::from_secs(minutes * 60));
         });
     }
@@ -81,15 +81,15 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
         };
         thread::spawn(move || {
             let peers = || -> Vec<PeerId> {
-                a.devices_now().iter().filter_map(|d| PeerId::from_hex(&d.id).ok()).filter(|p| a.is_trusted(p)).collect()
+                a.store.devices_now().iter().filter_map(|d| PeerId::from_hex(&d.id).ok()).filter(|p| a.store.is_trusted(p)).collect()
             };
             let on_stream = |peer: PeerId, mut stream: tunnel::TunnelStream| {
                 let a = a.clone();
                 thread::spawn(move || {
                     stream.set_read_timeout(Some(Duration::from_secs(120)));
-                    match Channel::accept(stream, &a.key, |p| *p == peer && a.is_trusted(p)) {
+                    match Channel::accept(stream, &a.store.key, |p| *p == peer && a.store.is_trusted(p)) {
                         Ok(mut ch) => {
-                            a.seen(&peer, None);
+                            a.store.seen(&peer, None);
                             if let Err(e) = serve(&mut ch, &*a) {
                                 eprintln!("Session with {} through WireGuard ended: {e}", short(&peer));
                             }
@@ -98,7 +98,7 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
                     }
                 });
             };
-            if let Err(e) = tunnel::serve(&a.key, udp, peers, on_stream, &stop, hooks.as_mut()) {
+            if let Err(e) = tunnel::serve(&a.store.key, udp, peers, on_stream, &stop, hooks.as_mut()) {
                 eprintln!("WireGuard stopped: {e}");
             }
         });
@@ -113,9 +113,9 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
             let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
             // While this computer moves to the identity it shares with
             // windowcast, it answers to its previous one too and tells the
-            // handheld (crate::state::migrate).
-            let keys: Vec<&droidtop_agent_core::keys::DeviceKey> = std::iter::once(&a.key).chain(a.previous.as_ref()).collect();
-            let (mut ch, which) = match Channel::accept_any(stream, &keys, |p| a.is_trusted(p)) {
+            // handheld (droidtop_agent_store::migrate).
+            let keys: Vec<&droidtop_agent_core::keys::DeviceKey> = std::iter::once(&a.store.key).chain(a.store.previous.as_ref()).collect();
+            let (mut ch, which) = match Channel::accept_any(stream, &keys, |p| a.store.is_trusted(p)) {
                 Ok(accepted) => accepted,
                 Err(e) => {
                     eprintln!("Refused a connection from {}: {e}", address.unwrap_or_default());
@@ -123,12 +123,12 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
                 }
             };
             let peer = ch.peer();
-            a.seen(&peer, address);
+            a.store.seen(&peer, address);
             let served = if which == 0 {
-                a.on_current_key(&peer);
+                a.store.on_current_key(&peer);
                 serve(&mut ch, &*a)
             } else {
-                serve_moved(&mut ch, &*a, a.moved())
+                serve_moved(&mut ch, &*a, a.store.moved())
             };
             if let Err(e) = served {
                 eprintln!("Session with {} ended: {e}", short(&peer));

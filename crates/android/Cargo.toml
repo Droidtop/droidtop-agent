@@ -20,3 +20,4 @@ serde_json.workspace = true
 [dev-dependencies]
 # The mesh test runs the real agent as one of its computers.
 droidtop-agent-service = { path = "../service" }
+droidtop-agent-store = { path = "../store" }

@@ -23,7 +23,7 @@ use droidtop_agent_core::rendezvous::{self, Answer, Server, StunKeeper};
 use droidtop_agent_core::tunnel::Hooks;
 use serde::{Deserialize, Serialize};
 
-use crate::state::Agent;
+use crate::Agent;
 
 /// What the WireGuard loop and the announcer share.
 #[derive(Default)]
@@ -104,7 +104,7 @@ pub struct Status {
 /// (names, https) happens here, never in the WireGuard loop.
 pub fn run(agent: Arc<Agent>) {
     thread::spawn(move || {
-        let Ok(cert) = rendezvous::certificate(&agent.key) else {
+        let Ok(cert) = rendezvous::certificate(&agent.store.key) else {
             eprintln!("Rendezvous is off: this computer's discovery certificate could not be made.");
             return;
         };
@@ -118,7 +118,7 @@ pub fn run(agent: Arc<Agent>) {
         loop {
             thread::sleep(Duration::from_secs(5));
             let (on, servers, stun) = {
-                let s = agent.settings.lock().unwrap();
+                let s = agent.store.settings.lock().unwrap();
                 (s.rendezvous, Server::list(&s.discovery_servers), s.stun_servers.clone())
             };
             if !on {
@@ -158,7 +158,7 @@ pub fn run(agent: Arc<Agent>) {
             }
             // Look the paired handhelds up on Syncthing's schedule.
             let devices: Vec<(String, String)> =
-                agent.devices_now().iter().filter_map(|d| d.disco.clone().map(|id| (d.name.clone(), id))).collect();
+                agent.store.devices_now().iter().filter_map(|d| d.disco.clone().map(|id| (d.name.clone(), id))).collect();
             for (name, id) in devices {
                 if lookup_at.get(&id).is_some_and(|t| Instant::now() < *t) {
                     continue;
@@ -181,7 +181,7 @@ pub fn run(agent: Arc<Agent>) {
                 }
             }
             status.mapped = agent.rendezvous.lock().unwrap().mapped.map(|m| m.to_string());
-            let _ = crate::state::write_json(&agent.dirs.rendezvous(), &status);
+            let _ = droidtop_agent_store::write_json(&agent.store.dirs.rendezvous(), &status);
         }
     });
 }
@@ -194,7 +194,7 @@ fn addresses(agent: &Agent) -> Vec<String> {
     if let Some(mapped) = agent.rendezvous.lock().unwrap().mapped {
         out.push(format!("{}{mapped}", rendezvous::SCHEME));
     }
-    let public = agent.settings.lock().unwrap().public_endpoint.clone();
+    let public = agent.store.settings.lock().unwrap().public_endpoint.clone();
     for e in crate::host::endpoints(public.as_deref()) {
         if let Some(a) = e.strip_prefix("wg:") {
             out.push(format!("{}{a}", rendezvous::SCHEME));

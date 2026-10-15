@@ -9,8 +9,8 @@ use droidtop_agent_core::library::title_key;
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 
-use droidtop_agent_service::state::Agent;
-use droidtop_agent_service::{autostart, contexts, host, ludusavi, pair, rendezvous, serve, state};
+use droidtop_agent_service::{autostart, contexts, host, ludusavi, pair, rendezvous, serve, Agent};
+use droidtop_agent_store::read_json;
 
 const HELP: &str = "droidtop-agent: keeps this computer and droidtop on a handheld in step.
 
@@ -90,25 +90,25 @@ fn main() {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match words.as_slice() {
         [] | ["run"] => serve::run(agent).map_err(|e| e.to_string()),
-        ["pair", rest @ ..] if !rest.is_empty() => pair::pair(&agent, &rest.join(" ")).map(|name| println!("Paired with {name}.")),
-        ["pair"] => pair::show(&agent).map(|name| println!("Paired with {name}.")),
+        ["pair", rest @ ..] if !rest.is_empty() => pair::pair(&agent.store, &rest.join(" ")).map(|name| println!("Paired with {name}.")),
+        ["pair"] => pair::show(&agent.store).map(|name| println!("Paired with {name}.")),
         ["devices"] => {
             devices(&agent);
             Ok(())
         }
         ["unpair", id] => unpair(&agent, id),
         ["id"] => {
-            println!("{}\n{}", agent.name(), agent.peer_id());
+            println!("{}\n{}", agent.store.name(), agent.store.peer_id());
             Ok(())
         }
         ["name", rest @ ..] if !rest.is_empty() => {
-            agent.settings.lock().unwrap().name = Some(rest.join(" "));
-            agent.save_settings().map_err(|e| e.to_string())
+            agent.store.settings.lock().unwrap().name = Some(rest.join(" "));
+            agent.store.save_settings().map_err(|e| e.to_string())
         }
         ["scan"] => scan(&agent, false),
         ["scan", "--json"] => scan(&agent, true),
         ["folders"] => {
-            let s = agent.settings.lock().unwrap();
+            let s = agent.store.settings.lock().unwrap();
             s.game_folders.iter().for_each(|f| println!("games  {}", f.display()));
             s.rom_folders.iter().for_each(|f| println!("roms   {}", f.display()));
             Ok(())
@@ -118,7 +118,7 @@ fn main() {
         ["folders", "remove", path] => folders(&agent, path, false, false),
         ["mark", game, field @ ("favourite" | "hidden" | "completed"), on @ ("on" | "off")] => {
             let key = game_ref(game).key;
-            agent.set_mark(&key, field, serde_json::Value::Bool(*on == "on"));
+            agent.store.set_mark(&key, field, serde_json::Value::Bool(*on == "on"));
             println!("{key}: {field} {on}");
             Ok(())
         }
@@ -127,13 +127,13 @@ fn main() {
             list.sort();
             list.dedup();
             let key = game_ref(game).key;
-            agent.set_mark(&key, "collections", serde_json::json!(list));
+            agent.store.set_mark(&key, "collections", serde_json::json!(list));
             println!("{key}: collections {}", list.join(", "));
             Ok(())
         }
         ["marks", game] => {
             let key = game_ref(game).key;
-            match agent.library_now().games.get(&key) {
+            match agent.store.library_now().games.get(&key) {
                 Some(record) if !record.marks.is_empty() => {
                     for (field, m) in &record.marks {
                         println!("{field}: {}", m.value);
@@ -152,11 +152,10 @@ fn main() {
                 .map(|()| println!("{}", if removed { "Removed." } else { "There was nothing set for that game." }))
         }
         ["saves", rest @ ..] if !rest.is_empty() => saves_show(&agent, &rest.join(" ")),
-        ["manifest", "update"] => {
-            ludusavi::update(&agent.dirs.data).map(|i| println!("The Ludusavi manifest has save locations for {} games.", i.games.len()))
-        }
+        ["manifest", "update"] => ludusavi::update(&agent.store.dirs.data)
+            .map(|i| println!("The Ludusavi manifest has save locations for {} games.", i.games.len())),
         ["share"] => {
-            match &agent.settings.lock().unwrap().share {
+            match &agent.store.settings.lock().unwrap().share {
                 Some(s) => println!("{}", s.display()),
                 None => println!("No share is set."),
             }
@@ -167,28 +166,28 @@ fn main() {
             if !path.is_dir() {
                 Err(format!("{} is not a folder.", path.display()))
             } else {
-                agent.settings.lock().unwrap().share = Some(path);
-                agent.save_settings().map_err(|e| e.to_string())
+                agent.store.settings.lock().unwrap().share = Some(path);
+                agent.store.save_settings().map_err(|e| e.to_string())
             }
         }
         ["share", "clear"] => {
-            agent.settings.lock().unwrap().share = None;
-            agent.save_settings().map_err(|e| e.to_string())
+            agent.store.settings.lock().unwrap().share = None;
+            agent.store.save_settings().map_err(|e| e.to_string())
         }
         ["contexts"] => {
-            let adapters = agent.settings.lock().unwrap().adapters.clone();
-            if adapters.is_empty() && agent.adapter_offers().is_empty() {
+            let adapters = agent.store.settings.lock().unwrap().adapters.clone();
+            if adapters.is_empty() && contexts::adapter_offers(&agent.store).is_empty() {
                 println!("No context adapter is added. A plugin that syncs with a program here publishes one: droidtop-agent contexts add <program>");
             }
             for id in adapters.keys() {
-                let state = match agent.adapter(id).map(|a| a.pull()) {
+                let state = match contexts::adapter(&agent.store, id).map(|a| a.pull()) {
                     Some(Ok(records)) => format!("{} records", records.len()),
                     Some(Err(e)) => e,
                     None => "not available".into(),
                 };
                 println!("{id}: {} ({state})", adapters[id].display());
             }
-            for (id, offer) in agent.adapter_offers() {
+            for (id, offer) in contexts::adapter_offers(&agent.store) {
                 println!("{id}: offered by the plugin {}, waiting for: droidtop-agent contexts approve {id}", offer.plugin);
             }
             Ok(())
@@ -197,91 +196,92 @@ fn main() {
             let given = rest.join(" ");
             std::fs::canonicalize(&given).map_err(|e| format!("{given}: {e}")).and_then(|program| {
                 let (id, what) = contexts::describe(&program)?;
-                agent.settings.lock().unwrap().adapters.insert(id.clone(), program);
-                agent.save_settings().map_err(|e| e.to_string())?;
+                agent.store.settings.lock().unwrap().adapters.insert(id.clone(), program);
+                agent.store.save_settings().map_err(|e| e.to_string())?;
                 println!("Added the {id} context: {what}");
                 Ok(())
             })
         }
-        ["contexts", "approve", id] => agent.approve(id).map(|line| println!("{line}")),
+        ["contexts", "approve", id] => contexts::approve(&agent.store, id).map(|line| println!("{line}")),
         ["contexts", "remove", id] => {
-            let removed = agent.settings.lock().unwrap().adapters.remove(*id).is_some();
+            let removed = agent.store.settings.lock().unwrap().adapters.remove(*id).is_some();
             agent
+                .store
                 .save_settings()
                 .map_err(|e| e.to_string())
                 .map(|()| println!("{}", if removed { "Removed." } else { "No adapter serves that context." }))
         }
         ["endpoint"] => {
-            for e in host::endpoints(agent.settings.lock().unwrap().public_endpoint.as_deref()) {
+            for e in host::endpoints(agent.store.settings.lock().unwrap().public_endpoint.as_deref()) {
                 println!("{e}");
             }
             Ok(())
         }
         ["endpoint", "set", at] => match at.parse::<std::net::SocketAddr>() {
             Ok(_) => {
-                agent.settings.lock().unwrap().public_endpoint = Some(at.to_string());
-                agent.save_settings().map_err(|e| e.to_string())
+                agent.store.settings.lock().unwrap().public_endpoint = Some(at.to_string());
+                agent.store.save_settings().map_err(|e| e.to_string())
             }
             Err(_) => Err(format!("{at} is not an address and port, such as 203.0.113.7:47611.")),
         },
         ["rendezvous"] => {
-            let s = agent.settings.lock().unwrap().clone();
+            let s = agent.store.settings.lock().unwrap().clone();
             println!("Rendezvous: {}", if s.rendezvous { "on" } else { "off" });
             println!("Discovery servers: {}", s.discovery_servers.join(" "));
             println!("STUN servers: {}", s.stun_servers.join(" "));
-            if let Ok(cert) = droidtop_agent_core::rendezvous::certificate(&agent.key) {
+            if let Ok(cert) = droidtop_agent_core::rendezvous::certificate(&agent.store.key) {
                 println!("This computer's discovery ID: {}", cert.device_id());
             }
-            match state::read_json::<rendezvous::Status>(&agent.dirs.rendezvous()) {
+            match read_json::<rendezvous::Status>(&agent.store.dirs.rendezvous()) {
                 Ok(st) if st.disco.is_some() => println!("{st:#?}"),
                 _ => println!("No rendezvous state yet: it is kept while droidtop-agent runs."),
             }
             Ok(())
         }
         ["rendezvous", on @ ("on" | "off")] => {
-            agent.settings.lock().unwrap().rendezvous = *on == "on";
-            agent.save_settings().map_err(|e| e.to_string())
+            agent.store.settings.lock().unwrap().rendezvous = *on == "on";
+            agent.store.save_settings().map_err(|e| e.to_string())
         }
         ["rendezvous", "servers", list @ ..] if !list.is_empty() => {
             match list.iter().find(|s| **s != "default" && droidtop_agent_core::rendezvous::Server::parse(s).is_none()) {
                 Some(bad) => Err(format!("{bad} is not an https discovery server address (or default).")),
                 None => {
-                    agent.settings.lock().unwrap().discovery_servers = list.iter().map(|s| s.to_string()).collect();
-                    agent.save_settings().map_err(|e| e.to_string())
+                    agent.store.settings.lock().unwrap().discovery_servers = list.iter().map(|s| s.to_string()).collect();
+                    agent.store.save_settings().map_err(|e| e.to_string())
                 }
             }
         }
         ["rendezvous", "stun", list @ ..] if !list.is_empty() => {
-            agent.settings.lock().unwrap().stun_servers = list.iter().map(|s| s.to_string()).collect();
-            agent.save_settings().map_err(|e| e.to_string())
+            agent.store.settings.lock().unwrap().stun_servers = list.iter().map(|s| s.to_string()).collect();
+            agent.store.save_settings().map_err(|e| e.to_string())
         }
         ["primary"] => {
-            let id = agent.settings.lock().unwrap().primary_device.clone();
+            let id = agent.store.settings.lock().unwrap().primary_device.clone();
             match id.and_then(|id| PeerId::from_hex(&id).ok()) {
-                Some(peer) => println!("Primary handheld: {}", agent.device_name(&peer)),
+                Some(peer) => println!("Primary handheld: {}", agent.store.device_name(&peer)),
                 None => println!("No primary handheld: the newest copy of a game's saves wins."),
             }
             Ok(())
         }
         ["primary", "none"] => {
-            agent.settings.lock().unwrap().primary_device = None;
-            agent.save_settings().map_err(|e| e.to_string())
+            agent.store.settings.lock().unwrap().primary_device = None;
+            agent.store.save_settings().map_err(|e| e.to_string())
         }
         ["primary", id] => {
             let matches: Vec<String> =
-                agent.devices_now().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
+                agent.store.devices_now().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
             match matches.as_slice() {
                 [one] => {
-                    agent.settings.lock().unwrap().primary_device = Some(one.clone());
-                    agent.save_settings().map_err(|e| e.to_string())
+                    agent.store.settings.lock().unwrap().primary_device = Some(one.clone());
+                    agent.store.save_settings().map_err(|e| e.to_string())
                 }
                 [] => Err("No paired handheld has that id.".into()),
                 _ => Err("More than one paired handheld starts with that; give more of the id.".into()),
             }
         }
         ["launch"] => {
-            let allowed = agent.settings.lock().unwrap().launch_devices.clone();
-            let devices = agent.devices_now();
+            let allowed = agent.store.settings.lock().unwrap().launch_devices.clone();
+            let devices = agent.store.devices_now();
             if devices.is_empty() {
                 println!("No handheld is paired.");
             }
@@ -302,8 +302,8 @@ fn main() {
         }
         ["autostart", on @ ("on" | "off")] => autostart::set(*on == "on").map(|said| println!("{said}")),
         ["endpoint", "clear"] => {
-            agent.settings.lock().unwrap().public_endpoint = None;
-            agent.save_settings().map_err(|e| e.to_string())
+            agent.store.settings.lock().unwrap().public_endpoint = None;
+            agent.store.save_settings().map_err(|e| e.to_string())
         }
         _ => Err(format!("Unknown command.\n\n{HELP}")),
     };
@@ -314,7 +314,7 @@ fn main() {
 }
 
 fn devices(agent: &Agent) {
-    let devices = agent.devices_now();
+    let devices = agent.store.devices_now();
     if devices.is_empty() {
         println!("No handheld is paired. On droidtop open Settings > Computers > Pair a computer, then run: droidtop-agent pair <code>");
     }
@@ -326,11 +326,12 @@ fn devices(agent: &Agent) {
 }
 
 fn unpair(agent: &Agent, id: &str) -> Result<(), String> {
-    let matches: Vec<String> = agent.devices_now().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
+    let matches: Vec<String> =
+        agent.store.devices_now().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
     match matches.as_slice() {
         [one] => {
             let peer = PeerId::from_hex(one).map_err(|e| e.to_string())?;
-            agent.remove_device(&peer).map_err(|e| e.to_string())?;
+            agent.store.remove_device(&peer).map_err(|e| e.to_string())?;
             println!("Forgot {}.", short(&peer));
             Ok(())
         }
@@ -340,17 +341,17 @@ fn unpair(agent: &Agent, id: &str) -> Result<(), String> {
 }
 
 fn launch_switch(agent: &Agent, id: &str, allow: bool) -> Result<(), String> {
-    let matches: Vec<_> = agent.devices_now().into_iter().filter(|d| d.id.starts_with(&id.to_lowercase())).collect();
+    let matches: Vec<_> = agent.store.devices_now().into_iter().filter(|d| d.id.starts_with(&id.to_lowercase())).collect();
     match matches.as_slice() {
         [one] => {
             {
-                let mut s = agent.settings.lock().unwrap();
+                let mut s = agent.store.settings.lock().unwrap();
                 s.launch_devices.retain(|d| *d != one.id);
                 if allow {
                     s.launch_devices.push(one.id.clone());
                 }
             }
-            agent.save_settings().map_err(|e| e.to_string())?;
+            agent.store.save_settings().map_err(|e| e.to_string())?;
             println!("{} {} start games on this computer.", one.name, if allow { "may now" } else { "may no longer" });
             Ok(())
         }
@@ -390,7 +391,7 @@ fn folders(agent: &Agent, path: &str, roms: bool, add: bool) -> Result<(), Strin
         return Err(format!("{} is not a folder.", path.display()));
     }
     {
-        let mut s = agent.settings.lock().unwrap();
+        let mut s = agent.store.settings.lock().unwrap();
         if add {
             let list = if roms { &mut s.rom_folders } else { &mut s.game_folders };
             if !list.contains(&path) {
@@ -401,7 +402,7 @@ fn folders(agent: &Agent, path: &str, roms: bool, add: bool) -> Result<(), Strin
             s.rom_folders.retain(|f| *f != path);
         }
     }
-    agent.save_settings().map_err(|e| e.to_string())
+    agent.store.save_settings().map_err(|e| e.to_string())
 }
 
 /// A game as the person typed it: a key (`steam:440`) or a title.

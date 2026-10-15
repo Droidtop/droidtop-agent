@@ -3,6 +3,7 @@
 //! and a desktop manager that is this computer's agent (Pythia, through
 //! `droidtop-agent-python`) are thin hosts over it (docs/DESIGN.md section 13).
 
+mod agent;
 pub mod autostart;
 pub mod contexts;
 pub mod host;
@@ -12,4 +13,5 @@ pub mod pair;
 pub mod rendezvous;
 pub mod serve;
 pub mod share;
-pub mod state;
+
+pub use agent::{scan_options, Agent, UserSaves};

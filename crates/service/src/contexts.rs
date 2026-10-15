@@ -31,7 +31,7 @@ use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::state::Agent;
+use droidtop_agent_store::{read_json, write_json, Approval, Settings, Store};
 
 /// The adapter protocol this agent speaks.
 pub const PROTOCOL: u64 = 1;
@@ -173,141 +173,137 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-impl Agent {
-    /// The adapter for context [`id`]. One added or approved by another run
-    /// of the agent (`contexts add`, `contexts approve`) since this one
-    /// started is read from the settings file.
-    pub fn adapter(&self, id: &str) -> Option<Adapter> {
-        let mut settings = self.settings.lock().unwrap();
-        if !settings.adapters.contains_key(id) {
-            if let Ok(on_disk) = crate::state::read_json::<crate::state::Settings>(&self.dirs.settings()) {
-                if let Some(program) = on_disk.adapters.get(id) {
-                    settings.adapters.insert(id.to_string(), program.clone());
-                    if let Some(approval) = on_disk.approved.get(id) {
-                        settings.approved.insert(id.to_string(), approval.clone());
-                    }
+/// The adapter for context [`id`]. One added or approved by another run
+/// of the agent (`contexts add`, `contexts approve`) since this one
+/// started is read from the settings file.
+pub fn adapter(store: &Store, id: &str) -> Option<Adapter> {
+    let mut settings = store.settings.lock().unwrap();
+    if !settings.adapters.contains_key(id) {
+        if let Ok(on_disk) = read_json::<Settings>(&store.dirs.settings()) {
+            if let Some(program) = on_disk.adapters.get(id) {
+                settings.adapters.insert(id.to_string(), program.clone());
+                if let Some(approval) = on_disk.approved.get(id) {
+                    settings.approved.insert(id.to_string(), approval.clone());
                 }
             }
         }
-        settings.adapters.get(id).map(|program| Adapter { id: id.to_string(), program: program.clone() })
     }
+    settings.adapters.get(id).map(|program| Adapter { id: id.to_string(), program: program.clone() })
+}
 
-    /// The adapters plugins offered that wait for the person.
-    pub fn adapter_offers(&self) -> BTreeMap<String, AdapterOffer> {
-        crate::state::read_json(&self.dirs.adapter_offers()).unwrap_or_default()
+/// The adapters plugins offered that wait for the person.
+pub fn adapter_offers(store: &Store) -> BTreeMap<String, AdapterOffer> {
+    read_json(&store.dirs.adapter_offers()).unwrap_or_default()
+}
+
+/// What a plugin on the handheld offers for [`context`]:
+/// - nothing changes when the person set this context up by hand, or
+///   approved another plugin for it;
+/// - from the plugin the person approved, a different program is a new
+///   version, fetched and checked by its digest at once;
+/// - otherwise the offer waits for `contexts approve`, said on the console.
+pub fn consider_offer(store: &Store, context: &str, offer: &AdapterOffer) -> Result<(), String> {
+    let Some(program) = offer.for_this_system() else { return Ok(()) };
+    if !valid_id(context) {
+        return Err(format!("{context} is not a context name"));
     }
-
-    /// What a plugin on the handheld offers for [`context`]:
-    /// - nothing changes when the person set this context up by hand, or
-    ///   approved another plugin for it;
-    /// - from the plugin the person approved, a different program is a new
-    ///   version, fetched and checked by its digest at once;
-    /// - otherwise the offer waits for `contexts approve`, said on the console.
-    pub fn consider_offer(&self, context: &str, offer: &AdapterOffer) -> Result<(), String> {
-        let Some(program) = offer.for_this_system() else { return Ok(()) };
-        if !valid_id(context) {
-            return Err(format!("{context} is not a context name"));
-        }
-        let installed = self.adapter(context).is_some();
-        let approval = self.settings.lock().unwrap().approved.get(context).cloned();
-        match approval {
-            Some(a) if a.plugin == offer.plugin => {
-                if !a.sha256.eq_ignore_ascii_case(&program.sha256) {
-                    self.install(context, offer)?;
-                    println!("Updated the {context} adapter from {}.", offer.plugin);
-                }
-                Ok(())
+    let installed = adapter(store, context).is_some();
+    let approval = store.settings.lock().unwrap().approved.get(context).cloned();
+    match approval {
+        Some(a) if a.plugin == offer.plugin => {
+            if !a.sha256.eq_ignore_ascii_case(&program.sha256) {
+                install(store, context, offer)?;
+                println!("Updated the {context} adapter from {}.", offer.plugin);
             }
-            Some(_) => Ok(()),
-            None if installed => Ok(()),
-            None if self.settings.lock().unwrap().declined.get(context) == Some(&offer.plugin) => Ok(()),
-            None => {
-                let mut offers = self.adapter_offers();
-                if offers.get(context) != Some(offer) {
-                    offers.insert(context.to_string(), offer.clone());
-                    crate::state::write_json(&self.dirs.adapter_offers(), &offers).map_err(|e| e.to_string())?;
-                    println!(
-                        "The plugin {} on a paired handheld offers an adapter for the {context} context. To install it here: droidtop-agent contexts approve {context}",
-                        offer.plugin
-                    );
-                }
-                Ok(())
+            Ok(())
+        }
+        Some(_) => Ok(()),
+        None if installed => Ok(()),
+        None if store.settings.lock().unwrap().declined.get(context) == Some(&offer.plugin) => Ok(()),
+        None => {
+            let mut offers = adapter_offers(store);
+            if offers.get(context) != Some(offer) {
+                offers.insert(context.to_string(), offer.clone());
+                write_json(&store.dirs.adapter_offers(), &offers).map_err(|e| e.to_string())?;
+                println!(
+                    "The plugin {} on a paired handheld offers an adapter for the {context} context. To install it here: droidtop-agent contexts approve {context}",
+                    offer.plugin
+                );
             }
+            Ok(())
         }
     }
+}
 
-    /// Fetches the program [`offer`] names for this system, checks its
-    /// digest and that it serves [`context`], and puts it in place.
-    pub fn install(&self, context: &str, offer: &AdapterOffer) -> Result<PathBuf, String> {
-        if !valid_id(context) {
-            return Err(format!("{context} is not a context name"));
-        }
-        let program =
-            offer.for_this_system().ok_or_else(|| format!("{} offers no program for {}", offer.plugin, AdapterOffer::system()))?;
-        let bytes = download(&program.url)?;
-        let digest = droidtop_agent_core::hex::encode(&Sha256::digest(&bytes));
-        if !digest.eq_ignore_ascii_case(&program.sha256) {
-            return Err(format!(
-                "the program at {} is not the one the plugin names (its SHA-256 is {digest}); nothing was installed",
-                program.url
-            ));
-        }
-        let dir = self.dirs.adapters().join(context);
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = dir.join(if cfg!(windows) { "adapter.exe" } else { "adapter" });
-        let tmp = dir.join(if cfg!(windows) { "adapter.new.exe" } else { "adapter.new" });
-        std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
-        }
-        let served = describe(&tmp);
-        if !matches!(&served, Ok((id, _)) if id == context) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(match served {
-                Ok((id, _)) => format!("the program serves the {id} context, not {context}; nothing was installed"),
-                Err(e) => e,
-            });
-        }
-        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-        {
-            let mut settings = self.settings.lock().unwrap();
-            settings.adapters.insert(context.to_string(), path.clone());
-            let approval = crate::state::Approval { plugin: offer.plugin.clone(), sha256: program.sha256.to_lowercase() };
-            settings.approved.insert(context.to_string(), approval);
-        }
-        self.save_settings().map_err(|e| e.to_string())?;
-        Ok(path)
+/// Fetches the program [`offer`] names for this system, checks its
+/// digest and that it serves [`context`], and puts it in place.
+pub fn install(store: &Store, context: &str, offer: &AdapterOffer) -> Result<PathBuf, String> {
+    if !valid_id(context) {
+        return Err(format!("{context} is not a context name"));
     }
+    let program = offer.for_this_system().ok_or_else(|| format!("{} offers no program for {}", offer.plugin, AdapterOffer::system()))?;
+    let bytes = download(&program.url)?;
+    let digest = droidtop_agent_core::hex::encode(&Sha256::digest(&bytes));
+    if !digest.eq_ignore_ascii_case(&program.sha256) {
+        return Err(format!(
+            "the program at {} is not the one the plugin names (its SHA-256 is {digest}); nothing was installed",
+            program.url
+        ));
+    }
+    let dir = store.dirs.adapters().join(context);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(if cfg!(windows) { "adapter.exe" } else { "adapter" });
+    let tmp = dir.join(if cfg!(windows) { "adapter.new.exe" } else { "adapter.new" });
+    std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    }
+    let served = describe(&tmp);
+    if !matches!(&served, Ok((id, _)) if id == context) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(match served {
+            Ok((id, _)) => format!("the program serves the {id} context, not {context}; nothing was installed"),
+            Err(e) => e,
+        });
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    {
+        let mut settings = store.settings.lock().unwrap();
+        settings.adapters.insert(context.to_string(), path.clone());
+        let approval = Approval { plugin: offer.plugin.clone(), sha256: program.sha256.to_lowercase() };
+        settings.approved.insert(context.to_string(), approval);
+    }
+    store.save_settings().map_err(|e| e.to_string())?;
+    Ok(path)
+}
 
-    /// `contexts approve <context>`: the person's one approval for the
-    /// adapter a plugin offered; later versions from that plugin follow.
-    pub fn approve(&self, context: &str) -> Result<String, String> {
-        let mut offers = self.adapter_offers();
-        let offer = offers.get(context).cloned().ok_or_else(|| {
-            format!("No plugin has offered an adapter for {context}. Sync the context from the plugin on the handheld first.")
-        })?;
-        let program =
-            offer.for_this_system().ok_or_else(|| format!("{} offers no program for {}", offer.plugin, AdapterOffer::system()))?;
-        println!("{} ({}) from {}", if offer.label.is_empty() { context } else { &offer.label }, offer.plugin, program.url);
-        println!("SHA-256 {}", program.sha256);
-        self.install(context, &offer)?;
-        offers.remove(context);
-        crate::state::write_json(&self.dirs.adapter_offers(), &offers).map_err(|e| e.to_string())?;
-        Ok(format!("Installed the {context} adapter from {}. The handheld's next sync of that context uses it.", offer.plugin))
-    }
+/// `contexts approve <context>`: the person's one approval for the
+/// adapter a plugin offered; later versions from that plugin follow.
+pub fn approve(store: &Store, context: &str) -> Result<String, String> {
+    let mut offers = adapter_offers(store);
+    let offer = offers.get(context).cloned().ok_or_else(|| {
+        format!("No plugin has offered an adapter for {context}. Sync the context from the plugin on the handheld first.")
+    })?;
+    let program = offer.for_this_system().ok_or_else(|| format!("{} offers no program for {}", offer.plugin, AdapterOffer::system()))?;
+    println!("{} ({}) from {}", if offer.label.is_empty() { context } else { &offer.label }, offer.plugin, program.url);
+    println!("SHA-256 {}", program.sha256);
+    install(store, context, &offer)?;
+    offers.remove(context);
+    write_json(&store.dirs.adapter_offers(), &offers).map_err(|e| e.to_string())?;
+    Ok(format!("Installed the {context} adapter from {}. The handheld's next sync of that context uses it.", offer.plugin))
+}
 
-    /// The person said no to the adapter a plugin offered for [`context`]:
-    /// the offer goes, and that plugin's offers for it are not kept again.
-    /// `contexts add`, or approving another plugin's offer, still works.
-    pub fn decline(&self, context: &str) -> Result<(), String> {
-        let mut offers = self.adapter_offers();
-        let Some(offer) = offers.remove(context) else { return Ok(()) };
-        crate::state::write_json(&self.dirs.adapter_offers(), &offers).map_err(|e| e.to_string())?;
-        self.settings.lock().unwrap().declined.insert(context.to_string(), offer.plugin);
-        self.save_settings().map_err(|e| e.to_string())
-    }
+/// The person said no to the adapter a plugin offered for [`context`]:
+/// the offer goes, and that plugin's offers for it are not kept again.
+/// `contexts add`, or approving another plugin's offer, still works.
+pub fn decline(store: &Store, context: &str) -> Result<(), String> {
+    let mut offers = adapter_offers(store);
+    let Some(offer) = offers.remove(context) else { return Ok(()) };
+    write_json(&store.dirs.adapter_offers(), &offers).map_err(|e| e.to_string())?;
+    store.settings.lock().unwrap().declined.insert(context.to_string(), offer.plugin);
+    store.save_settings().map_err(|e| e.to_string())
 }
 
 // The stand-in adapters are shell scripts; the contract is the same on Windows.
