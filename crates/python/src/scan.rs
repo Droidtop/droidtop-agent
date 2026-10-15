@@ -14,6 +14,7 @@ pub fn fill(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rescan, m)?)?;
     m.add_function(wrap_pyfunction!(set_manager_games, m)?)?;
     m.add_function(wrap_pyfunction!(scan_with, m)?)?;
+    m.add_function(wrap_pyfunction!(launcher_folder, m)?)?;
     Ok(())
 }
 
@@ -69,4 +70,13 @@ fn scan_with(
         let options = droidtop_agent_scan::Options { game_folders, rom_folders, disabled_folders, disabled_sources };
         serde_json::to_value(droidtop_agent_scan::scan(&options)).map_err(|e| e.to_string())
     })
+}
+
+/// The launcher whose own folder `path` is (`"Battle.net"`, `"EA app"`,
+/// `"Origin"`, `"GOG Galaxy"`, `"Ubisoft Connect"`, `"Epic Games Launcher"`),
+/// or None: the scanner's rule that such a folder is no game
+/// (Droidtop/tracker#538). Reads the folder's listing only.
+#[pyfunction]
+fn launcher_folder(py: Python<'_>, path: PathBuf) -> PyResult<PyObject> {
+    run(py, move || Ok(json!(droidtop_agent_scan::folders::launcher_folder(&path))))
 }

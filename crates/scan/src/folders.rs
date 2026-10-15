@@ -22,6 +22,10 @@
 //! - A Steam library met on the way is read from its `appmanifest` files,
 //!   a ROM system folder (`gba`, `ps2`, with the system's own files) by the
 //!   ROM rules, a Flashpoint install by `flashpoint`.
+//! - A launcher's own folder ([`launcher_folder`]: Battle.net, the EA app,
+//!   Origin, GOG Galaxy's client, Epic's Launcher, Ubisoft Connect) is
+//!   neither a game nor walked (Droidtop/tracker#538); its games are read
+//!   from its own records, and a store tree's games folder is still read.
 //!
 //! A GOG or Steam id the game's own files state (`goggame-<id>.info`,
 //! `steam_appid.txt`, its library's appmanifest) gives it that store's key,
@@ -321,6 +325,46 @@ const STORE_TREES: &[StoreTree] = &[
     StoreTree { name: Some("gog galaxy"), markers: &["dependencies", "games"], games: "games" },
 ];
 
+/// A launcher's own install folder: its name and how it is recognised.
+struct Launcher {
+    name: &'static str,
+    /// Folder names that are this launcher's whatever they hold.
+    folders: &'static [&'static str],
+    /// Programs only this launcher's folder holds.
+    programs: &'static [&'static str],
+}
+
+const LAUNCHERS: &[Launcher] = &[
+    Launcher { name: "Battle.net", folders: &["battle.net"], programs: &["battle.net.exe", "battle.net launcher.exe"] },
+    Launcher { name: "EA app", folders: &["ea desktop", "ea app"], programs: &["eadesktop.exe", "ealauncher.exe"] },
+    Launcher { name: "Origin", folders: &[], programs: &["origin.exe"] },
+    Launcher { name: "GOG Galaxy", folders: &["gog galaxy"], programs: &["galaxyclient.exe"] },
+    Launcher {
+        name: "Ubisoft Connect",
+        folders: &["ubisoft game launcher", "ubisoft connect"],
+        programs: &["upc.exe", "ubisoftconnect.exe"],
+    },
+    Launcher { name: "Epic Games Launcher", folders: &[], programs: &["epicgameslauncher.exe"] },
+];
+
+/// The launcher whose own folder [dir] is, by its name (`Battle.net`,
+/// `EA Desktop`), by a program only that launcher has, or, for Epic, as the
+/// `Launcher` folder inside `Epic Games`. Such a folder is not a game.
+pub fn launcher_folder(dir: &Path) -> Option<&'static str> {
+    launcher_at(dir, &Listing::read(dir).files)
+}
+
+fn launcher_at(dir: &Path, files: &[String]) -> Option<&'static str> {
+    let name = name_of(dir).to_lowercase();
+    if name == "launcher" && dir.parent().is_some_and(|p| name_of(p).eq_ignore_ascii_case("epic games")) {
+        return Some("Epic Games Launcher");
+    }
+    LAUNCHERS
+        .iter()
+        .find(|l| l.folders.contains(&name.as_str()) || files.iter().any(|f| l.programs.contains(&f.to_lowercase().as_str())))
+        .map(|l| l.name)
+}
+
 /// The ROM system a folder is named for and holds files of, if it is one.
 fn rom_system(dir: &Path, l: &Listing, detector: &Detector) -> Option<&'static str> {
     let (id, extensions) = roms::system_named(&name_of(dir))?;
@@ -380,6 +424,9 @@ impl Walk {
     fn skipped(&self, dir: &Path) -> bool {
         let name = name_of(dir);
         if name.starts_with('.') || NEVER.contains(&name.to_lowercase().as_str()) {
+            return true;
+        }
+        if launcher_at(dir, &self.detector.listing(dir).files).is_some() && self.store_tree_at(dir).is_none() {
             return true;
         }
         match self.store_tree_above(dir) {
@@ -780,6 +827,40 @@ mod tests {
                 ("roms/ps2/Kingdom Hearts (USA)/Kingdom Hearts (USA).iso", "rom:ps2/kingdom hearts usa"),
             ]
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launcher_folders_are_not_games() {
+        let root = tree(
+            "launchers",
+            &[
+                // Named for its launcher, whatever it holds (Droidtop/tracker#538).
+                "battle.net/Battle.net Launcher.exe",
+                "EA Desktop/EA Desktop/EADesktop.exe",
+                // Known by its program.
+                "Origin/Origin.exe",
+                "Origin/OriginThinSetup.exe",
+                "Ubisoft/Ubisoft Game Launcher/upc.exe",
+                // Epic's Launcher, beside Epic's games.
+                "Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe",
+                "Epic Games/Launcher/Engine/Binaries/Win64/CrashReportClient.exe",
+                "Epic Games/Fortnite/Fortnite.exe",
+                // Galaxy's client alone is the launcher; with its Games folder its games are still read.
+                "GOG Galaxy/GalaxyClient.exe",
+                "More/GOG Galaxy/GalaxyClient.exe",
+                "More/GOG Galaxy/Games/Hollow/hollow.exe",
+                // A game named like one is still a game.
+                "Origin Story/Origin Story.exe",
+            ],
+        );
+        let got: Vec<String> = found_in(&root).into_iter().map(|(p, _, _)| p).collect();
+        assert_eq!(got, vec!["Epic Games/Fortnite", "More/GOG Galaxy/Games/Hollow", "Origin Story"]);
+        assert_eq!(launcher_folder(&root.join("battle.net")), Some("Battle.net"));
+        assert_eq!(launcher_folder(&root.join("Origin")), Some("Origin"));
+        assert_eq!(launcher_folder(&root.join("Epic Games/Launcher")), Some("Epic Games Launcher"));
+        assert_eq!(launcher_folder(&root.join("Origin Story")), None);
+        assert_eq!(launcher_folder(&root.join("not there")), None);
         let _ = fs::remove_dir_all(root);
     }
 

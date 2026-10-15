@@ -651,7 +651,16 @@ depth, anything else stops four folders down. A Steam library met on the way
 is read from its appmanifests (a folder with no manifest is a leftover), a
 folder named for a ROM system (`platforms-database.json`, droidtop's aliases)
 is read by the ROM rules when it holds that system's files, and a Flashpoint
-install is its launcher plus the games it downloaded. Titles drop the version
+install is its launcher plus the games it downloaded. A launcher's own
+folder is no game and is not walked (Droidtop/tracker#538: Pythia's scan of
+G:\games tracked `battle.net`): a folder named for Battle.net, the EA app
+(`EA Desktop`), GOG Galaxy or Ubisoft Connect, one holding a program only a
+launcher has (`Battle.net.exe`, `EADesktop.exe`, `Origin.exe`,
+`GalaxyClient.exe`, `upc.exe`, `EpicGamesLauncher.exe`), and Epic's
+`Launcher` inside `Epic Games`. Their games come from the launchers' own
+records, and a store tree's games folder (GOG Galaxy's `Games`) is still
+read. `folders::launcher_folder` is the rule, which a desktop manager asks
+too (section 16), so both leave out the same folders. Titles drop the version
 and platform a download adds (`Eternum-0.9.5-pc` is Eternum 0.9.5). The
 `Games` folders are walked unasked because a library kept outside the stores
 is otherwise invisible: G:\games held 189 games, the stores' records 76.
@@ -888,7 +897,9 @@ identity, pairing, channel, transports, library, saves and scanner.
       label, and the invitation a QR code carries), `places`
     - `scan`: `scan(max_age_s=0)`, `rescan`, `set_manager_games(manager,
       games, rescan=True)`, `scan_with(game_folders=..., rom_folders=...,
-      ...)` (the scanner alone, without the agent's state)
+      ...)` (the scanner alone, without the agent's state),
+      `launcher_folder(path)` (the launcher whose own folder it is, or
+      None: section 11)
     - `saves`: `lookup(key, title="", fetch=False)`, `copies`,
       `restore(key, path, title="")`
     - `service`: `serve`, `serving`

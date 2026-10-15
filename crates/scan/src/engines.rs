@@ -110,7 +110,7 @@ pub struct Listing {
 }
 
 impl Listing {
-    fn read(dir: &Path) -> Listing {
+    pub(crate) fn read(dir: &Path) -> Listing {
         let mut files = Vec::new();
         let mut dirs = Vec::new();
         if let Ok(read) = fs::read_dir(dir) {

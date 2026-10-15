@@ -6,6 +6,10 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A launcher's own folder (Battle.net, the EA app, Origin, GOG Galaxy's
+  client, Ubisoft Connect, Epic's Launcher) in a game folder is no longer
+  a game; `droidtop_agent.scan.launcher_folder(path)` gives the same rule
+  to a desktop manager (docs/DESIGN.md section 11, Droidtop/tracker#538).
 - The agent is a set of library crates, so a desktop manager is built from
   the same code as the programs: `store` (the state on disk), `scan` (the
   scanner, over the folders it is given), `saves` (where saves are, kept
