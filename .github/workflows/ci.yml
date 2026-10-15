@@ -254,18 +254,32 @@ jobs:
           python -m pip install --quiet wheels/*.whl
           export DROIDTOP_AGENT_HOME="$RUNNER_TEMP/agent-home"
           python - <<'PY'
-          import json
+          import importlib
+          import tempfile
           import droidtop_agent
-          me = json.loads(droidtop_agent.call("identity", "{}"))
+          from droidtop_agent import AgentError, store
+          # Every submodule imports by its own name and answers one call.
+          for name in ("store", "pair", "scan", "saves", "service"):
+              importlib.import_module("droidtop_agent." + name)
+          me = store.identity()
           assert len(me["id"]) == 64, me
           print("droidtop_agent", droidtop_agent.__version__, "protocol", droidtop_agent.PROTOCOL_VERSION, me["name"])
-          assert json.loads(droidtop_agent.call("devices", "{}")) == {"devices": []}
-          out = json.loads(droidtop_agent.call("extra_games", json.dumps({"games": [
-              {"key": "title:ci game", "title": "CI Game", "platform": "pc", "install": {"installed": True, "version": "1.0"}}
-          ]})))
+          assert store.devices() == []
+          assert droidtop_agent.service.serving() == {"state": "off"}
+          assert droidtop_agent.pair.status() == {"state": "idle"}
+          assert isinstance(droidtop_agent.pair.places(), list)
+          assert droidtop_agent.saves.copies() == []
+          folder = tempfile.mkdtemp(prefix="ci-game-")
+          out = droidtop_agent.scan.set_manager_games("CI", [
+              {"key": "title:ci game", "title": "CI Game", "platform": "pc", "install": {"installed": True, "version": "1.0"}, "base": folder}
+          ])
           assert out["games"] == 1, out
-          assert "title:ci game" in json.loads(droidtop_agent.call("library", "{}"))
-          assert "error" in json.loads(droidtop_agent.call("no_such_op", "{}"))
+          assert "title:ci game" in store.library()
+          try:
+              store.unpair("ffff")
+              raise SystemExit("unpair of an unknown handheld did not raise")
+          except AgentError as e:
+              print("refused as expected:", e)
           PY
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
