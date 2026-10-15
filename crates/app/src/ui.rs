@@ -12,9 +12,8 @@ use droidtop_agent_core::keys::{short, PeerId};
 use droidtop_agent_core::library::now_ms;
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
-use droidtop_agent_core::savesync;
+use droidtop_agent_saves::copies::{self, GameCopies, Kept};
 use droidtop_agent_scan::Found;
-use droidtop_agent_service::host::file_key;
 use droidtop_agent_service::{autostart, contexts, pair, rendezvous, scan_options, Agent};
 use droidtop_agent_store::{read_json, Settings};
 use eframe::egui::{self, Color32, RichText};
@@ -83,30 +82,6 @@ impl Qr {
         let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
         Some(Qr { width: code.width(), dark: code.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect() })
     }
-}
-
-/// One kept copy of a game's saves.
-#[derive(Clone)]
-struct Kept {
-    label: String,
-    when: String,
-    files: usize,
-    path: PathBuf,
-    /// The newest copy from a device, rather than an older one it replaced.
-    newest: bool,
-    /// The person said they had looked at it.
-    reviewed: bool,
-    /// What `reviewed.txt` calls it.
-    name: String,
-}
-
-/// A game's kept copies; [`key`] is None when the library no longer has it.
-#[derive(Clone)]
-struct GameCopies {
-    key: Option<String>,
-    title: String,
-    dir: PathBuf,
-    copies: Vec<Kept>,
 }
 
 /// Where a game keeps its saves on this computer.
@@ -197,9 +172,8 @@ impl App {
         match self.page {
             Page::Status => self.rendezvous = read_json::<rendezvous::Status>(&self.agent.store.dirs.rendezvous()).ok(),
             Page::Saves => {
-                let titles: std::collections::BTreeMap<String, (String, String)> =
-                    self.agent.store.library_now().games.iter().map(|(k, g)| (file_key(k), (k.clone(), g.title.clone()))).collect();
-                self.archive = archived(&self.agent.store.dirs.archive(), &titles);
+                let titles = droidtop_agent_saves::library_titles(&self.agent.store.library_now());
+                self.archive = copies::kept(&self.agent.store.dirs.archive(), &titles);
             }
             _ => {}
         }
@@ -301,6 +275,15 @@ fn pretty_stamp(stamp: &str) -> String {
     }
 }
 
+/// A kept copy as the Saves page names it.
+fn kept_label(c: &Kept) -> String {
+    if c.newest {
+        format!("Newest from {}", c.device)
+    } else {
+        format!("Older, from {}", c.device)
+    }
+}
+
 /// A launcher or store as the person knows it.
 fn source_name(raw: &str) -> String {
     let key: String = raw.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
@@ -342,80 +325,6 @@ fn places_of(scan: &droidtop_agent_scan::Scan, source: &str) -> String {
         out.push_str(&format!(" and {more} more"));
     }
     out
-}
-
-/// The archive: per game, the newest copy kept from each device
-/// (`copies/<device>/`), then the older ones, newest first. [`titles`] names
-/// each archive folder's game (`host::file_key` of its key, then key and title).
-fn archived(root: &Path, titles: &std::collections::BTreeMap<String, (String, String)>) -> Vec<GameCopies> {
-    let mut out = Vec::new();
-    let mut games: Vec<PathBuf> =
-        std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
-    games.sort();
-    for dir in games {
-        let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let reviewed: Vec<String> =
-            std::fs::read_to_string(dir.join("reviewed.txt")).unwrap_or_default().lines().map(str::to_string).collect();
-        let mut copies = Vec::new();
-        let mut newest: Vec<PathBuf> = std::fs::read_dir(dir.join("copies")).into_iter().flatten().flatten().map(|e| e.path()).collect();
-        newest.sort();
-        for copy in newest {
-            let device = copy.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let when =
-                std::fs::metadata(&copy).and_then(|m| m.modified()).map(|t| pretty_stamp(&savesync::utc_stamp(t))).unwrap_or_default();
-            copies.push(Kept {
-                label: format!("Newest from {device}"),
-                when,
-                files: walk_count(&copy, 0),
-                path: copy,
-                newest: true,
-                reviewed: true,
-                name: device,
-            });
-        }
-        for older in savesync::archived(&dir).into_iter().rev() {
-            let stamp = older.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let device = std::fs::read_to_string(older.join("device.txt")).unwrap_or_default();
-            let files = walk_count(&older, 0).saturating_sub(usize::from(!device.is_empty()));
-            copies.push(Kept {
-                label: format!("Older, from {}", device.trim()),
-                when: pretty_stamp(&stamp),
-                files,
-                path: older,
-                newest: false,
-                reviewed: reviewed.contains(&stamp),
-                name: stamp,
-            });
-        }
-        if copies.is_empty() {
-            continue;
-        }
-        let (key, title) = match titles.get(&folder) {
-            Some((key, title)) => (Some(key.clone()), title.clone()),
-            None => {
-                let kept = std::fs::read_to_string(dir.join("title.txt")).unwrap_or_default();
-                (
-                    None,
-                    if kept.trim().is_empty() {
-                        "A game from a handheld, with no title known".to_string()
-                    } else {
-                        kept.trim().to_string()
-                    },
-                )
-            }
-        };
-        out.push(GameCopies { key, title, dir, copies });
-    }
-    out
-}
-
-fn walk_count(dir: &Path, depth: usize) -> usize {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| if e.path().is_dir() && depth < 8 { walk_count(&e.path(), depth + 1) } else { 1 })
-        .sum()
 }
 
 impl App {
@@ -909,7 +818,7 @@ impl App {
         {
             let guard = self.agent.scan.lock().unwrap();
             let kept: Vec<&String> = self.archive.iter().filter_map(|g| g.key.as_ref()).collect();
-            let custom: Vec<String> = self.agent.saves.lock().unwrap().keys().cloned().collect();
+            let custom: Vec<String> = self.agent.saves.user.lock().unwrap().keys().cloned().collect();
             let mut shown = 0;
             ui.horizontal_wrapped(|ui| {
                 if let Some((_, scan)) = guard.as_ref() {
@@ -943,7 +852,7 @@ impl App {
             ui.strong("Kept copies of games that are no longer in the library");
             for g in orphans {
                 ui.horizontal(|ui| {
-                    ui.label(&g.title);
+                    ui.label(g.title.as_deref().unwrap_or("A game from a handheld, with no title known"));
                     if ui.small_button("Open folder").clicked() {
                         open_folder(&g.dir);
                     }
@@ -960,7 +869,7 @@ impl App {
         let agent = self.agent.clone();
         std::thread::spawn(move || {
             let game = GameRef { key: key.clone(), title };
-            let custom = agent.saves.lock().unwrap().get(&key).map(|u| u.patterns.clone()).unwrap_or_default();
+            let custom = agent.saves.user.lock().unwrap().get(&key).map(|u| u.patterns.clone()).unwrap_or_default();
             let (patterns, files) = match agent.save_lookup(&game, false) {
                 Some((spec, roots, _)) => {
                     let files = saves::collect(&spec, &roots);
@@ -1016,8 +925,8 @@ impl App {
                     let result = if saves::split(&template).is_none() {
                         Err(format!("Start with one of: {}", saves::TOKENS.join(", ")))
                     } else {
-                        self.agent.saves.lock().unwrap().entry(key.to_string()).or_default().patterns.push(template);
-                        self.agent.save_saves().map(|()| "Added.".to_string()).map_err(|e| e.to_string())
+                        self.agent.saves.user.lock().unwrap().entry(key.to_string()).or_default().patterns.push(template);
+                        self.agent.saves.save_user().map(|()| "Added.".to_string()).map_err(|e| e.to_string())
                     };
                     if result.is_ok() {
                         self.template_draft.clear();
@@ -1032,10 +941,10 @@ impl App {
                     .small(),
             );
             if let Some(p) = remove {
-                if let Some(u) = self.agent.saves.lock().unwrap().get_mut(key) {
+                if let Some(u) = self.agent.saves.user.lock().unwrap().get_mut(key) {
                     u.patterns.retain(|x| *x != p);
                 }
-                let _ = self.agent.save_saves();
+                let _ = self.agent.saves.save_user();
                 self.pick_saves_game(key.to_string(), title.to_string());
             }
 
@@ -1049,8 +958,8 @@ impl App {
                     let mut restore: Option<PathBuf> = None;
                     egui::Grid::new("copies").striped(true).num_columns(5).show(ui, |ui| {
                         for c in &game.copies {
-                            ui.label(&c.label);
-                            ui.label(&c.when);
+                            ui.label(kept_label(c));
+                            ui.label(pretty_stamp(&c.stamp));
                             ui.label(format!("{} files", c.files));
                             ui.horizontal(|ui| {
                                 if ui.small_button("Restore").clicked() {
@@ -1069,8 +978,7 @@ impl App {
                         }
                     });
                     if game.copies.iter().any(|c| !c.newest && !c.reviewed) && ui.button("Keep what is here (I have looked)").clicked() {
-                        let names: Vec<String> = game.copies.iter().filter(|c| !c.newest).map(|c| c.name.clone()).collect();
-                        let _ = std::fs::write(game.dir.join("reviewed.txt"), names.join("\n"));
+                        let _ = copies::mark_reviewed(&game);
                         self.loaded_at = Instant::now() - Duration::from_secs(3600);
                     }
                     if let Some(copy) = restore {
@@ -1291,38 +1199,6 @@ mod tests {
         let qr = Qr::of("droidtop-pair:1?code=123456&id=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff&name=DESKTOP-PC&at=192.168.1.20:47612").unwrap();
         assert_eq!(qr.dark.len(), qr.width * qr.width);
         assert!(qr.dark.iter().any(|d| *d));
-    }
-
-    #[test]
-    fn the_archive_lists_each_devices_copy_then_older_ones() {
-        let root = std::env::temp_dir().join(format!("dtagent-archive-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let game = root.join("steam_440");
-        let save = root.join("save.dat");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(&save, b"x").unwrap();
-        for device in ["DESKTOP", "DESKTOP", "Retroid Pocket 5"] {
-            savesync::keep_copy(std::iter::once(("<base>/save.dat".to_string(), save.clone())), &game, device).unwrap();
-        }
-        let titles =
-            std::collections::BTreeMap::from([("steam_440".to_string(), ("steam:440".to_string(), "Team Fortress 2".to_string()))]);
-        let list = archived(&root, &titles);
-        // One game, named by its title and not by its folder.
-        assert_eq!((list.len(), list[0].title.as_str(), list[0].key.as_deref()), (1, "Team Fortress 2", Some("steam:440")));
-        let labels: Vec<&str> = list[0].copies.iter().map(|a| a.label.as_str()).collect();
-        assert_eq!(&labels[..2], &["Newest from DESKTOP", "Newest from Retroid Pocket 5"]);
-        assert_eq!(labels[2], "Older, from DESKTOP");
-        assert!(list[0].copies.iter().all(|a| a.files == 1));
-        assert!(list[0].copies[2].when.ends_with("UTC"));
-        // A game the library does not list is named by the title kept beside its copies, never by its key.
-        let other = root.join("folder_CUSTOM_GAME_7");
-        std::fs::create_dir_all(&other).unwrap();
-        std::fs::write(other.join("title.txt"), "Custom Thing").unwrap();
-        savesync::keep_copy(std::iter::once(("<base>/save.dat".to_string(), save.clone())), &other, "DESKTOP").unwrap();
-        let list = archived(&root, &titles);
-        let named: Vec<(&str, Option<&str>)> = list.iter().map(|g| (g.title.as_str(), g.key.as_deref())).collect();
-        assert!(named.contains(&("Custom Thing", None)) && named.contains(&("Team Fortress 2", Some("steam:440"))), "{named:?}");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

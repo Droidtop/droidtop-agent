@@ -9,7 +9,8 @@ use droidtop_agent_core::library::title_key;
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 
-use droidtop_agent_service::{autostart, contexts, host, ludusavi, pair, rendezvous, serve, Agent};
+use droidtop_agent_saves::ludusavi;
+use droidtop_agent_service::{autostart, contexts, host, pair, rendezvous, serve, Agent};
 use droidtop_agent_store::read_json;
 
 const HELP: &str = "droidtop-agent: keeps this computer and droidtop on a handheld in step.
@@ -145,9 +146,10 @@ fn main() {
         }
         ["saves", "add", game, templates @ ..] if !templates.is_empty() => saves_add(&agent, game, templates),
         ["saves", "remove", game] => {
-            let removed = agent.saves.lock().unwrap().remove(&game_ref(game).key).is_some();
+            let removed = agent.saves.user.lock().unwrap().remove(&game_ref(game).key).is_some();
             agent
-                .save_saves()
+                .saves
+                .save_user()
                 .map_err(|e| e.to_string())
                 .map(|()| println!("{}", if removed { "Removed." } else { "There was nothing set for that game." }))
         }
@@ -421,8 +423,8 @@ fn saves_add(agent: &Agent, game: &str, templates: &[&str]) -> Result<(), String
         }
     }
     let key = game_ref(game).key;
-    agent.saves.lock().unwrap().entry(key).or_default().patterns.extend(templates.iter().map(|t| t.to_string()));
-    agent.save_saves().map_err(|e| e.to_string())
+    agent.saves.user.lock().unwrap().entry(key).or_default().patterns.extend(templates.iter().map(|t| t.to_string()));
+    agent.saves.save_user().map_err(|e| e.to_string())
 }
 
 fn saves_show(agent: &Agent, game: &str) -> Result<(), String> {

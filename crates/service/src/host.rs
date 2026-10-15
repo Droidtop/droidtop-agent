@@ -5,125 +5,14 @@ use std::path::{Path, PathBuf};
 
 use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
 use droidtop_agent_core::keys::PeerId;
-use droidtop_agent_core::library::{title_key, Change};
+use droidtop_agent_core::library::Change;
 use droidtop_agent_core::proto::{GameRef, Launch};
-use droidtop_agent_core::saves::{prefix_roots, Roots, SaveSpec};
+use droidtop_agent_core::saves::{Roots, SaveSpec};
 use droidtop_agent_core::server::Host;
 use droidtop_agent_core::{Error, Result};
-use droidtop_agent_scan::Found;
+use droidtop_agent_saves::file_key;
 
 use crate::Agent;
-
-/// This computer's folder for each token, for a game found by the scan.
-pub fn roots_for(found: Option<&Found>, base: Option<PathBuf>) -> Roots {
-    let mut roots = match found.and_then(|f| f.prefix.as_ref()) {
-        // A game that runs under Proton or Wine here keeps its Windows saves in the prefix.
-        Some(prefix) => prefix_roots(&prefix.drive_c, &prefix.user),
-        None => native_roots(),
-    };
-    if let Some(base) = base.or_else(|| found.and_then(|f| f.base.clone())) {
-        roots.insert("<base>".into(), base);
-    }
-    roots
-}
-
-fn native_roots() -> Roots {
-    let mut r = Roots::new();
-    let home = dirs::home_dir().unwrap_or_default();
-    r.insert("<home>".into(), home.clone());
-    if cfg!(windows) {
-        let env = |name: &str| std::env::var_os(name).map(PathBuf::from);
-        if let Some(d) = dirs::config_dir() {
-            r.insert("<winAppData>".into(), d);
-        }
-        if let Some(d) = dirs::data_local_dir() {
-            r.insert("<winLocalAppData>".into(), d);
-        }
-        r.insert("<winLocalAppDataLow>".into(), home.join("AppData/LocalLow"));
-        r.insert("<winDocuments>".into(), dirs::document_dir().unwrap_or_else(|| home.join("Documents")));
-        for (token, var) in [("<winPublic>", "PUBLIC"), ("<winProgramData>", "ProgramData"), ("<winDir>", "WINDIR")] {
-            if let Some(d) = env(var) {
-                r.insert(token.into(), d);
-            }
-        }
-    } else {
-        if let Some(d) = dirs::data_dir() {
-            r.insert("<xdgData>".into(), d);
-        }
-        if let Some(d) = dirs::config_dir() {
-            r.insert("<xdgConfig>".into(), d);
-        }
-    }
-    r
-}
-
-/// A game key as a folder name.
-pub fn file_key(key: &str) -> String {
-    key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
-}
-
-impl Agent {
-    /// The Ludusavi index, loaded once; fetched when there is none yet and
-    /// [`fetch`] allows it.
-    pub fn ludusavi_index(&self, fetch: bool) -> Option<crate::ludusavi::Index> {
-        let mut slot = self.ludusavi.lock().unwrap();
-        if slot.is_none() {
-            *slot = crate::ludusavi::load(&self.store.dirs.data);
-        }
-        if slot.is_none() && fetch {
-            match crate::ludusavi::update(&self.store.dirs.data) {
-                Ok(index) => *slot = Some(index),
-                Err(e) => eprintln!("{e}"),
-            }
-        }
-        slot.clone()
-    }
-
-    /// Where a game keeps its saves on this computer: the person's own entry
-    /// first, then their Ludusavi custom games, then the Ludusavi manifest.
-    pub fn save_lookup(&self, game: &GameRef, fetch: bool) -> Option<(SaveSpec, Roots, Option<Found>)> {
-        let scan = self.fresh_scan(300);
-        let found = scan.find(&game.key).or_else(|| scan.find_title(&game.title)).cloned();
-        let user = {
-            let saves = self.saves.lock().unwrap();
-            saves.get(&game.key).or_else(|| saves.get(&title_key(&game.title))).cloned()
-        };
-        let roots = roots_for(found.as_ref(), user.as_ref().and_then(|u| u.base.clone()));
-        if let Some(user) = user.filter(|u| !u.patterns.is_empty()) {
-            return Some((SaveSpec { patterns: user.patterns }, roots, found));
-        }
-        let title = found.as_ref().map(|f| f.game.title.clone()).unwrap_or_else(|| game.title.clone());
-        if let Some(patterns) = crate::ludusavi::custom_games(&droidtop_agent_scan::apps::ludusavi_config()).remove(&title_key(&title)) {
-            return Some((SaveSpec { patterns }, roots, found));
-        }
-        let folder = found.as_ref().and_then(|f| f.base.as_deref()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
-        let spec = self.ludusavi_index(fetch)?.spec_for(&game.key, &title, folder.as_deref())?;
-        Some((spec, roots, found))
-    }
-}
-
-impl Agent {
-    /// Puts a kept copy of a game's saves back where the game keeps them
-    /// here. What is there now is kept first as this computer's own copy, so
-    /// a restore can be undone.
-    pub fn restore_saves(&self, game: &GameRef, copy: &Path) -> std::result::Result<usize, String> {
-        let (spec, roots, _) = self.save_lookup(game, false).ok_or("No save location is known for this game; add one first.")?;
-        let archive = self.store.dirs.archive().join(file_key(&game.key));
-        // The copy being restored may itself be this computer's newest copy, which keeping would move.
-        if !copy.starts_with(droidtop_agent_core::savesync::copy_dir(&archive, &self.store.name())) {
-            droidtop_agent_core::savesync::keep_copy(
-                droidtop_agent_core::saves::collect(&spec, &roots).into_iter(),
-                &archive,
-                &self.store.name(),
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if !copy.is_dir() {
-            return Err("That copy is no longer kept: older copies are dropped as newer ones come.".into());
-        }
-        droidtop_agent_core::savesync::restore_copy(copy, &roots).map_err(|e| e.to_string())
-    }
-}
 
 /// Where this computer's WireGuard answers from outside the LAN: the
 /// endpoint the person forwarded, and every global IPv6 address it has
@@ -256,33 +145,4 @@ fn no_adapter(context: &str, offered: bool) -> Error {
     } else {
         format!("this computer has no adapter for the {context} context; add the plugin's adapter with droidtop-agent contexts add")
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_keys_are_safe_names() {
-        assert_eq!(file_key("steam:440"), "steam_440");
-        assert_eq!(file_key("title:a/b"), "title_a_b");
-    }
-
-    #[test]
-    fn a_proton_game_resolves_inside_its_prefix() {
-        let found = Found {
-            game: droidtop_agent_core::library::ScannedGame {
-                key: "steam:1".into(),
-                title: "G".into(),
-                platform: None,
-                install: Default::default(),
-            },
-            base: Some(PathBuf::from("/games/G")),
-            prefix: Some(droidtop_agent_scan::Prefix { drive_c: PathBuf::from("/pfx/drive_c"), user: "steamuser".into() }),
-            engine: None,
-        };
-        let roots = roots_for(Some(&found), None);
-        assert_eq!(roots["<winAppData>"], PathBuf::from("/pfx/drive_c/users/steamuser/AppData/Roaming"));
-        assert_eq!(roots["<base>"], PathBuf::from("/games/G"));
-    }
 }

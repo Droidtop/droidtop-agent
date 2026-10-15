@@ -90,7 +90,7 @@ fn apply_saves(
     if manifest::same(&current, &incoming) {
         return Ok(());
     }
-    let archive = agent.store.dirs.archive().join(crate::host::file_key(&game.key));
+    let archive = agent.store.dirs.archive().join(droidtop_agent_saves::file_key(&game.key));
     if !manifest::same(&current, &manifest::from_entries(base)) {
         if winner(&incoming, &current, prefer) == Side::There {
             // This computer's copy stays; the handheld's is kept beside it.

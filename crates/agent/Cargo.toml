@@ -16,4 +16,5 @@ path = "src/main.rs"
 droidtop-agent-core = { path = "../core" }
 droidtop-agent-service = { path = "../service" }
 droidtop-agent-store = { path = "../store" }
+droidtop-agent-saves = { path = "../saves" }
 serde_json.workspace = true

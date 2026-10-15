@@ -1,0 +1,26 @@
+[package]
+name = "droidtop-agent-saves"
+description = "Where a game keeps its saves on a computer (the person's entries, Ludusavi's data, Wine and Proton prefixes) and the copies of them kept there"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "droidtop_agent_saves"
+path = "src/lib.rs"
+
+[dependencies]
+droidtop-agent-core = { path = "../core" }
+droidtop-agent-scan = { path = "../scan" }
+droidtop-agent-store = { path = "../store" }
+serde.workspace = true
+serde_json.workspace = true
+# The Ludusavi manifest is YAML; it is read once when it is updated and kept
+# as a compact JSON index after that.
+serde_yaml.workspace = true
+# Fetches the Ludusavi manifest when the person asks for it or a save lookup
+# needs it.
+ureq.workspace = true
+dirs.workspace = true

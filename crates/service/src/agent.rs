@@ -2,25 +2,16 @@
 //! agent keeps in memory: the last scan, the save catalog, the rendezvous's
 //! state and the games a desktop manager hands it.
 
-use std::collections::BTreeMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use droidtop_agent_core::proto::GameRef;
+use droidtop_agent_core::saves::{Roots, SaveSpec};
+use droidtop_agent_saves::Saves;
 use droidtop_agent_scan::{Found, Scan};
-use droidtop_agent_store::{read_json, write_json, Dirs, Settings, Store};
-use serde::{Deserialize, Serialize};
-
-/// Save locations the person states for a game, ahead of the Ludusavi manifest.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct UserSaves {
-    #[serde(default)]
-    pub patterns: Vec<String>,
-    /// The game's folder, when the scanner does not know it.
-    #[serde(default)]
-    pub base: Option<PathBuf>,
-}
+use droidtop_agent_store::{Dirs, Settings, Store};
 
 /// What the scanner looks at, from the person's settings.
 pub fn scan_options(settings: &Settings) -> droidtop_agent_scan::Options {
@@ -35,9 +26,9 @@ pub fn scan_options(settings: &Settings) -> droidtop_agent_scan::Options {
 pub struct Agent {
     /// The state on disk, shared with every other copy of the agent.
     pub store: Store,
-    pub saves: Mutex<BTreeMap<String, UserSaves>>,
+    /// Where games keep their saves here: the person's entries and the Ludusavi index.
+    pub saves: Saves,
     pub scan: Mutex<Option<(Instant, Scan)>>,
-    pub ludusavi: Mutex<Option<crate::ludusavi::Index>>,
     /// What the rendezvous knows now: the address the NAT gives the WireGuard
     /// socket, and where to punch (crate::rendezvous).
     pub rendezvous: std::sync::Arc<Mutex<crate::rendezvous::Shared>>,
@@ -56,17 +47,24 @@ impl Agent {
     pub fn open_in(dirs: Dirs) -> io::Result<Agent> {
         let store = Store::open_in(dirs)?;
         Ok(Agent {
-            saves: Mutex::new(read_json(&store.dirs.saves())?),
+            saves: Saves::open(store.dirs.saves(), store.dirs.data.clone())?,
             scan: Mutex::new(None),
-            ludusavi: Mutex::new(None),
             rendezvous: Default::default(),
             extra: Mutex::new(Vec::new()),
             store,
         })
     }
 
-    pub fn save_saves(&self) -> io::Result<()> {
-        write_json(&self.store.dirs.saves(), &*self.saves.lock().unwrap())
+    /// Where a game keeps its saves on this computer ([`Saves::lookup`]),
+    /// looked up in a scan at most 5 minutes old: this may rescan, which is slow.
+    pub fn save_lookup(&self, game: &GameRef, fetch: bool) -> Option<(SaveSpec, Roots, Option<Found>)> {
+        self.saves.lookup(game, &self.fresh_scan(300), fetch)
+    }
+
+    /// Puts a kept copy of a game's saves back ([`Saves::restore`]); what is
+    /// there now is kept first as this computer's own copy.
+    pub fn restore_saves(&self, game: &GameRef, copy: &Path) -> Result<usize, String> {
+        self.saves.restore(game, copy, &self.fresh_scan(300), &self.store.dirs.archive(), &self.store.name())
     }
 
     /// Scans this computer, records what changed in the library, and keeps

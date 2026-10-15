@@ -13,16 +13,13 @@ path = "src/lib.rs"
 
 [dependencies]
 droidtop-agent-core = { path = "../core" }
+droidtop-agent-saves = { path = "../saves" }
 droidtop-agent-scan = { path = "../scan" }
 droidtop-agent-store = { path = "../store" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-# The Ludusavi manifest is YAML; it is read once when it is updated and kept
-# as a compact JSON index after that.
-serde_yaml.workspace = true
-# Fetches the Ludusavi manifest when the person asks for it or a save lookup
-# needs it; nothing else in the agent goes to the network on its own.
+# Fetches a context adapter a plugin offered, once the person approved it.
 ureq.workspace = true
 dirs.workspace = true
 # The LaunchAgent that starts the agent at sign-in on macOS.
