@@ -97,12 +97,40 @@ pub enum Request {
     GamePutFinish {
         game: GameRef,
     },
+    /// Start [`game`] on the computer (hello feature `launch`). The computer
+    /// builds what it runs from the key itself and never executes text from
+    /// the handheld; it answers [`Response::Launch`].
+    LaunchGame {
+        game: GameRef,
+    },
     Bye,
+}
+
+/// What the computer did with a [`Request::LaunchGame`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum Launch {
+    /// Steam was asked to start the game. Steam may still be waiting for a
+    /// sign-in or an update before it runs.
+    Started,
+    /// The person has not let this handheld start games on this computer.
+    NotAllowed,
+    /// The key is not one the computer can start, or the computer has not
+    /// got the game installed.
+    UnknownGame,
+    /// The Steam client is not running, so nothing was started.
+    SteamNotRunning,
+    /// The computer could not hand the game to Steam.
+    Failed { message: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Response {
+    /// The answer to [`Request::LaunchGame`].
+    Launch {
+        outcome: Launch,
+    },
     /// The computer's name and what it supports, and where its WireGuard
     /// answers from outside the LAN (`wg:<ip>:<port>`), for the handheld
     /// to keep for when it is away.
@@ -170,4 +198,30 @@ pub enum Response {
     GamePlaced {
         folder: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shapes on the wire: a handheld and an agent built apart agree on them.
+    #[test]
+    fn a_launch_request_and_its_answers_have_a_fixed_shape() {
+        let ask = Request::LaunchGame { game: GameRef { key: "steam:440".into(), title: "TF2".into() } };
+        assert_eq!(serde_json::to_string(&ask).unwrap(), r#"{"t":"launch_game","game":{"key":"steam:440","title":"TF2"}}"#);
+        for (launch, json) in [
+            (Launch::Started, r#"{"t":"launch","outcome":{"result":"started"}}"#),
+            (Launch::NotAllowed, r#"{"t":"launch","outcome":{"result":"not_allowed"}}"#),
+            (Launch::UnknownGame, r#"{"t":"launch","outcome":{"result":"unknown_game"}}"#),
+            (Launch::SteamNotRunning, r#"{"t":"launch","outcome":{"result":"steam_not_running"}}"#),
+            (Launch::Failed { message: "no".into() }, r#"{"t":"launch","outcome":{"result":"failed","message":"no"}}"#),
+        ] {
+            let reply = Response::Launch { outcome: launch.clone() };
+            assert_eq!(serde_json::to_string(&reply).unwrap(), json);
+            match serde_json::from_str::<Response>(json).unwrap() {
+                Response::Launch { outcome } => assert_eq!(outcome, launch),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
 }

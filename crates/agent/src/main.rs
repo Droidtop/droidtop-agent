@@ -65,6 +65,10 @@ Usage:
   droidtop-agent rendezvous stun default | <host:port>...
   droidtop-agent primary [<id> | none] The handheld whose saves win here when both changed (the start of its id
                                        is enough); with none, the newest copy wins
+  droidtop-agent launch                Which handhelds may start games on this computer (none until you allow one)
+  droidtop-agent launch allow <id>     Let a handheld start Steam games here, e.g. for streaming them with
+                                       Steam Link (the start of its id is enough)
+  droidtop-agent launch deny <id>
   droidtop-agent autostart [on | off]  Start when you sign in (a systemd user unit or autostart entry on
                                        Linux, a LaunchAgent on macOS, the Run key on Windows); off unless
                                        you turn it on
@@ -275,6 +279,23 @@ fn main() {
                 _ => Err("More than one paired handheld starts with that; give more of the id.".into()),
             }
         }
+        ["launch"] => {
+            let allowed = agent.settings.lock().unwrap().launch_devices.clone();
+            let devices = agent.devices_now();
+            if devices.is_empty() {
+                println!("No handheld is paired.");
+            }
+            for d in &devices {
+                println!(
+                    "{}  {}  {}",
+                    &d.id[..16],
+                    d.name,
+                    if allowed.contains(&d.id) { "may start games" } else { "may not start games" }
+                );
+            }
+            Ok(())
+        }
+        ["launch", verb @ ("allow" | "deny"), id] => launch_switch(&agent, id, *verb == "allow"),
         ["autostart"] => {
             println!("Starting when you sign in: {}", if autostart::enabled() { "on" } else { "off" });
             Ok(())
@@ -311,6 +332,26 @@ fn unpair(agent: &Agent, id: &str) -> Result<(), String> {
             let peer = PeerId::from_hex(one).map_err(|e| e.to_string())?;
             agent.remove_device(&peer).map_err(|e| e.to_string())?;
             println!("Forgot {}.", short(&peer));
+            Ok(())
+        }
+        [] => Err("No paired handheld has that id.".into()),
+        _ => Err("More than one paired handheld starts with that; give more of the id.".into()),
+    }
+}
+
+fn launch_switch(agent: &Agent, id: &str, allow: bool) -> Result<(), String> {
+    let matches: Vec<_> = agent.devices_now().into_iter().filter(|d| d.id.starts_with(&id.to_lowercase())).collect();
+    match matches.as_slice() {
+        [one] => {
+            {
+                let mut s = agent.settings.lock().unwrap();
+                s.launch_devices.retain(|d| *d != one.id);
+                if allow {
+                    s.launch_devices.push(one.id.clone());
+                }
+            }
+            agent.save_settings().map_err(|e| e.to_string())?;
+            println!("{} {} start games on this computer.", one.name, if allow { "may now" } else { "may no longer" });
             Ok(())
         }
         [] => Err("No paired handheld has that id.".into()),

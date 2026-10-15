@@ -34,6 +34,7 @@ Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
 14. Decisions for the owner
 15. The window and the tray
 16. Inside a desktop manager (Pythia)
+17. Starting a game for a handheld
 
 ## 1. What droidtop already has
 
@@ -222,6 +223,7 @@ exactly one reply (`{"t":"error","message":...}` on failure).
 | `save_apply {game, remove, archive}` | `ok` | removals, and keeping the computer's own changed set as its copy first (`archive`) |
 | `context_pull {context}` | `context {records}` | a plugin context's records on the computer |
 | `context_push {context, changes}` | `ok` or `deferred` | record changes to apply on the computer |
+| `launch_game {game}` | `launch {outcome}` | start a Steam game on the computer (section 17) |
 
 Names inside a save set are canonical: a root token and a path with forward
 slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
@@ -826,8 +828,9 @@ macOS, so nobody needs the command line.
   - **Plugin data:** adapters plugins offered (Install or Decline; a declined
     plugin's offer for that context is not kept again) and the ones
     installed (Remove).
-  - **Settings:** name, rescan interval, away from home, forwarded port,
-    cloud folder, game and ROM folders, and starting at sign-in.
+  - **Settings:** name, rescan interval, which handhelds may start games
+    (section 17), away from home, forwarded port, cloud folder, game and ROM
+    folders, and starting at sign-in.
 - **Behaviour.** Closing the window leaves the agent in the tray. The tray
   menu offers Open, Pair a handheld and Quit. Autostart starts it with
   `--hidden`, in the tray only. Slow work (scanning, pairing, fetching an
@@ -880,3 +883,48 @@ identity, pairing, channel, transports, library, saves and scanner.
     device;
   - the manager's slow paths (reconciliation's duplicate search) as calls
     here.
+
+## 17. Starting a game for a handheld
+
+Owner (2026-10-14, Droidtop/tracker#552): "Steam link streaming is actually
+a pretty huge gap for us", and, approving the agent request and the Steam
+module as its home: "Yep. Wire it into the steam module specifically,
+because that controls how we handle steam games. Simplifies stuff".
+
+Steam Link takes no link that picks a computer or a game (rig run on a
+Retroid Pocket 5, Steam Link 1.3.32: every `steamlink://`, connect and
+remote play link ends in "Couldn't locate Remote Play invitation"; a plain
+launch shows the paired computer and its games). So the handheld asks the
+computer to start the game, then opens Steam Link plainly. The start is
+this request.
+
+- **Request** `launch_game {game}`, advertised as hello feature `launch`.
+  A handheld sends it only to an agent that states the feature, so an older
+  agent is told apart without being sent a request it cannot read.
+- **The agent builds what it runs.** From `steam:<digits>` (one to ten ASCII
+  digits) it makes `steam://rungameid/<digits>` and gives that to the
+  system's URL handler (`rundll32 url.dll,FileProtocolHandler` on Windows,
+  `open` on macOS, `xdg-open` elsewhere). Any other key is refused. A string
+  from the handheld is never executed, and the title is only logged.
+- **A switch per handheld, off by default.** `Settings::launch_devices`
+  holds the ids of the handhelds the person allowed: a checkbox per paired
+  handheld in Settings ("Start games"), or `droidtop-agent launch allow
+  <id>` and `launch deny <id>`. It is read again at each request, so a
+  change in the window or a command line holds at once. Starting a program
+  is more than syncing, so pairing alone does not grant it.
+- **Typed results**, one per request (`Launch`): `started`, `not_allowed`,
+  `unknown_game` (a key it cannot map, or a game this computer's scan does
+  not list as installed), `steam_not_running` and `failed {message}`. They
+  are checked in that order for what a handheld may learn: one that is not
+  allowed learns nothing about the computer's games.
+- **Steam must already run.** With the client closed nothing is started and
+  the result is `steam_not_running`: opening the URL would only start the
+  client, possibly behind a sign-in, and Steam Link could not stream yet.
+  `started` means Steam was asked; it may still be updating or syncing.
+  A signed-out client is not detected.
+- The agent logs each request with the handheld's name and the result.
+- On the handheld the Android library's `launch_game` operation connects as
+  for any sync, checks the `launch` feature (`agent_too_old` otherwise) and
+  returns `{"result": ...}` with the usual `computer` and `path`.
+- No streaming code is here (windowcast is the streaming project); the
+  computer only starts the game that Steam Link then streams.

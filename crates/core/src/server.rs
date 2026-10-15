@@ -12,7 +12,7 @@ use crate::context::{AdapterOffer, RecordChange, Records};
 use crate::keys::PeerId;
 use crate::library::Change;
 use crate::manifest::{self, Manifest};
-use crate::proto::{GameRef, Request, Response};
+use crate::proto::{GameRef, Launch, Request, Response};
 use crate::saves::{self, Roots, SaveSpec};
 use crate::savesync::{entry_for, keep_copy, receive_file, send_contents};
 use crate::{Error, Result, FEATURES, PROTOCOL_VERSION};
@@ -50,6 +50,12 @@ pub trait Host: Send + Sync {
     /// prefers when both sides changed.
     fn primary(&self, _peer: &PeerId) -> bool {
         false
+    }
+    /// Starts [`game`] for [`peer`] (hello feature `launch`). A computer that
+    /// cannot start games says so; the agent starts Steam games only, and
+    /// only for a handheld the person allowed (docs/DESIGN.md section 17).
+    fn launch_game(&self, _peer: &PeerId, _game: &GameRef) -> Launch {
+        Launch::Failed { message: "this computer cannot start games".into() }
     }
     fn library_pull(&self, peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)>;
     fn library_push(&self, peer: &PeerId, changes: Vec<Change>) -> Result<()>;
@@ -175,6 +181,7 @@ pub fn serve_moved<S: Read + Write>(ch: &mut Channel<S>, host: &dyn Host, moved:
                 }),
                 _ => Err(Error::Protocol("no game folder is being sent".into())),
             },
+            Request::LaunchGame { game } => Ok(Response::Launch { outcome: host.launch_game(&peer, &game) }),
             Request::ContextPull { context, adapter } => {
                 host.context_pull(&context, adapter.as_ref()).map(|records| Response::Context { records })
             }

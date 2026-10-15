@@ -1178,6 +1178,23 @@ impl App {
                 }
             });
             ui.end_row();
+            ui.label("Start games");
+            ui.vertical(|ui| {
+                if devices.is_empty() {
+                    ui.label("No handheld is paired.");
+                }
+                for d in &devices {
+                    let mut on = draft.launch_devices.contains(&d.id);
+                    let text = format!("Let {} start Steam games on this computer (to stream them with Steam Link)", d.name);
+                    if ui.checkbox(&mut on, text).changed() {
+                        draft.launch_devices.retain(|id| *id != d.id);
+                        if on {
+                            draft.launch_devices.push(d.id.clone());
+                        }
+                    }
+                }
+            });
+            ui.end_row();
             ui.label("Away from home");
             ui.checkbox(&mut draft.rendezvous, "Let paired handhelds find this computer through global discovery");
             ui.end_row();

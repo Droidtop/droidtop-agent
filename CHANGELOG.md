@@ -6,6 +6,13 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A handheld can ask this computer to start a Steam game: the `launch_game`
+  request (hello feature `launch`), so droidtop can offer "Stream with Steam
+  Link". The agent builds `steam://rungameid/<id>` itself from a `steam:<id>`
+  key and refuses any other, only for a handheld the person allowed
+  (Settings > Start games, or `droidtop-agent launch allow <id>`; off by
+  default), and answers started, not allowed, unknown game, Steam not running
+  or failed (docs/DESIGN.md section 17, Droidtop/tracker#552).
 - The agent as a Python extension module, `droidtop_agent` (crates/python,
   one abi3 wheel per system in each release), so Pythia is this computer's
   agent while it runs: same identity, pairings, library, saves, scanner and

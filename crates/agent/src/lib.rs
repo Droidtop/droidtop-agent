@@ -5,6 +5,7 @@
 pub mod autostart;
 pub mod contexts;
 pub mod host;
+pub mod launch;
 pub mod ludusavi;
 pub mod pair;
 pub mod rendezvous;

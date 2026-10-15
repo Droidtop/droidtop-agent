@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
 use droidtop_agent_core::keys::PeerId;
 use droidtop_agent_core::library::{title_key, Change};
-use droidtop_agent_core::proto::GameRef;
+use droidtop_agent_core::proto::{GameRef, Launch};
 use droidtop_agent_core::saves::{prefix_roots, Roots, SaveSpec};
 use droidtop_agent_core::server::Host;
 use droidtop_agent_core::{Error, Result};
@@ -150,6 +150,16 @@ impl Host for Agent {
 
     fn primary(&self, peer: &PeerId) -> bool {
         self.is_primary(peer)
+    }
+
+    fn launch_game(&self, peer: &PeerId, game: &GameRef) -> Launch {
+        // The settings are read again: the window or a command line may have
+        // changed the switch since this process started.
+        self.reload_settings();
+        let installed = || self.fresh_scan(300).find(&game.key).is_some_and(|f| f.game.install.installed);
+        let outcome = crate::launch::launch(self.may_launch(peer), installed, game, &crate::launch::Local);
+        println!("{} asked to start {:?} ({:?}): {outcome:?}", self.device_name(peer), game.title, game.key);
+        outcome
     }
 
     fn game_folder(&self, game: &GameRef) -> Option<(PathBuf, Option<String>)> {

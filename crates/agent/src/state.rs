@@ -162,6 +162,10 @@ pub struct Settings {
     /// Launchers and stores the person switched off (`steam`, `gog`...).
     #[serde(default)]
     pub disabled_sources: Vec<String>,
+    /// The handhelds (by id) the person let start games on this computer
+    /// (`launch allow`); none until they do (docs/DESIGN.md section 17).
+    #[serde(default)]
+    pub launch_devices: Vec<String>,
 }
 
 /// A fresh install's settings are the serde defaults (rendezvous on, Syncthing's servers).
@@ -372,6 +376,11 @@ impl Agent {
     /// Whether [`peer`] is the handheld whose saves this computer prefers.
     pub fn is_primary(&self, peer: &PeerId) -> bool {
         self.settings.lock().unwrap().primary_device.as_deref() == Some(peer.to_hex().as_str())
+    }
+
+    /// Whether the person let [`peer`] start games on this computer.
+    pub fn may_launch(&self, peer: &PeerId) -> bool {
+        self.settings.lock().unwrap().launch_devices.contains(&peer.to_hex())
     }
 
     /// A paired device's name, or the start of its id.

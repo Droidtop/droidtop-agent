@@ -49,6 +49,7 @@ pub fn call(op: &str, args: &str) -> String {
         "sync_context" => sync_context(&args),
         "game_pull" => game_pull(&args),
         "game_push" => game_push(&args),
+        "launch_game" => launch_game(&args),
         "share_library" => share_library(&args),
         "share_post_saves" => share_post_saves(&args),
         other => Err(Failure::Error(format!("unknown operation {other}"))),
@@ -288,6 +289,9 @@ struct Session {
     computer: String,
     endpoints: Vec<String>,
     disco: Option<String>,
+    /// What the computer's agent supports (the `features` of its hello); an
+    /// older agent states fewer.
+    features: Vec<String>,
     /// The computer moved to a new identity; droidtop re-pins it.
     moved_to: Option<PeerId>,
 }
@@ -297,13 +301,13 @@ fn hello(mut ch: Channel<Link>, address: String, path: Path, key: &DeviceKey, ar
     let features = droidtop_agent_core::FEATURES.iter().map(|f| f.to_string()).collect();
     let disco = rendezvous::certificate(key).ok().map(|c| c.device_id());
     ch.send_json(&Request::Hello { name, version: PROTOCOL_VERSION, features, disco })?;
-    let (computer, endpoints, disco, moved) = match ch.recv_json::<Response>()? {
-        Response::Hello { name, endpoints, disco, moved_to, .. } => (name, endpoints, disco, moved_to),
-        _ => (String::new(), Vec::new(), None, None),
+    let (computer, endpoints, disco, moved, features) = match ch.recv_json::<Response>()? {
+        Response::Hello { name, endpoints, disco, moved_to, features, .. } => (name, endpoints, disco, moved_to, features),
+        _ => (String::new(), Vec::new(), None, None, Vec::new()),
     };
     // Only a move both keys signed, from the identity this session reached.
     let moved_to = moved.and_then(|m| m.check(&ch.peer()));
-    Ok(Session { ch, address, path, computer, endpoints, disco, moved_to })
+    Ok(Session { ch, address, path, computer, endpoints, disco, features, moved_to })
 }
 
 /// The rendezvous settings droidtop passes (`rendezvous` in the arguments):
@@ -742,6 +746,32 @@ fn game_push(args: &Value) -> Outcome {
     Ok(v)
 }
 
+// Starting a game on the computer ---------------------------------------------
+
+/// Asks the computer to start a game (droidtop-agent docs/DESIGN.md section
+/// 17). The reply is `{"result": ...}` with `started`, `not_allowed`,
+/// `unknown_game`, `steam_not_running`, `failed` (and a `message`) or
+/// `agent_too_old`, for an agent that does not state the `launch` feature: it
+/// is not sent a request it cannot read.
+fn launch_game(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let game: GameRef = serde_json::from_value(args["game"].clone())?;
+    let mut s = connect(&key, args)?;
+    let outcome = if s.features.iter().any(|f| f == "launch") {
+        s.ch.send_json(&Request::LaunchGame { game })?;
+        match s.ch.recv_json::<Response>()? {
+            Response::Launch { outcome } => serde_json::to_value(outcome)?,
+            Response::Error { message } => return Err(Failure::Error(message)),
+            other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
+        }
+    } else {
+        json!({ "result": "agent_too_old" })
+    };
+    let v = located(outcome, &s);
+    bye(s.ch);
+    Ok(v)
+}
+
 // Plugin contexts ------------------------------------------------------------
 
 fn sync_context(args: &Value) -> Outcome {
@@ -859,6 +889,14 @@ mod tests {
         fn saves(&self, _game: &GameRef) -> Option<(droidtop_agent_core::saves::SaveSpec, Roots)> {
             None
         }
+        fn launch_game(&self, _peer: &PeerId, game: &GameRef) -> droidtop_agent_core::proto::Launch {
+            use droidtop_agent_core::proto::Launch;
+            match game.key.as_str() {
+                "steam:440" => Launch::Started,
+                "steam:1" => Launch::NotAllowed,
+                _ => Launch::Failed { message: "unexpected game".into() },
+            }
+        }
         fn archive_dir(&self, _game: &GameRef) -> PathBuf {
             std::env::temp_dir()
         }
@@ -956,6 +994,44 @@ mod tests {
         // The computer's favourite is for droidtop to write; nothing was sent back.
         assert_eq!(out["marks"], json!({ "steam:1": { "favourite": true } }));
         assert_eq!(host.library.lock().unwrap().games["steam:1"].installs.len(), 2);
+    }
+
+    /// What droidtop sees of a launch: the computer's typed answer, in the
+    /// shape the Steam module reads, over a real session.
+    #[test]
+    fn a_launch_request_reaches_the_computer_and_comes_back_typed() {
+        let handheld: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
+        let hh_id = PeerId::from_hex(handheld["id"].as_str().unwrap()).unwrap();
+        let pc = DeviceKey::generate();
+        let pc_id = pc.peer_id();
+        let host: &'static AwayHost = Box::leak(Box::new(AwayHost { library: Mutex::new(Library::default()) }));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (s, _) = listener.accept().unwrap();
+                let mut ch = Channel::accept(s, &pc, |p| *p == hh_id).unwrap();
+                droidtop_agent_core::server::serve(&mut ch, host).unwrap();
+            }
+        });
+        let ask = |key: &str| -> Value {
+            serde_json::from_str(&call(
+                "launch_game",
+                &json!({
+                    "seed": handheld["seed"],
+                    "peer": pc_id.to_hex(),
+                    "addresses": [at.to_string()],
+                    "game": { "key": key, "title": "Game" },
+                })
+                .to_string(),
+            ))
+            .unwrap()
+        };
+        let started = ask("steam:440");
+        assert_eq!(started["result"], "started", "{started}");
+        assert_eq!(started["computer"], "Away PC");
+        assert_eq!(ask("steam:1")["result"], "not_allowed");
+        server.join().unwrap();
     }
 
     #[test]
