@@ -6,6 +6,23 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- The agent is a set of library crates, so a desktop manager is built from
+  the same code as the programs: `store` (the state on disk), `scan` (the
+  scanner, over the folders it is given), `saves` (where saves are, kept
+  copies, restore), `pair`, `contexts` and `service` (the running agent);
+  `droidtop-agent` and `droidtop-agent-app` are thin programs over them
+  (docs/DESIGN.md section 13, Droidtop/tracker#461). Nothing changes for a
+  person using them.
+- The Python module `droidtop_agent` has a submodule per crate with typed
+  functions (`droidtop_agent.store.devices()`, `.pair.show()`,
+  `.scan.set_manager_games(...)`...) raising `droidtop_agent.AgentError`;
+  the JSON `call(op, args)` is gone (docs/DESIGN.md section 16).
+- The games a desktop manager tracks are kept by the agent
+  (`manager-games.json`), so closing Pythia no longer takes its games off
+  the handhelds when droidtop-agent serves after it. A manager game's
+  folder is refused when it is a whole drive, holds the home folder or holds
+  the agent's own files, since a handheld can copy a game's folder.
+
 - A handheld can ask this computer to start a Steam game: the `launch_game`
   request (hello feature `launch`), so droidtop can offer "Stream with Steam
   Link". The agent builds `steam://rungameid/<id>` itself from a `steam:<id>`

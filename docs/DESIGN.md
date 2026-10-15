@@ -122,7 +122,7 @@ follow (decision 1).
   in both. Both programs change the list with `TrustStore::update`, against
   what is on disk, and the agent reads it at every check.
   `DROIDTOP_AGENT_HOME` keeps everything in one folder (portable use, tests).
-- **Moving existing pairings** (`state::migrate`, once, at start):
+- **Moving existing pairings** (`store::migrate`, once, at start):
   1. Only the agent had an identity: its key becomes the shared one, and
      nothing changes for the paired handhelds.
   2. windowcast had one and the agent had no pairings: the agent adopts it.
@@ -641,7 +641,7 @@ no store APIs and no network.
 7i, 7m: `GameEngineDetector.scan` and `PcFolderScan`), so the computer and
 the handheld find the same games in the same tree. Engines are decided by
 droidtop-platforms' `engines-database.json`, which the agent embeds
-(`crates/agent/data/`, refreshed by copying the file in) and evaluates row by
+(`crates/scan/data/`, refreshed by copying the file in) and evaluates row by
 row, every row, with droidtop's three byte probes (Godot's pack, a Twine page,
 Unity's player). A folder with an engine's layout or a program is a game and
 ends the walk; a folder holding two engine games is a collection; a lone game
@@ -705,18 +705,35 @@ and skips folders it cannot read.
 
 ## 13. Repository layout and builds
 
-- `crates/core` (`droidtop-agent-core`): identity, pairing, channel,
-  protocol, sync rules, transports. It has no UI and no platform-specific code.
-- `crates/agent` (`droidtop-agent`): the agent as a library (scanner,
-  adapters, pairing, serving, settings), plus the command-line program.
-- `crates/app` (`droidtop-agent-app`): the same agent with a window and a
-  tray icon (section 15). It is what people run; the command line stays for
-  headless machines and scripts.
-- `crates/android` (`droidtop-agent-android`): the `cdylib` with droidtop's
-  JNI surface.
-- `crates/python` (`droidtop-agent-python`): the agent as a Python extension
-  module, `droidtop_agent`, for a desktop manager that is this computer's
-  agent while it runs (section 16).
+The computer's side is a set of library crates, so that a desktop manager
+that is this computer's agent (Pythia, section 16) is built from the same
+code as the programs (owner, 2026-10-14: "We will modularize the desktop
+agent, and use its modules as part of pythia"). A lower crate never depends
+on a higher one. Every crate is `droidtop-agent-<name>`, its library
+`droidtop_agent_<name>`. The design went through a two-round society review
+on Droidtop/tracker#461.
+
+| Crate | What it is | Depends on |
+|---|---|---|
+| `crates/core` | Both ends: identity, the pairing exchange, the Noise channel, the protocol and the `Host` trait the server answers through, the transport primitives (WireGuard tunnel, LAN discovery, rendezvous client, cloud-share letters), the library model, the save and context sync rules, game copy. No UI and no platform-specific code. | windowcast's crates |
+| `crates/store` | This computer's agent state on disk, `Store`: `Dirs`, `Settings`, the identity shared with windowcast and the migration onto it, the trusted and device lists, `library.json` under its cross-process lock, the person's marks. No networking. | core |
+| `crates/scan` | The scanner (section 11), over `scan::Options` (game and ROM folders, what is switched off), never the agent's state. The engines and platforms databases are in `crates/scan/data`. | core |
+| `crates/saves` | Where a game's saves are on this computer (the person's entries, Ludusavi custom games, the Ludusavi index, token roots natively or in a prefix), the kept-copies listing and restore (sections 6 and 9). Looks games up in a scan it is given. | core, scan, store |
+| `crates/pair` | Pairing from the computer: typing the handheld's code, or showing one (section 3). | core, store |
+| `crates/contexts` | Context adapters: offers, approval, install, runs (section 8). | core, store |
+| `crates/service` | The running agent, `Agent`: a `Store` plus the last scan, the save catalog, the rendezvous's state; its `Host` answers (with the launch rule, section 17); serving (LAN, discovery, WireGuard), the computer's rendezvous, the cloud share, a desktop manager's games, autostart. | all above |
+| `crates/agent` | The `droidtop-agent` command line: a thin host over the crates. | service and below |
+| `crates/app` | `droidtop-agent-app`, the window and tray (section 15): what people run. | service and below |
+| `crates/android` | droidtop's `cdylib` (`libdroidtop_agent.so`) and its JNI surface. | core |
+| `crates/python` | `droidtop_agent`, the Python extension module a desktop manager loads (section 16). | service and below |
+
+- Why core stays one crate: both ends link all of it, its modules meet in
+  the protocol (a request names library changes, save specs, game copy and
+  context types), and splitting it would change droidtop's JNI build for
+  nothing a desktop manager needs. Game copy stays in it because both ends
+  run it. The transports are core's primitives plus the service's wiring.
+- The service's `Agent` holds its `Store` as `agent.store`; pairing and the
+  adapters take `&Store`, so they work without a running service.
 - CI (`.github/workflows/ci.yml`): build and test on Linux (x86_64 and
   aarch64), Windows and macOS (arm64, with the x86_64 build made beside it),
   plus the Android library for both ABIs. Each system's release has both
@@ -783,8 +800,8 @@ macOS, so nobody needs the command line.
   Copies of the agent in different processes (the headless one, the window,
   a command line) each hold the paired devices and the library in memory, so
   they never write a copy back that they read earlier: `devices.json` and
-  `library.json` are read again when their file changed (`Agent::devices_now`,
-  `Agent::library_now`) and every change is read, changed and written under a
+  `library.json` are read again when their file changed (`Store::devices_now`,
+  `Store::library_now`) and every change is read, changed and written under a
   lock file (`edit_devices`, `edit_library`). A copy that wrote its start-up
   state back used to empty the paired devices and drop marks
   (Droidtop/tracker#528, #531).
@@ -848,41 +865,71 @@ itself, in its own process, so there is still one implementation of the
 identity, pairing, channel, transports, library, saves and scanner.
 
 - **`crates/python`** builds `droidtop_agent`, a Python extension module
-  (PyO3, the stable ABI from Python 3.10 on). Like droidtop's JNI library,
-  it has one call, `droidtop_agent.call(op, args_json)`, JSON in and JSON
-  out, with `{"error": ...}` on failure. It wraps the computer-side agent
-  (`droidtop_agent_computer::state::Agent`) that `droidtop-agent run` uses,
-  over the same files (section 3; `DROIDTOP_AGENT_HOME` works the same).
-  - `identity`, `settings`, `settings_set`
-  - `devices`, `unpair`, `primary`
-  - `pair` (the handheld's code), `pair_show` / `pair_status` /
-    `pair_cancel` (this computer shows a code)
-  - `serve`, `serving`
-  - `scan`, `rescan`, `library`, `set_mark`, `saves`
-  - `extra_games`
+  (PyO3, the stable ABI from Python 3.10 on), over the same crates and the
+  same files as `droidtop-agent run` (section 3; `DROIDTOP_AGENT_HOME` works
+  the same). Pythia is built from these modules (owner, 2026-10-14: "We
+  will modularize the desktop agent, and use its modules as part of
+  pythia"; section 13).
+  - **One extension module, one submodule per crate**:
+    `droidtop_agent.store`, `.pair`, `.scan`, `.saves` and `.service`, each
+    importable by that name. Not one module per crate: each extension
+    module links its own copy of the Rust code, and one process must hold
+    one agent.
+  - **Typed functions:** keyword arguments in; dicts, lists and plain values
+    out; a refusal raises `droidtop_agent.AgentError` with words a screen
+    can show. Every call releases the interpreter while Rust works, and a
+    function's docstring says when it is slow (a scan, a pairing wait, a
+    save lookup that may rescan).
+    - `store`: `identity`, `settings`, `set_settings(**changes)`,
+      `devices`, `unpair(id)`, `set_primary(id=None)`,
+      `set_launch(id, allowed)`, `library`, `set_mark(game, field, value)`
+    - `pair`: `pair(code)` (the handheld shows the code), `show` / `status`
+      / `cancel` (this computer shows one: the code, every address with its
+      label, and the invitation a QR code carries), `places`
+    - `scan`: `scan(max_age_s=0)`, `rescan`, `set_manager_games(manager,
+      games, rescan=True)`, `scan_with(game_folders=..., rom_folders=...,
+      ...)` (the scanner alone, without the agent's state)
+    - `saves`: `lookup(key, title="", fetch=False)`, `copies`,
+      `restore(key, path, title="")`
+    - `service`: `serve`, `serving`
 - **One agent per computer.** `serve` starts the same service as
   `droidtop-agent run`, on threads of its own. If another agent already
   listens on port 47610 (droidtop-agent, its window, or another Pythia),
   `serve` fails with that reason and the other one keeps serving. Since
   both use the same files, either can take over from the other: the
-  pairings, the library's change log and the kept saves stay as they are.
-- **The manager's own games** (`extra_games`): the games Pythia tracks are
-  joined into every scan, as `ScannedGame`s with their folders. A game the
-  scanner already found, by key or by folder, keeps the scanner's record.
-  The rest become this computer's install facts like any other source's,
-  and their saves are found the same way (section 6).
+  pairings, the library's change log, the kept saves and the manager's
+  games stay as they are, with nothing to migrate.
+- **The manager's own games** (`set_manager_games`): the games Pythia
+  tracks, as library records with their folders, are kept in the agent's
+  data folder (`manager-games.json`, with the manager's name) and joined
+  into every rescan, whichever program serves; so closing Pythia does not
+  take its games off the handhelds. A game the scanner already found, by
+  key or by folder, keeps the scanner's record. The rest become this
+  computer's install facts like any other source's, and their saves are
+  found the same way (section 6). A handheld can copy a library game's
+  folder (`game_pull`), so a manager game's folder is taken only when it
+  exists and is not a whole drive, the home folder or a folder holding it,
+  or a folder holding the agent's or windowcast's own files.
 - **Wheels** come from CI's `python` job for Windows x86_64, Linux x86_64
   and aarch64 (glibc 2.39, like the programs) and macOS arm64. Each is
-  installed and called once before it is offered. They are attached to
-  each release beside the programs.
-- **Next**, recorded on Droidtop/tracker#461:
-  - ownership of store games that are not installed, as a library fact;
-  - Pythia's cross-store identity (aliases and confirmed merges) in the
-    library model;
-  - credentials carried inside the channel and encrypted at rest on each
-    device;
-  - the manager's slow paths (reconciliation's duplicate search) as calls
-    here.
+  installed, every submodule imported and called once, before it is
+  offered. They are attached to each release beside the programs.
+- **Pythia's better logic moves into the crates**, each its own change,
+  recorded on Droidtop/tracker#461, in this order:
+  1. cross-store identity: Pythia's opaque game id, its `platform_ids`
+     aliases and the merges a person confirmed, as a library change kind in
+     core (both ends keep the same identity model), behind a hello feature;
+  2. ownership of store games that are not installed (owner, 2026-10-14),
+     another library fact, written by Pythia's account sync through `store`;
+  3. reconciliation's duplicate search (Pythia's difflib pass over every
+     entry per root) as a `scan` function with droidtop's part-folder rule,
+     growing with the library rather than its square;
+  4. Pythia's store scanners give way to `scan`; account-level ownership
+     stays Pythia's (it needs the network; the scanner reads files only);
+  5. credentials encrypted at rest on each device and carried inside the
+     channel (owner, 2026-10-14), a protocol change.
+- **Later:** a small record of which program serves, so the other can name
+  it ("Pythia serves this computer").
 
 ## 17. Starting a game for a handheld
 
