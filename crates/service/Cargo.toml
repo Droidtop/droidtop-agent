@@ -1,0 +1,42 @@
+[package]
+name = "droidtop-agent-service"
+description = "The running droidtop agent on a computer: what serves paired handhelds, over the agent's state, scanner, saves, pairing and context adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "droidtop_agent_service"
+path = "src/lib.rs"
+
+[dependencies]
+droidtop-agent-core = { path = "../core" }
+windowcast-identity.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# The Ludusavi manifest is YAML; it is read once when it is updated and kept
+# as a compact JSON index after that.
+serde_yaml.workspace = true
+# Fetches the Ludusavi manifest when the person asks for it or a save lookup
+# needs it; nothing else in the agent goes to the network on its own.
+ureq.workspace = true
+# Launcher databases (itch, Amazon, Lutris).
+rusqlite.workspace = true
+# The file-head rules of droidtop's engines database are regular expressions.
+regex.workspace = true
+dirs.workspace = true
+gethostname.workspace = true
+# Installed applications: Store package manifests (Windows) and bundles'
+# Info.plist (macOS, XML or binary). Both parsers are tested on every system.
+roxmltree.workspace = true
+plist.workspace = true
+# This computer's addresses, for the WireGuard endpoints it tells the handheld.
+if-addrs.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg.workspace = true
+# Which drives are fixed disks, for the `Games` folders the scan walks unasked.
+windows-sys.workspace = true

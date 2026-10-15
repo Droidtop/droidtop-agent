@@ -12,7 +12,7 @@ name = "droidtop_agent"
 crate-type = ["cdylib"]
 
 [dependencies]
-droidtop-agent = { path = "../agent" }
+droidtop-agent-service = { path = "../service" }
 droidtop-agent-core = { path = "../core" }
 serde.workspace = true
 serde_json.workspace = true

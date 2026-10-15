@@ -9,8 +9,8 @@ use droidtop_agent_core::library::title_key;
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 
-use droidtop_agent_computer::state::Agent;
-use droidtop_agent_computer::{autostart, contexts, host, ludusavi, pair, rendezvous, serve, state};
+use droidtop_agent_service::state::Agent;
+use droidtop_agent_service::{autostart, contexts, host, ludusavi, pair, rendezvous, serve, state};
 
 const HELP: &str = "droidtop-agent: keeps this computer and droidtop on a handheld in step.
 

@@ -1,0 +1,16 @@
+//! The running droidtop agent on a computer: what serves paired handhelds.
+//! The command line (`droidtop-agent`), the window (`droidtop-agent-app`)
+//! and a desktop manager that is this computer's agent (Pythia, through
+//! `droidtop-agent-python`) are thin hosts over it (docs/DESIGN.md section 13).
+
+pub mod autostart;
+pub mod contexts;
+pub mod host;
+pub mod launch;
+pub mod ludusavi;
+pub mod pair;
+pub mod rendezvous;
+pub mod scan;
+pub mod serve;
+pub mod share;
+pub mod state;

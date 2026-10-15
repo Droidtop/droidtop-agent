@@ -8,10 +8,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use droidtop_agent_computer::host::file_key;
-use droidtop_agent_computer::scan::Found;
-use droidtop_agent_computer::state::{Agent, Settings};
-use droidtop_agent_computer::{autostart, pair, rendezvous, state};
+use droidtop_agent_service::host::file_key;
+use droidtop_agent_service::scan::Found;
+use droidtop_agent_service::state::{Agent, Settings};
+use droidtop_agent_service::{autostart, pair, rendezvous, state};
 use droidtop_agent_core::keys::{short, PeerId};
 use droidtop_agent_core::library::now_ms;
 use droidtop_agent_core::proto::GameRef;
@@ -325,7 +325,7 @@ fn source_name(raw: &str) -> String {
 }
 
 /// The folders a source's games sit in, a few of them.
-fn places_of(scan: &droidtop_agent_computer::scan::Scan, source: &str) -> String {
+fn places_of(scan: &droidtop_agent_service::scan::Scan, source: &str) -> String {
     let wanted: String = source.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
     let mut places: Vec<String> = scan
         .games
@@ -697,7 +697,7 @@ impl App {
             let rows: Vec<(PathBuf, bool)> = if roms {
                 settings.rom_folders.iter().map(|p| (p.clone(), false)).collect()
             } else {
-                droidtop_agent_computer::scan::folders::all_roots(&settings)
+                droidtop_agent_service::scan::folders::all_roots(&settings)
             };
             if rows.is_empty() {
                 ui.label(RichText::new("None yet.").weak());

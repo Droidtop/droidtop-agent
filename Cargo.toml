@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/agent", "crates/app", "crates/android", "crates/python"]
+members = ["crates/core", "crates/service", "crates/agent", "crates/app", "crates/android", "crates/python"]
 
 [workspace.package]
 version = "0.1.0"
@@ -31,6 +31,18 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+# The computer's side, shared by its crates (docs/DESIGN.md section 13).
+serde_yaml = "0.9"
+ureq = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+regex = "1"
+dirs = "5"
+gethostname = "0.5"
+roxmltree = "0.20"
+plist = "1"
+if-addrs = "0.13"
+winreg = "0.52"
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
 
 [profile.release]
 opt-level = "s"

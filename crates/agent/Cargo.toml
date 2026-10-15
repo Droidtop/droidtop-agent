@@ -7,40 +7,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[lib]
-name = "droidtop_agent_computer"
-path = "src/lib.rs"
-
+# The command line: a thin host over the agent's crates (docs/DESIGN.md section 13).
 [[bin]]
 name = "droidtop-agent"
 path = "src/main.rs"
 
 [dependencies]
 droidtop-agent-core = { path = "../core" }
-windowcast-identity.workspace = true
-serde.workspace = true
+droidtop-agent-service = { path = "../service" }
 serde_json.workspace = true
-sha2.workspace = true
-# The Ludusavi manifest is YAML; it is read once when it is updated and kept
-# as a compact JSON index after that.
-serde_yaml = "0.9"
-# Fetches the Ludusavi manifest when the person asks for it or a save lookup
-# needs it; nothing else in the agent goes to the network on its own.
-ureq = "2"
-# Launcher databases (itch, Amazon, Lutris).
-rusqlite = { version = "0.32", features = ["bundled"] }
-# The file-head rules of droidtop's engines database are regular expressions.
-regex = "1"
-dirs = "5"
-gethostname = "0.5"
-# Installed applications: Store package manifests (Windows) and bundles'
-# Info.plist (macOS, XML or binary). Both parsers are tested on every system.
-roxmltree = "0.20"
-plist = "1"
-# This computer's addresses, for the WireGuard endpoints it tells the handheld.
-if-addrs = "0.13"
-
-[target.'cfg(windows)'.dependencies]
-winreg = "0.52"
-# Which drives are fixed disks, for the `Games` folders the scan walks unasked.
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }

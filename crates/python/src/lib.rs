@@ -16,9 +16,9 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use droidtop_agent_computer::pair;
-use droidtop_agent_computer::scan::Found;
-use droidtop_agent_computer::state::{Agent, Settings};
+use droidtop_agent_service::pair;
+use droidtop_agent_service::scan::Found;
+use droidtop_agent_service::state::{Agent, Settings};
 use droidtop_agent_core::keys::PeerId;
 use droidtop_agent_core::library::ScannedGame;
 use droidtop_agent_core::proto::GameRef;
@@ -210,7 +210,7 @@ fn serve() -> Result<Value, String> {
     }
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let result = droidtop_agent_computer::serve::run(a);
+        let result = droidtop_agent_service::serve::run(a);
         let stopped = match result {
             Ok(()) => "the agent stopped".to_string(),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {

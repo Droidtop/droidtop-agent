@@ -9,7 +9,7 @@
 //!   H1 ── C1      H1 ── C2 ── H2 ── C3 ── H3
 //! ```
 //!
-//! A fourth computer, PC-A, is the real agent (`droidtop_agent_computer::state::Agent`
+//! A fourth computer, PC-A, is the real agent (`droidtop_agent_service::state::Agent`
 //! over a game folder), paired with H1 and H3: it covers what the mocks cannot,
 //! the same game under the same key on a handheld and a computer, and the
 //! person's marks surviving the agent's restarts and rescans.
@@ -28,7 +28,6 @@ use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
 use droidtop_agent::api::call;
-use droidtop_agent_computer::state::{Agent, Dirs};
 use droidtop_agent_core::channel::Channel;
 use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
@@ -38,6 +37,7 @@ use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves::{Roots, SaveSpec};
 use droidtop_agent_core::savesync::copy_dir;
 use droidtop_agent_core::server::{serve, serve_moved, Host};
+use droidtop_agent_service::state::{Agent, Dirs};
 use serde_json::{json, Value};
 
 fn temp(name: &str) -> PathBuf {

@@ -12,7 +12,7 @@ name = "droidtop-agent-app"
 path = "src/main.rs"
 
 [dependencies]
-droidtop-agent = { path = "../agent" }
+droidtop-agent-service = { path = "../service" }
 droidtop-agent-core = { path = "../core" }
 serde_json.workspace = true
 # The window: egui through eframe, drawn with OpenGL (glow), the stack of
