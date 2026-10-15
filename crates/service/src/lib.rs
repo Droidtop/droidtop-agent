@@ -7,6 +7,7 @@ mod agent;
 pub mod autostart;
 pub mod host;
 pub mod launch;
+pub mod manager;
 pub mod rendezvous;
 pub mod serve;
 pub mod share;

@@ -96,6 +96,10 @@ impl Dirs {
     pub fn library(&self) -> PathBuf {
         self.data.join("library.json")
     }
+    /// The games a desktop manager (Pythia) tracks itself.
+    pub fn manager_games(&self) -> PathBuf {
+        self.data.join("manager-games.json")
+    }
     pub fn archive(&self) -> PathBuf {
         self.data.join("archive")
     }

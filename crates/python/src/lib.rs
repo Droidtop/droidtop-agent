@@ -10,22 +10,19 @@
 //! back as `{"error": "..."}` in words a screen can show. Calls that wait
 //! (pairing, scanning) release the interpreter while they run.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
 use droidtop_agent_core::keys::PeerId;
-use droidtop_agent_core::library::ScannedGame;
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 use droidtop_agent_pair as pair;
-use droidtop_agent_scan::Found;
+use droidtop_agent_service::manager::ManagerGame;
 use droidtop_agent_service::Agent;
 use droidtop_agent_store::Settings;
 use pyo3::prelude::*;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 static AGENT: OnceLock<Arc<Agent>> = OnceLock::new();
@@ -265,23 +262,13 @@ fn pair_show() -> Result<Value, String> {
     Ok(reply)
 }
 
-/// A game the desktop manager tracks, as it hands it over.
-#[derive(Deserialize)]
-struct Extra {
-    #[serde(flatten)]
-    game: ScannedGame,
-    #[serde(default)]
-    base: Option<PathBuf>,
-}
-
-/// The games the desktop manager itself tracks, joined into every scan from
-/// now on (docs/DESIGN.md section 16); rescans when asked.
+/// The games the desktop manager itself tracks, kept and joined into every
+/// scan from now on (docs/DESIGN.md section 16); rescans when asked.
 fn extra_games(args: &Value) -> Result<Value, String> {
     let a = agent()?;
-    let list: Vec<Extra> = serde_json::from_value(args.get("games").cloned().unwrap_or(json!([]))).map_err(|e| e.to_string())?;
-    let found: Vec<Found> = list.into_iter().map(|e| Found { game: e.game, base: e.base, prefix: None, engine: None }).collect();
-    let count = found.len();
-    *a.extra.lock().unwrap() = found;
+    let list: Vec<ManagerGame> = serde_json::from_value(args.get("games").cloned().unwrap_or(json!([]))).map_err(|e| e.to_string())?;
+    let count = list.len();
+    a.set_manager_games(args.get("manager").and_then(Value::as_str).unwrap_or("Pythia"), list).map_err(|e| e.to_string())?;
     let changes = if args.get("rescan").and_then(Value::as_bool).unwrap_or(true) { a.rescan() } else { 0 };
     Ok(json!({ "games": count, "changes": changes }))
 }

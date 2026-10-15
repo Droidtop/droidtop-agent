@@ -1,6 +1,6 @@
 //! The running agent: this computer's [`Store`], plus what only the running
 //! agent keeps in memory: the last scan, the save catalog, the rendezvous's
-//! state and the games a desktop manager hands it.
+//! state.
 
 use std::io;
 use std::path::Path;
@@ -12,6 +12,8 @@ use droidtop_agent_core::saves::{Roots, SaveSpec};
 use droidtop_agent_saves::Saves;
 use droidtop_agent_scan::{Found, Scan};
 use droidtop_agent_store::{Dirs, Settings, Store};
+
+use crate::manager::{ManagerGame, ManagerGames};
 
 /// What the scanner looks at, from the person's settings.
 pub fn scan_options(settings: &Settings) -> droidtop_agent_scan::Options {
@@ -32,10 +34,6 @@ pub struct Agent {
     /// What the rendezvous knows now: the address the NAT gives the WireGuard
     /// socket, and where to punch (crate::rendezvous).
     pub rendezvous: std::sync::Arc<Mutex<crate::rendezvous::Shared>>,
-    /// Games a desktop manager that runs this agent in its own process
-    /// tracks itself (Pythia, through `crates/python`): joined into every
-    /// scan where the scanner has not found them (docs/DESIGN.md section 16).
-    pub extra: Mutex<Vec<Found>>,
 }
 
 impl Agent {
@@ -50,7 +48,6 @@ impl Agent {
             saves: Saves::open(store.dirs.saves(), store.dirs.data.clone())?,
             scan: Mutex::new(None),
             rendezvous: Default::default(),
-            extra: Mutex::new(Vec::new()),
             store,
         })
     }
@@ -75,7 +72,7 @@ impl Agent {
         self.store.reload_settings();
         let settings = self.store.settings.lock().unwrap().clone();
         let mut scan = droidtop_agent_scan::scan(&scan_options(&settings));
-        scan.join(&self.extra.lock().unwrap());
+        scan.join(&ManagerGames::load(&self.store.dirs).usable(&self.store.dirs));
         let launcher_marks = droidtop_agent_scan::lutris::marks();
         let (device, name) = (self.store.peer_id(), self.store.name());
         let changes = self.store.edit_library(|lib| {
@@ -84,6 +81,14 @@ impl Agent {
         });
         *self.scan.lock().unwrap() = Some((Instant::now(), scan));
         changes
+    }
+
+    /// The games desktop manager [`manager`] (Pythia) tracks itself, in
+    /// place of the ones it handed over before: kept in the agent's data
+    /// folder and joined into every rescan from now on, whichever program
+    /// serves (docs/DESIGN.md section 16). An empty list clears them.
+    pub fn set_manager_games(&self, manager: &str, games: Vec<ManagerGame>) -> io::Result<()> {
+        ManagerGames { manager: manager.to_string(), games }.save(&self.store.dirs)
     }
 
     /// The last scan, made now when there is none or it is older than [`max_age_s`].
