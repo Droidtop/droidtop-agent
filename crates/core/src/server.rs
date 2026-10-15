@@ -12,7 +12,7 @@ use crate::context::{AdapterOffer, RecordChange, Records};
 use crate::keys::PeerId;
 use crate::library::Change;
 use crate::manifest::{self, Manifest};
-use crate::proto::{GameRef, Launch, Request, Response};
+use crate::proto::{check_announcements, Announcements, GameRef, Launch, Request, Response};
 use crate::saves::{self, Roots, SaveSpec};
 use crate::savesync::{entry_for, keep_copy, receive_file, send_contents};
 use crate::{Error, Result, FEATURES, PROTOCOL_VERSION};
@@ -50,6 +50,11 @@ pub trait Host: Send + Sync {
     /// how many save files this computer sent and received, and how many it
     /// removed because the handheld's set no longer has them.
     fn saves_synced(&self, _peer: &PeerId, _game: &GameRef, _sent: usize, _received: usize, _removed: usize) {}
+    /// [`peer`] announced [`theirs`] (every plugin's value, in place of
+    /// what it announced before, already checked); answers this device's own.
+    fn announce(&self, _peer: &PeerId, _theirs: Announcements) -> Result<Announcements> {
+        Err(Error::Protocol("this device keeps no announcements".into()))
+    }
     /// Whether [`peer`] is this computer's primary handheld, whose saves it
     /// prefers when both sides changed.
     fn primary(&self, _peer: &PeerId) -> bool {
@@ -216,6 +221,10 @@ fn session<S: Read + Write>(
                 _ => Err(Error::Protocol("no game folder is being sent".into())),
             },
             Request::LaunchGame { game } => Ok(Response::Launch { outcome: host.launch_game(&peer, &game) }),
+            Request::Announce { values } => match check_announcements(&values) {
+                Ok(()) => host.announce(&peer, values).map(|values| Response::Announced { values }),
+                Err(why) => Err(Error::Protocol(why)),
+            },
             Request::ContextPull { context, adapter } => {
                 host.context_pull(&context, adapter.as_ref()).map(|records| Response::Context { records })
             }

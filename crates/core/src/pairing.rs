@@ -1,9 +1,12 @@
-//! Pairing a computer with a handheld (docs/DESIGN.md section 3): windowcast's
-//! pairing exchange (`windowcast_pairing::exchange`), the one windowcast's own
-//! signaling runs, over a plain TCP stream. Both sides send a hello (identity
-//! and a fresh nonce) with their SPAKE2 message, then each sends its name with
+//! Pairing two devices (docs/DESIGN.md section 3): a computer with a
+//! handheld, or two handhelds. windowcast's pairing exchange
+//! (`windowcast_pairing::exchange`), the one windowcast's own signaling
+//! runs, over a plain TCP stream. Both sides send a hello (identity and a
+//! fresh nonce) with their SPAKE2 message, then each describes itself (its
+//! name, its kind, and its certificate's fingerprint, [`crate::cert`]) with
 //! a proof over the transcript: its identity's signature and the tag of the
-//! key the code derived. Each then pins the other's PeerId.
+//! key the code derived. Each checks the fingerprint is the one of the key
+//! it proved, then pins it: every later session is mutual TLS against it.
 //!
 //! The side that shows the 6-digit code is the SPAKE2 host and listens; the
 //! side the code is typed on is the client, connects and speaks first. The
@@ -19,7 +22,7 @@ use windowcast_pairing::{finish, start_client, start_host, SessionKey};
 
 use crate::frame::{read_frame, write_frame, MAX_PLAIN_FRAME};
 use crate::keys::{DeviceKey, PeerId};
-use crate::{hex, Error, Result};
+use crate::{cert, hex, Error, Result};
 
 /// The URI scheme of the QR code the handheld shows.
 pub const SCHEME: &str = "droidtop-pair:1";
@@ -113,19 +116,32 @@ pub fn new_code() -> String {
     windowcast_pairing::generate_pin()
 }
 
+/// What kind of device a paired one is: a computer (droidtop-agent or a
+/// desktop manager such as Pythia) or a handheld (droidtop).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    Computer,
+    Handheld,
+}
+
 /// The device paired with, as each side records it.
 #[derive(Debug, Clone)]
 pub struct Paired {
     pub peer: PeerId,
     pub name: String,
+    pub kind: Kind,
+    /// Its certificate's fingerprint, in hex ([`crate::cert::fingerprint`]).
+    pub fingerprint: String,
 }
 
 /// This exchange's label in every transcript, so a transcript from
 /// windowcast's signaling can never stand in for one of these.
-const LABEL: &[u8] = b"droidtop-agent pair v2\0";
+const LABEL: &[u8] = b"droidtop-agent pair v3\0";
 
-/// The version of this exchange; a version-1 hello has none.
-const VERSION: u32 = 2;
+/// The version of this exchange: 3 carries the certificate; a version-1
+/// hello has none.
+const VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 struct Hello {
@@ -135,12 +151,21 @@ struct Hello {
     spake: String,
 }
 
-/// A side's name, and its proof over the transcript that carries it.
+/// A side's description ([`About`], as the exact JSON text the proof
+/// signs), and its proof over the transcript that carries it.
 #[derive(Serialize, Deserialize)]
 struct Description {
-    name: String,
+    about: String,
     signature: String,
     tag: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct About {
+    name: String,
+    kind: Kind,
+    /// The certificate's fingerprint, in hex.
+    cert: String,
 }
 
 fn send<T: Serialize>(stream: &mut impl Write, value: &T) -> Result<()> {
@@ -176,58 +201,63 @@ fn their_hello(stream: &mut impl Read) -> Result<(exchange::Hello, Vec<u8>)> {
     Ok((exchange::Hello { peer, nonce, mode: 0 }, spake))
 }
 
-/// Sends this side's name with its proof; [`kind`] is 0 for the side the
-/// code was typed on (the client), 1 for the side showing it (the host).
+/// Sends this side's description with its proof; [`side`] is 0 for the
+/// side the code was typed on (the client), 1 for the side showing it (the host).
 fn describe(
     stream: &mut impl Write,
     key: &DeviceKey,
     session: &SessionKey,
-    kind: u8,
+    side: u8,
     hellos: (&exchange::Hello, &exchange::Hello),
     name: &str,
+    kind: Kind,
 ) -> Result<()> {
-    let t = exchange::transcript(LABEL, kind, hellos.0, hellos.1, &[0; 32], name.as_bytes());
+    let about = serde_json::to_string(&About { name: clip(name), kind, cert: cert::fingerprint_hex(&key.peer_id()) })?;
+    let t = exchange::transcript(LABEL, side, hellos.0, hellos.1, &[0; 32], about.as_bytes());
     let proof = exchange::prove(&Identity::from_seed(&key.seed()), Some(session), &t);
     let tag = proof.pin_tag.map(|t| hex::encode(&t)).unwrap_or_default();
-    send(stream, &Description { name: name.to_string(), signature: hex::encode(&proof.signature), tag })
+    send(stream, &Description { about, signature: hex::encode(&proof.signature), tag })
 }
 
-/// Reads the other side's name and checks its proof.
-fn described(stream: &mut impl Read, session: &SessionKey, kind: u8, hellos: (&exchange::Hello, &exchange::Hello)) -> Result<String> {
+/// Reads the other side's description, checks its proof and that its
+/// certificate is the one of the key it proved with.
+fn described(stream: &mut impl Read, session: &SessionKey, side: u8, hellos: (&exchange::Hello, &exchange::Hello)) -> Result<Paired> {
     let d: Description = recv(stream)?;
-    let signer = if kind == 0 { hellos.0.peer } else { hellos.1.peer };
-    let name = clip(&d.name);
-    let t = exchange::transcript(LABEL, kind, hellos.0, hellos.1, &[0; 32], d.name.as_bytes());
+    let signer = if side == 0 { hellos.0.peer } else { hellos.1.peer };
+    let t = exchange::transcript(LABEL, side, hellos.0, hellos.1, &[0; 32], d.about.as_bytes());
     let proof =
         Proof { signature: hex::decode(&d.signature).unwrap_or_default(), pin_tag: hex::decode(&d.tag).and_then(|b| b.try_into().ok()) };
     exchange::check(&signer, Some(session), &t, &proof).map_err(|_| Error::Pairing("the code did not match".into()))?;
-    Ok(name)
+    let about: About = serde_json::from_str(&d.about).map_err(|_| Error::Pairing("a malformed description".into()))?;
+    let fingerprint = cert::fingerprint_hex(&signer);
+    if about.cert != fingerprint {
+        return Err(Error::Pairing("the other device's certificate is not the one of its key; nothing was paired".into()));
+    }
+    Ok(Paired { peer: signer, name: clip(&about.name), kind: about.kind, fingerprint })
 }
 
-/// The side that shows [`code`]; the other side connected to it.
-pub fn pair_host<S: Read + Write>(stream: &mut S, key: &DeviceKey, name: &str, code: &str) -> Result<Paired> {
-    let name = clip(name);
+/// The side that shows [`code`]; the other side connected to it. [`kind`]
+/// is what this device is.
+pub fn pair_host<S: Read + Write>(stream: &mut S, key: &DeviceKey, name: &str, kind: Kind, code: &str) -> Result<Paired> {
     let start = start_host(code);
     let (client, spake) = their_hello(stream)?;
     let (mine, host) = hello(key, &start.outbound_message);
     send(stream, &mine)?;
     let session = finish(start, &spake).map_err(|e| Error::Pairing(e.to_string()))?;
-    let client_name = described(stream, &session, 0, (&client, &host))?;
-    describe(stream, key, &session, 1, (&client, &host), &name)?;
-    Ok(Paired { peer: client.peer, name: client_name })
+    let paired = described(stream, &session, 0, (&client, &host))?;
+    describe(stream, key, &session, 1, (&client, &host), name, kind)?;
+    Ok(paired)
 }
 
-/// The side the person typed [`code`] on.
-pub fn pair_client<S: Read + Write>(stream: &mut S, key: &DeviceKey, name: &str, code: &str) -> Result<Paired> {
-    let name = clip(name);
+/// The side the person typed [`code`] on. [`kind`] is what this device is.
+pub fn pair_client<S: Read + Write>(stream: &mut S, key: &DeviceKey, name: &str, kind: Kind, code: &str) -> Result<Paired> {
     let start = start_client(code);
     let (mine, client) = hello(key, &start.outbound_message);
     send(stream, &mine)?;
     let (host, spake) = their_hello(stream)?;
     let session = finish(start, &spake).map_err(|e| Error::Pairing(e.to_string()))?;
-    describe(stream, key, &session, 0, (&client, &host), &name)?;
-    let host_name = described(stream, &session, 1, (&client, &host))?;
-    Ok(Paired { peer: host.peer, name: host_name })
+    describe(stream, key, &session, 0, (&client, &host), name, kind)?;
+    described(stream, &session, 1, (&client, &host))
 }
 
 #[cfg(test)]
@@ -245,10 +275,10 @@ mod tests {
         let host_code = host_code.to_string();
         let host = thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
-            pair_host(&mut s, &host_key, "Handheld", &host_code)
+            pair_host(&mut s, &host_key, "Handheld", Kind::Handheld, &host_code)
         });
         let mut s = TcpStream::connect(addr).unwrap();
-        let client = pair_client(&mut s, &client_key, "Desktop", client_code);
+        let client = pair_client(&mut s, &client_key, "Desktop", Kind::Computer, client_code);
         drop(s);
         (host.join().unwrap(), client, host_id, client_id)
     }
@@ -259,8 +289,12 @@ mod tests {
         let (host, client) = (host.unwrap(), client.unwrap());
         assert_eq!(host.peer, client_id);
         assert_eq!(host.name, "Desktop");
+        assert_eq!(host.kind, Kind::Computer);
+        assert_eq!(host.fingerprint, cert::fingerprint_hex(&client_id));
         assert_eq!(client.peer, host_id);
         assert_eq!(client.name, "Handheld");
+        assert_eq!(client.kind, Kind::Handheld);
+        assert_eq!(client.fingerprint, cert::fingerprint_hex(&host_id));
     }
 
     #[test]

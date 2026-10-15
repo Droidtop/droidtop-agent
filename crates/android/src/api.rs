@@ -11,14 +11,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use droidtop_agent_core::cert;
 use droidtop_agent_core::channel::Channel;
 use droidtop_agent_core::context::{baseline_when_deferred, merge, AdapterOffer, ContextDecl, Records};
 use droidtop_agent_core::discovery::{self, Announce};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::{Change, Cursor, Library, Marks, ScannedGame};
 use droidtop_agent_core::mailbox::{self, Envelope};
-use droidtop_agent_core::pairing::{self, PairInvite};
-use droidtop_agent_core::proto::{GameRef, Request, Response};
+use droidtop_agent_core::pairing::{self, Kind, PairInvite, Paired};
+use droidtop_agent_core::proto::{check_announcements, Announcements, GameRef, Request, Response};
 use droidtop_agent_core::rendezvous;
 use droidtop_agent_core::saves::{prefix_roots, Roots};
 use droidtop_agent_core::savesync::{self, SaveSyncRequest, Side};
@@ -50,6 +51,9 @@ pub fn call(op: &str, args: &str) -> String {
         "game_pull" => game_pull(&args),
         "game_push" => game_push(&args),
         "launch_game" => launch_game(&args),
+        "announce" => announce(&args),
+        "serve_start" => serve_start(&args),
+        "serve_stop" => serve_stop(),
         "share_library" => share_library(&args),
         "share_post_saves" => share_post_saves(&args),
         other => Err(Failure::Error(format!("unknown operation {other}"))),
@@ -89,13 +93,31 @@ fn peer_of(text: &str) -> Result<PeerId, Failure> {
     PeerId::from_hex(text).map_err(|_| Failure::Error("that computer's id is not valid".into()))
 }
 
+/// A new device key: its seed (for droidtop to keep sealed), its id and its
+/// certificate's fingerprint (the pin a paired device keeps).
 fn identity_new() -> Value {
     let key = DeviceKey::generate();
-    json!({ "seed": hex::encode(&key.seed()), "id": key.peer_id().to_hex() })
+    json!({ "seed": hex::encode(&key.seed()), "id": key.peer_id().to_hex(), "fingerprint": cert::fingerprint_hex(&key.peer_id()) })
 }
 
 fn identity_id(args: &Value) -> Outcome {
-    Ok(json!({ "id": key_of(args)?.peer_id().to_hex() }))
+    let id = key_of(args)?.peer_id();
+    Ok(json!({ "id": id.to_hex(), "fingerprint": cert::fingerprint_hex(&id) }))
+}
+
+/// What this device is, for the device it pairs with: droidtop is a
+/// handheld unless it says otherwise.
+fn kind_of(args: &Value) -> Result<Kind, Failure> {
+    match &args["kind"] {
+        Value::Null => Ok(Kind::Handheld),
+        v => serde_json::from_value(v.clone()).map_err(|_| Failure::Error("kind is computer or handheld".into())),
+    }
+}
+
+/// A pairing's result as droidtop keeps it: the device's id, name, kind
+/// and certificate fingerprint, and where it is reached.
+fn paired_json(paired: &Paired, address: String) -> Value {
+    json!({ "peer": paired.peer.to_hex(), "name": paired.name, "kind": paired.kind, "fingerprint": paired.fingerprint, "address": address })
 }
 
 // Pairing --------------------------------------------------------------------
@@ -105,6 +127,7 @@ struct PairSession {
     code: String,
     key: DeviceKey,
     name: String,
+    kind: Kind,
     stop: Arc<AtomicBool>,
 }
 
@@ -118,6 +141,7 @@ const MAX_ATTEMPTS: u32 = 3;
 /// and answers the computer's pairing query on the LAN.
 fn pair_start(args: &Value) -> Outcome {
     let key = key_of(args)?;
+    let kind = kind_of(args)?;
     let name = args["name"].as_str().unwrap_or("droidtop").to_string();
     if let Some(old) = SESSION.lock().unwrap().take() {
         old.stop.store(true, Ordering::Relaxed);
@@ -139,11 +163,12 @@ fn pair_start(args: &Value) -> Outcome {
     let at = args["address"].as_str().filter(|a| !a.is_empty()).map(|a| format!("{a}:{port}"));
     let invite = PairInvite { code: code.clone(), peer: Some(key.peer_id()), name: Some(name.clone()), at };
     let uri = invite.to_uri();
-    *SESSION.lock().unwrap() = Some(PairSession { listener, code: code.clone(), key, name, stop });
+    *SESSION.lock().unwrap() = Some(PairSession { listener, code: code.clone(), key, name, kind, stop });
     Ok(json!({ "code": code, "uri": uri, "port": port }))
 }
 
-/// Waits for a computer to pair, up to `timeout_ms`, or until cancelled.
+/// Waits for a device to pair (a computer, or another handheld that typed
+/// the code), up to `timeout_ms`, or until cancelled.
 fn pair_wait(args: &Value) -> Outcome {
     let timeout = Duration::from_millis(args["timeout_ms"].as_u64().unwrap_or(600_000));
     let session = SESSION.lock().unwrap().take().ok_or_else(|| Failure::Error("pairing was not started".into()))?;
@@ -156,12 +181,10 @@ fn pair_wait(args: &Value) -> Outcome {
             Ok((mut stream, from)) => {
                 let _ = stream.set_nonblocking(false);
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-                match pairing::pair_host(&mut stream, &session.key, &session.name, &session.code) {
+                match pairing::pair_host(&mut stream, &session.key, &session.name, session.kind, &session.code) {
                     Ok(paired) => {
                         end(&session);
-                        return Ok(
-                            json!({ "peer": paired.peer.to_hex(), "name": paired.name, "address": format!("{}:{PORT}", from.ip()) }),
-                        );
+                        return Ok(paired_json(&paired, format!("{}:{PORT}", from.ip())));
                     }
                     Err(e) => {
                         attempts += 1;
@@ -183,13 +206,15 @@ fn pair_wait(args: &Value) -> Outcome {
     Err(Failure::Error(if CANCEL.load(Ordering::Relaxed) { "pairing was cancelled".into() } else { "no computer paired in time".into() }))
 }
 
-/// Pairing the other way round: the computer shows its address and a code
-/// (`droidtop-agent pair` with nothing after it), and this device connects.
-/// For a handheld the computer cannot reach, such as one behind an
-/// emulator's or a guest network's NAT. The computer is then reached at the
+/// Pairing the other way round: the other device shows its address and a
+/// code (`droidtop-agent pair` with nothing after it, or another handheld's
+/// pairing screen), and this device connects. For a handheld the computer
+/// cannot reach, such as one behind an emulator's or a guest network's NAT,
+/// and for pairing two handhelds. The other device is then reached at the
 /// same address on the agent's port.
 fn pair_connect(args: &Value) -> Outcome {
     let key = key_of(args)?;
+    let kind = kind_of(args)?;
     let name = args["name"].as_str().unwrap_or("droidtop").to_string();
     let invite = PairInvite::parse(args["code"].as_str().unwrap_or_default())
         .ok_or_else(|| Failure::Error("the code is the 6 digits the computer shows".into()))?;
@@ -202,11 +227,11 @@ fn pair_connect(args: &Value) -> Outcome {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
         .map_err(|e| Failure::Unreachable(format!("the computer did not answer at {address} ({e})")))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-    let paired = pairing::pair_client(&mut stream, &key, &name, &invite.code)?;
+    let paired = pairing::pair_client(&mut stream, &key, &name, kind, &invite.code)?;
     if invite.peer.is_some_and(|p| p != paired.peer) {
-        return Err(Failure::Error("the computer that answered is not the one in the invitation; nothing was paired".into()));
+        return Err(Failure::Error("the device that answered is not the one in the invitation; nothing was paired".into()));
     }
-    Ok(json!({ "peer": paired.peer.to_hex(), "name": paired.name, "address": SocketAddr::new(address.ip(), PORT).to_string() }))
+    Ok(paired_json(&paired, SocketAddr::new(address.ip(), PORT).to_string()))
 }
 
 // Reaching a paired computer -------------------------------------------------
@@ -772,6 +797,157 @@ fn launch_game(args: &Value) -> Outcome {
     Ok(v)
 }
 
+// Announcements and handheld peers --------------------------------------------
+
+/// Tells the paired device (a computer, or a handheld that serves) every
+/// plugin's value this device announces (`values`, in place of what it
+/// announced before) and answers with the device's own (`announced`).
+fn announce(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let values: Announcements = serde_json::from_value(args["values"].clone()).unwrap_or_default();
+    check_announcements(&values).map_err(Failure::Error)?;
+    let mut s = connect(&key, args)?;
+    if !s.features.iter().any(|f| f == "announce") {
+        bye(s.ch);
+        return Err(Failure::Error(
+            "the other device runs an older droidtop-agent or droidtop; update it to share plugins' devices".into(),
+        ));
+    }
+    s.ch.send_json(&Request::Announce { values })?;
+    let theirs = match s.ch.recv_json::<Response>()? {
+        Response::Announced { values } => values,
+        Response::Error { message } => return Err(Failure::Error(message)),
+        other => return Err(Failure::Error(format!("the other device answered {other:?}"))),
+    };
+    let v = located(json!({ "announced": theirs }), &s);
+    bye(s.ch);
+    Ok(v)
+}
+
+/// A handheld serving the handhelds paired with it: what it answers.
+/// Announcements now; save sync between handhelds follows
+/// (Droidtop/tracker#546).
+struct HandheldHost {
+    name: String,
+    values: Announcements,
+    /// Where what each peer announced is kept, by peer id: `{values, ms}`.
+    state: PathBuf,
+    writing: Mutex<()>,
+}
+
+impl droidtop_agent_core::server::Host for HandheldHost {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+    fn saves(&self, _game: &GameRef) -> Option<(droidtop_agent_core::saves::SaveSpec, Roots)> {
+        None
+    }
+    fn archive_dir(&self, _game: &GameRef) -> PathBuf {
+        std::env::temp_dir()
+    }
+    fn library_pull(&self, _peer: &PeerId, _since: u64) -> droidtop_agent_core::Result<(Vec<Change>, u64)> {
+        Err(Error::Protocol("a handheld does not share its library with other handhelds yet".into()))
+    }
+    fn library_push(&self, _peer: &PeerId, _changes: Vec<Change>) -> droidtop_agent_core::Result<()> {
+        Err(Error::Protocol("a handheld does not share its library with other handhelds yet".into()))
+    }
+    fn context_pull(&self, _context: &str, _offer: Option<&AdapterOffer>) -> droidtop_agent_core::Result<Records> {
+        Err(Error::Protocol("a handheld does not sync plugin contexts with other handhelds".into()))
+    }
+    fn context_push(
+        &self,
+        _context: &str,
+        _changes: Vec<droidtop_agent_core::context::RecordChange>,
+    ) -> droidtop_agent_core::Result<Option<String>> {
+        Err(Error::Protocol("a handheld does not sync plugin contexts with other handhelds".into()))
+    }
+    fn announce(&self, peer: &PeerId, theirs: Announcements) -> droidtop_agent_core::Result<Announcements> {
+        let _one = self.writing.lock().unwrap();
+        let mut all: serde_json::Map<String, Value> =
+            std::fs::read(&self.state).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        all.insert(peer.to_hex(), json!({ "values": theirs, "ms": droidtop_agent_core::library::now_ms() }));
+        let tmp = self.state.with_extension("tmp");
+        std::fs::write(&tmp, serde_json::to_vec(&all)?).and_then(|()| std::fs::rename(&tmp, &self.state))?;
+        Ok(self.values.clone())
+    }
+}
+
+struct Serving {
+    stop: Arc<AtomicBool>,
+    listening: thread::JoinHandle<()>,
+}
+
+static SERVING: Mutex<Option<Serving>> = Mutex::new(None);
+
+/// Serves the handhelds paired with this one (`peers`), until `serve_stop`:
+/// sessions on the agent's port (or `port`), and answers to their LAN
+/// queries. What each announces is written to `state` (by peer id, its
+/// `values` and when, `ms`); they are answered with this device's own
+/// (`values`). Called again, it starts over with the new arguments. The
+/// only thing in this library that runs on its own, and only while droidtop
+/// asks for it.
+fn serve_start(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let name = args["name"].as_str().unwrap_or("droidtop").to_string();
+    let peers: Vec<PeerId> = args["peers"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|p| p.as_str()).filter_map(|p| PeerId::from_hex(p).ok()).collect())
+        .unwrap_or_default();
+    let values: Announcements = serde_json::from_value(args["values"].clone()).unwrap_or_default();
+    check_announcements(&values).map_err(Failure::Error)?;
+    let state = path_arg(args, "state")?;
+    let port = args["port"].as_u64().map(|p| p as u16).unwrap_or(PORT);
+    serve_stop()?;
+    let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| Failure::Error(format!("could not serve on port {port} ({e})")))?;
+    let port = listener.local_addr().map_err(|e| Failure::Error(e.to_string()))?.port();
+    listener.set_nonblocking(true).map_err(|e| Failure::Error(e.to_string()))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let peers = Arc::new(peers);
+    // Found by the LAN query like a computer, when the port is free.
+    if let Ok(sock) = UdpSocket::bind(("0.0.0.0", PORT)) {
+        let (stop, peers, key, name) = (stop.clone(), peers.clone(), DeviceKey::from_seed(&key.seed())?, name.clone());
+        thread::spawn(move || {
+            let _ = discovery::answer_agent_queries(&sock, &key, &name, port, |p| peers.contains(p), &stop);
+        });
+    }
+    let host = Arc::new(HandheldHost { name, values, state, writing: Mutex::new(()) });
+    let seed = key.seed();
+    let listening = {
+        let stop = stop.clone();
+        thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let (host, peers) = (host.clone(), peers.clone());
+                        thread::spawn(move || {
+                            let _ = stream.set_nonblocking(false);
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
+                            let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
+                            let Ok(key) = DeviceKey::from_seed(&seed) else { return };
+                            if let Ok(mut ch) = Channel::accept(stream, &key, |p| peers.contains(p)) {
+                                let _ = droidtop_agent_core::server::serve(&mut ch, &*host);
+                            }
+                        });
+                    }
+                    Err(_) => thread::sleep(Duration::from_millis(200)),
+                }
+            }
+        })
+    };
+    *SERVING.lock().unwrap() = Some(Serving { stop, listening });
+    Ok(json!({ "port": port }))
+}
+
+fn serve_stop() -> Outcome {
+    let serving = SERVING.lock().unwrap().take();
+    if let Some(serving) = serving {
+        serving.stop.store(true, Ordering::Relaxed);
+        // The port is free again once the listener is gone.
+        let _ = serving.listening.join();
+    }
+    Ok(json!({}))
+}
+
 // Plugin contexts ------------------------------------------------------------
 
 fn sync_context(args: &Value) -> Outcome {
@@ -820,16 +996,22 @@ fn sync_context(args: &Value) -> Outcome {
 mod tests {
     use super::*;
 
+    /// One pairing screen at a time: the tests that open one take this.
+    static SCREEN: Mutex<()> = Mutex::new(());
+
     #[test]
     fn identities_round_trip_through_json() {
         let made: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
         let again: Value = serde_json::from_str(&call("identity_id", &json!({ "seed": made["seed"] }).to_string())).unwrap();
         assert_eq!(made["id"], again["id"]);
+        assert_eq!(made["fingerprint"], again["fingerprint"]);
+        assert_eq!(made["fingerprint"].as_str().unwrap().len(), 64);
         assert!(call("nope", "{}").contains("error"));
     }
 
     #[test]
     fn pairing_through_the_api_pins_both_sides() {
+        let _screen = SCREEN.lock().unwrap_or_else(|e| e.into_inner());
         let handheld: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
         let started: Value = serde_json::from_str(&call(
             "pair_start",
@@ -840,12 +1022,16 @@ mod tests {
         let computer = thread::spawn(move || {
             let invite = PairInvite::parse(&uri).unwrap();
             let mut s = TcpStream::connect(invite.at.unwrap()).unwrap();
-            pairing::pair_client(&mut s, &DeviceKey::generate(), "PC", &invite.code).unwrap()
+            pairing::pair_client(&mut s, &DeviceKey::generate(), "PC", Kind::Computer, &invite.code).unwrap()
         });
         let waited: Value = serde_json::from_str(&call("pair_wait", r#"{"timeout_ms": 10000}"#)).unwrap();
         let paired = computer.join().unwrap();
         assert_eq!(waited["name"], "PC");
+        assert_eq!(waited["kind"], "computer");
+        assert_eq!(waited["fingerprint"], json!(cert::fingerprint_hex(&PeerId::from_hex(waited["peer"].as_str().unwrap()).unwrap())));
         assert_eq!(paired.name, "Handheld");
+        assert_eq!(paired.kind, Kind::Handheld);
+        assert_eq!(paired.fingerprint, handheld["fingerprint"].as_str().unwrap());
         assert_eq!(paired.peer.to_hex(), handheld["id"].as_str().unwrap());
     }
 
@@ -858,7 +1044,7 @@ mod tests {
         let pc_id = pc.peer_id();
         let computer = thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
-            pairing::pair_host(&mut s, &pc, "PC", "246810").unwrap()
+            pairing::pair_host(&mut s, &pc, "PC", Kind::Computer, "246810").unwrap()
         });
         let out: Value = serde_json::from_str(&call(
             "pair_connect",
@@ -868,6 +1054,8 @@ mod tests {
         let paired = computer.join().unwrap();
         assert_eq!(out["peer"], json!(pc_id.to_hex()), "{out}");
         assert_eq!(out["name"], "PC");
+        assert_eq!(out["kind"], "computer");
+        assert_eq!(out["fingerprint"], json!(cert::fingerprint_hex(&pc_id)));
         assert_eq!(out["address"], json!(format!("127.0.0.1:{PORT}")));
         assert_eq!(paired.name, "Handheld");
         assert_eq!(paired.peer.to_hex(), handheld["id"].as_str().unwrap());
@@ -1032,6 +1220,73 @@ mod tests {
         assert_eq!(started["computer"], "Away PC");
         assert_eq!(ask("steam:1")["result"], "not_allowed");
         server.join().unwrap();
+    }
+
+    /// Two handhelds pair with the same screens as a computer, then one
+    /// serves and the other tells it its plugins' values and learns its own.
+    #[test]
+    fn two_handhelds_pair_and_announce_to_each_other() {
+        let _screen = SCREEN.lock().unwrap_or_else(|e| e.into_inner());
+        let a: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
+        let b: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
+        let started: Value = serde_json::from_str(&call(
+            "pair_start",
+            &json!({ "seed": a["seed"], "name": "Pocket A", "address": "127.0.0.1" }).to_string(),
+        ))
+        .unwrap();
+        let waiting = thread::spawn(|| -> Value { serde_json::from_str(&call("pair_wait", r#"{"timeout_ms": 10000}"#)).unwrap() });
+        let joined: Value = serde_json::from_str(&call(
+            "pair_connect",
+            &json!({ "seed": b["seed"], "name": "Pocket B", "code": started["uri"] }).to_string(),
+        ))
+        .unwrap();
+        let waited = waiting.join().unwrap();
+        assert_eq!((joined["name"].as_str(), joined["kind"].as_str()), (Some("Pocket A"), Some("handheld")), "{joined}");
+        assert_eq!((waited["name"].as_str(), waited["kind"].as_str()), (Some("Pocket B"), Some("handheld")), "{waited}");
+        assert_eq!(joined["fingerprint"], a["fingerprint"]);
+        assert_eq!(waited["fingerprint"], b["fingerprint"]);
+
+        // A serves its paired handheld B, on a free port for the test.
+        let state = std::env::temp_dir().join(format!("dta-announced-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&state);
+        let served: Value = serde_json::from_str(&call(
+            "serve_start",
+            &json!({
+                "seed": a["seed"], "name": "Pocket A", "peers": [b["id"]], "port": 0, "state": state,
+                "values": { "syncthing": { "syncthing": "AAAAAAA-A" } },
+            })
+            .to_string(),
+        ))
+        .unwrap();
+        let at = format!("127.0.0.1:{}", served["port"]);
+        let out: Value = serde_json::from_str(&call(
+            "announce",
+            &json!({ "seed": b["seed"], "peer": a["id"], "addresses": [at], "values": { "syncthing": { "syncthing": "BBBBBBB-B" } } })
+                .to_string(),
+        ))
+        .unwrap();
+        assert_eq!(out["announced"], json!({ "syncthing": { "syncthing": "AAAAAAA-A" } }), "{out}");
+        assert_eq!(out["computer"], "Pocket A");
+        let kept: Value = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+        assert_eq!(kept[b["id"].as_str().unwrap()]["values"], json!({ "syncthing": { "syncthing": "BBBBBBB-B" } }));
+
+        // A device A did not pair with is refused.
+        let stranger: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
+        let refused: Value = serde_json::from_str(&call(
+            "announce",
+            &json!({ "seed": stranger["seed"], "peer": a["id"], "addresses": [at], "values": {} }).to_string(),
+        ))
+        .unwrap();
+        assert!(refused.get("announced").is_none(), "{refused}");
+        // Too large a value is refused before anything is sent.
+        let big: Value = serde_json::from_str(&call(
+            "announce",
+            &json!({ "seed": b["seed"], "peer": a["id"], "addresses": [at], "values": { "x": "y".repeat(5000) } }).to_string(),
+        ))
+        .unwrap();
+        assert!(big["error"].as_str().unwrap().contains("4096"), "{big}");
+        call("serve_stop", "{}");
+        let _ = std::fs::remove_file(&state);
     }
 
     #[test]

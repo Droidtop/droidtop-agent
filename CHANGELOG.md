@@ -6,6 +6,20 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Every session is mutual TLS 1.3 (rustls), each device presenting a
+  self-signed certificate over its own key, in place of the Noise channel
+  (docs/DESIGN.md sections 3 and 4, Droidtop/tracker#556). Pairing (now
+  version 3) carries each side's certificate fingerprint and kind
+  (computer or handheld). The pin is the certificate's public key, so
+  devices paired before keep their pairing, but **both sides must update
+  together**: a device from before TLS cannot open the new channel.
+- Handhelds pair with each other with the same screens, and one serves the
+  others while droidtop asks (`serve_start`, `serve_stop`).
+- Announcements: a device publishes a small value per plugin to the devices
+  paired with it (`announce`), so the Syncthing plugin can accept exactly
+  the paired devices (Droidtop/tracker#553). On the computer:
+  `droidtop_agent.store.set_announce(plugin, value)`, and each device's
+  `announced` in `store.devices()`.
 - What the running agent does is an event a host program can read, not
   only a printed line: `droidtop_agent.service.events(since=0, wait=0)`
   gives each with its number, time, level, kind (`launch`, `session`,

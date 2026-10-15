@@ -109,8 +109,19 @@ follow (decision 1).
   `Identity` (`windowcast-identity`). Its public key is the device's `PeerId`.
   The same key, converted to X25519 (the standard birational map, as
   libsodium's `crypto_sign_ed25519_*_to_curve25519` does), is the device's
-  Noise and WireGuard static key. One key, one trust decision, for every
-  transport. On the handheld, droidtop keeps the key sealed with
+  WireGuard static key. One key, one trust decision, for every transport.
+- **A device certificate over that key** (Droidtop/tracker#556, `core::cert`):
+  self-signed X.509 that the device makes itself, issued by no one (no
+  signing root of ours, Droidtop Core's included, plays any part: pinning at
+  pairing is the trust). Its subject is the device's short id; it is valid
+  from 2020 to 9999, since the pin, not a date, is what is trusted. Pairing
+  pins its **fingerprint**: the SHA-256 of its SubjectPublicKeyInfo, the
+  usual public-key pin. A pin of the key and not of the certificate's bytes
+  lets a device reissue its certificate without being paired again, and a
+  device paired by its PeerId before certificates existed is already pinned
+  (an Ed25519 SubjectPublicKeyInfo is a fixed prefix and the key), so no one
+  pairs again for this change. A new key is a new identity, handed over by
+  `moved` below; forgetting a device unpins it everywhere at once. On the handheld, droidtop keeps the key sealed with
   `KeystoreSecretCipher` and passes it to the library for each call.
 - **One identity with windowcast on a computer** (owner, 2026-10-10: a
   computer paired once is paired for both; decision 3). The agent's identity
@@ -140,6 +151,13 @@ follow (decision 1).
 - **Trust** is windowcast's `TrustStore`: the set of pinned peers. The agent
   keeps a separate peers file for names and last-known addresses, so no
   trust decision is ever made from it.
+- **Kinds of device.** Pairing says what each side is: a `computer`
+  (droidtop-agent, or a desktop manager such as Pythia) or a `handheld`
+  (droidtop). Handhelds pair with each other with the same screens and the
+  same exchange as with a computer (one shows the code, the other types it),
+  and a handheld serves the handhelds paired with it while droidtop asks
+  (`serve_start`, section 12). A computer refuses to pair with a computer:
+  neither would ever connect to the other.
 - **Any number of devices, any pairing graph** (owner, 2026-10-10: "if we have
   5 droidtop devices and 5 desktops, we should be able to connect and pair any
   number of permutations of these devices and have them work"). A computer
@@ -149,14 +167,18 @@ follow (decision 1).
   between devices that are not paired directly.
 - **Pairing is windowcast's exchange** (`windowcast_pairing::exchange`), the
   one windowcast's signaling runs, under this program's label (`droidtop-agent
-  pair v2`):
+  pair v3`):
   - both sides send a hello: identity, a fresh nonce and the SPAKE2 message
     (6 digits from `generate_pin`, HKDF to a session key);
-  - each then sends its name with a proof over the transcript (label, side,
-    both nonces, both identities, the name): its identity's signature and the
-    PIN key's HMAC tag.
-  - A wrong code, a substituted key or a replayed transcript fails the check.
-  - A version-1 peer is told to update.
+  - each then describes itself, `{name, kind, cert}` (`cert` its
+    certificate's fingerprint), with a proof over the transcript (label,
+    side, both nonces, both identities, the description's exact text): its
+    identity's signature and the PIN key's HMAC tag;
+  - each checks the fingerprint is the one of the key that proved it, and
+    pins it.
+  - A wrong code, a substituted key, a certificate of another key or a
+    replayed transcript fails the check.
+  - A peer running an older exchange (version 1 or 2) is told to update.
   1. On the handheld: Settings > Computers > "Pair a computer". droidtop opens
      a short-lived listener (only while that screen is open), shows the 6-digit
      code in large type, and shows a QR code of
@@ -167,7 +189,7 @@ follow (decision 1).
      pairing mode answers. `droidtop-agent pair 'droidtop-pair:1?...'` (the
      QR's text, from a phone or webcam) goes straight to the address in it.
   3. The two run the exchange above over TCP, and each pins the other's
-     PeerId.
+     certificate.
   The pairing listener accepts one attempt per code. Three wrong attempts end
   the pairing screen's session.
 - **Why the code is typed on the computer and not scanned:** neither a desktop
@@ -187,24 +209,36 @@ follow (decision 1).
 
 ## 4. The session channel
 
-Every live connection is the same channel, whatever carries it:
-**Noise_IK_25519_ChaChaPoly_BLAKE2s** (the `snow` crate) with the prologue
-`droidtop-agent/1`. Noise_IK is the handshake family WireGuard uses.
+Every live connection is the same channel, whatever carries it: **mutual
+TLS 1.3** (rustls on the ring provider, `core::channel`), each side
+presenting its device certificate (section 3). It replaced a Noise_IK
+channel (Droidtop/tracker#556, owner: "use mtls for device co-identification
+for pairing"): one mechanism, standard TLS, the same on the computer and on
+the handheld, since droidtop runs this core through `AgentNative`.
 
-- The handheld is always the initiator: it knows the computer's static key
-  from pairing. The computer learns the handheld's static key from the first
-  handshake message and refuses it unless that key's PeerId is pinned.
-- Framing: each Noise message is sent as a 2-byte big-endian length followed
-  by the ciphertext (at most 65535 bytes). An application message is a 4-byte
-  length followed by its bytes, split across as many Noise messages as it
-  needs.
+- TLS 1.3 only, Ed25519 only (handshake signatures and certificates), no
+  session tickets or resumption, no certificate authorities.
+- The side that connects (a handheld) knows the other's key from pairing
+  and accepts only a certificate carrying it. It names the device it wants
+  as the server name (`<short id>.droidtop.invalid`), so a computer moving
+  between two identities presents the one asked for.
+- The side that accepts reads the connecting device's key from its
+  certificate, after TLS has checked the handshake signature with it, and
+  refuses the session unless that device is pinned.
+- An application message is a 4-byte big-endian length followed by its
+  bytes, at most 64 MiB.
 - Application messages are JSON objects (`serde`, internally tagged by `t`).
   File contents travel as separate binary messages after the JSON header
   that announces them, in 1 MiB pieces.
 
 Over the WireGuard path (section 10) this channel runs inside the tunnel as
-well. That is two layers of ChaCha20-Poly1305, which costs little on the
+well. That is two layers of encryption, which costs little on the
 handheld's CPU, and it keeps one authentication path for every transport.
+
+A device from before TLS (protocol version 1) cannot open this channel, and
+this one cannot open its: both sides update together. The handheld's error
+says the other side may be older. droidtop pins the agent library by
+release, so it moves with the agent it is built against.
 
 ## 5. The protocol
 
@@ -224,6 +258,19 @@ exactly one reply (`{"t":"error","message":...}` on failure).
 | `context_pull {context}` | `context {records}` | a plugin context's records on the computer |
 | `context_push {context, changes}` | `ok` or `deferred` | record changes to apply on the computer |
 | `launch_game {game}` | `launch {outcome}` | start a Steam game on the computer (section 17) |
+| `announce {values}` | `announced {values}` | each side's per-plugin values for the devices paired with it (below) |
+
+**Announcements** (hello feature `announce`, Droidtop/tracker#556, #553):
+a device publishes a small value per plugin to the devices paired with it,
+such as the Syncthing plugin's `{"syncthing": "<its device ID>"}`, so that
+plugin can accept exactly the devices the person paired, with no pairing
+of its own. `values` is every plugin's value (at most 64 plugins, ids of 1
+to 128 of `A-Z a-z 0-9 . _ -`, each value at most 4096 bytes of JSON) and
+replaces what that device announced before; the reply carries the other
+side's. A computer keeps them per device (`announced` in `devices`) and
+announces what its own modules set (`store.set_announce`); a handheld
+serving another keeps them in the file droidtop names. droidtop shows each
+plugin only its own value.
 
 Names inside a save set are canonical: a root token and a path with forward
 slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
@@ -501,7 +548,7 @@ paired in a partial mesh (`crates/android/tests/mesh.rs`):
 
 ## 10. Transports, in order
 
-All of them carry the same Noise channel between paired keys. A relay or
+All of them carry the same TLS channel between paired devices. A relay or
 share only ever sees ciphertext.
 
 1. **LAN direct.** TCP to the agent's port (47610). The handheld finds the
@@ -512,7 +559,7 @@ share only ever sees ciphertext.
 2. **Direct WireGuard.** A userspace WireGuard tunnel (boringtun) between the
    two paired keys over UDP, with UDP hole punching for NAT. The tunnel's
    addresses come from the PeerIds (a `fd64:` ULA per device). Inside it, a
-   userspace TCP stack (smoltcp) carries the Noise channel, so nothing on
+   userspace TCP stack (smoltcp) carries the TLS channel, so nothing on
    either device needs a TUN interface, root or a VPN slot. The tunnel exists
    only while a sync runs.
    - **Finding each other's public endpoint:** endpoints are learned
@@ -699,14 +746,43 @@ and skips folders it cannot read.
   - before a game launches and after it exits (the `StoreSaves` seam);
   - when the person starts a sync or a transfer (Settings > Computers >
     "Sync now", or a game's menu);
-  - while the pairing screen is open.
-  Nothing polls, and nothing listens in the background.
+  - while the pairing screen is open;
+  - while droidtop serves the handhelds paired with it (`serve_start` to
+    `serve_stop`), the one thing that listens, and only while droidtop asks.
+  Nothing polls.
+- **The operations** (`AgentNative.call(op, json)`, `crates/android/src/api.rs`).
+  Every one takes the device's `seed`; the ones that reach a paired device
+  also take its `peer` id, its known `addresses`, `name`, and for the
+  computer path `disco` and `rendezvous`. A failure is `{"error"}`, a device
+  that did not answer `{"unreachable"}`.
+
+  | Op | Arguments | Reply |
+  |---|---|---|
+  | `identity_new` | | `{seed, id, fingerprint}` |
+  | `identity_id` | `seed` | `{id, fingerprint}` |
+  | `pair_start` | `seed, name, kind?, address?` | `{code, uri, port}`: this device shows the code |
+  | `pair_wait` | `timeout_ms?` | `{peer, name, kind, fingerprint, address}` |
+  | `pair_connect` | `seed, name, kind?, code, address?` | the same: this device typed the other's code |
+  | `pair_cancel` | | `{}` |
+  | `announce` | `peer, addresses, values` | `{announced, computer, path, ...}`: the other device's values |
+  | `serve_start` | `seed, name, peers, values, state, port?` | `{port}`: serve the handhelds in `peers` |
+  | `serve_stop` | | `{}` |
+  | `find`, `sync_saves`, `sync_library`, `sync_context`, `game_pull`, `game_push`, `launch_game`, `share_library`, `share_post_saves` | as before | as before |
+
+  `kind` is `handheld` (the default) or `computer`; `fingerprint` is the
+  paired device's certificate pin (section 3), and `peer` its id, which
+  droidtop keeps as before. `state` is a JSON file the serving handheld
+  writes: by peer id, `{values, ms}`, what each announced and when.
 - **Where the code is:**
   - `:net-core`, `dev.droidtop.net.peer`: the JNI binding to the agent core
     (`libdroidtop_agent.so`) and the sealed identity;
   - `:library-core`, `dev.droidtop.library.computers`: paired computers, the
     save sync beside `StoreSaves`, and library and context sync;
-  - `:app`: the Computers settings catalog and the pairing screen (code and QR).
+  - `:app`: the Computers settings catalog and the pairing screen (code and QR);
+  - droidtop's own next step (Droidtop/tracker#556): paired devices with a
+    kind, the handheld-to-handheld pairing screen, and the plugin API's
+    `devices.list_paired`, `devices.announce` and `devices.changed` (#553)
+    over the operations above.
 - **The native library is built here**, in this repository's CI, for
   arm64-v8a and x86_64, and published with each release. droidtop fetches it
   against a pin file (tag and SHA-256), the way it fetches the lsfg-vk layer.
@@ -724,7 +800,7 @@ on Droidtop/tracker#461.
 
 | Crate | What it is | Depends on |
 |---|---|---|
-| `crates/core` | Both ends: identity, the pairing exchange, the Noise channel, the protocol and the `Host` trait the server answers through, the transport primitives (WireGuard tunnel, LAN discovery, rendezvous client, cloud-share letters), the library model, the save and context sync rules, game copy. No UI and no platform-specific code. | windowcast's crates |
+| `crates/core` | Both ends: identity and its certificate, the pairing exchange, the TLS channel, the protocol and the `Host` trait the server answers through, the transport primitives (WireGuard tunnel, LAN discovery, rendezvous client, cloud-share letters), the library model, the save and context sync rules, game copy. No UI and no platform-specific code. | windowcast's crates |
 | `crates/store` | This computer's agent state on disk, `Store`: `Dirs`, `Settings`, the identity shared with windowcast and the migration onto it, the trusted and device lists, `library.json` under its cross-process lock, the person's marks. No networking. | core |
 | `crates/scan` | The scanner (section 11), over `scan::Options` (game and ROM folders, what is switched off), never the agent's state. The engines and platforms databases are in `crates/scan/data`. | core |
 | `crates/saves` | Where a game's saves are on this computer (the person's entries, Ludusavi custom games, the Ludusavi index, token roots natively or in a prefix), the kept-copies listing and restore (sections 6 and 9). Looks games up in a scan it is given. | core, scan, store |
@@ -889,9 +965,11 @@ identity, pairing, channel, transports, library, saves and scanner.
     can show. Every call releases the interpreter while Rust works, and a
     function's docstring says when it is slow (a scan, a pairing wait, a
     save lookup that may rescan).
-    - `store`: `identity`, `settings`, `set_settings(**changes)`,
-      `devices`, `unpair(id)`, `set_primary(id=None)`,
-      `set_launch(id, allowed)`, `library`, `set_mark(game, field, value)`
+    - `store`: `identity` (with its certificate's `fingerprint`), `settings`,
+      `set_settings(**changes)`, `devices` (each with its `fingerprint`,
+      `kind` and what it `announced`), `unpair(id)`, `set_primary(id=None)`,
+      `set_launch(id, allowed)`, `library`, `set_mark(game, field, value)`,
+      `announcements`, `set_announce(plugin, value=None)` (section 5)
     - `pair`: `pair(code)` (the handheld shows the code), `show` / `status`
       / `cancel` (this computer shows one: the code, every address with its
       label, and the invitation a QR code carries), `places`

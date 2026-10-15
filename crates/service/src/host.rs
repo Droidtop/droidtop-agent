@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
 use droidtop_agent_core::keys::PeerId;
 use droidtop_agent_core::library::Change;
-use droidtop_agent_core::proto::{GameRef, Launch};
+use droidtop_agent_core::proto::{Announcements, GameRef, Launch};
 use droidtop_agent_core::saves::{Roots, SaveSpec};
 use droidtop_agent_core::server::Host;
 use droidtop_agent_core::{Error, Result};
@@ -98,6 +98,20 @@ impl Host for Agent {
             format!("Saves of {}: {}.", game.title, done.join(", ")),
             json!({ "peer": peer.to_hex(), "device": device, "title": game.title, "key": game.key, "sent": sent, "received": received, "removed": removed }),
         );
+    }
+
+    fn announce(&self, peer: &PeerId, theirs: Announcements) -> Result<Announcements> {
+        if self.store.device_announced(peer, theirs.clone()) {
+            let device = self.store.device_name(peer);
+            let plugins: Vec<&String> = theirs.keys().collect();
+            self.events.info(
+                "announce",
+                format!("{device} announced for {}.", if plugins.is_empty() { "no plugin".to_string() } else { format!("{plugins:?}") }),
+                json!({ "peer": peer.to_hex(), "device": device, "announced": theirs }),
+            );
+        }
+        self.store.reload_settings();
+        Ok(self.store.settings.lock().unwrap().announce.clone())
     }
 
     fn endpoints(&self) -> Vec<String> {
@@ -194,4 +208,40 @@ fn no_adapter(context: &str, offered: bool) -> Error {
     } else {
         format!("this computer has no adapter for the {context} context; add the plugin's adapter with droidtop-agent contexts add")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use droidtop_agent_core::keys::DeviceKey;
+    use droidtop_agent_core::pairing::Kind;
+    use droidtop_agent_store::Dirs;
+
+    #[test]
+    fn a_handhelds_announcement_is_kept_and_answered_with_this_computers() {
+        let root = std::env::temp_dir().join(format!("dta-announce-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dirs = Dirs { config: root.join("config"), data: root.join("data"), computer: root.join("host") };
+        for d in [&dirs.config, &dirs.data, &dirs.computer] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let agent = Agent::open_in(dirs).unwrap();
+        let handheld = DeviceKey::generate().peer_id();
+        agent.store.add_device(handheld, "Pocket", Kind::Handheld).unwrap();
+        agent.store.set_announce("syncthing", Some(json!({ "syncthing": "PC-ID" }))).unwrap();
+        assert!(agent.store.set_announce("not a plugin", Some(json!(1))).is_err());
+
+        let theirs: Announcements = [("syncthing".to_string(), json!({ "syncthing": "HH-ID" }))].into();
+        let mine = Host::announce(&agent, &handheld, theirs.clone()).unwrap();
+        assert_eq!(mine, [("syncthing".to_string(), json!({ "syncthing": "PC-ID" }))].into());
+        let device = agent.store.devices_now().into_iter().find(|d| d.id == handheld.to_hex()).unwrap();
+        assert_eq!(device.announced, theirs);
+        assert_eq!(device.kind, Some(Kind::Handheld));
+        let said: Vec<&str> = agent.events.since(0).iter().map(|e| e.kind).collect();
+        assert_eq!(said, ["announce"]);
+        // The same again changes nothing and says nothing.
+        Host::announce(&agent, &handheld, theirs).unwrap();
+        assert_eq!(agent.events.since(0).len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

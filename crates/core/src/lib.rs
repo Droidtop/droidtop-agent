@@ -7,6 +7,7 @@
 //! the agent serves each connection on its own thread, and droidtop calls in
 //! from a background coroutine. No async runtime to carry on the handheld.
 
+pub mod cert;
 pub mod channel;
 pub mod context;
 pub mod discovery;
@@ -36,8 +37,10 @@ pub const PORT: u16 = 47610;
 /// (`droidtop-agent pair`), for a handheld it cannot reach itself.
 pub const PAIR_PORT: u16 = 47612;
 
-/// The protocol version both sides state in `hello`.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// The protocol version both sides state in `hello`: 2 is the TLS channel
+/// (crate::channel), which a version-1 device cannot open.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// What this build of the core can do, stated in `hello`.
-pub const FEATURES: &[&str] = &["saves", "library", "contexts", "wireguard", "rendezvous", "newest_copy", "moved", "game_copy", "launch"];
+pub const FEATURES: &[&str] =
+    &["saves", "library", "contexts", "wireguard", "rendezvous", "newest_copy", "moved", "game_copy", "launch", "tls", "announce"];

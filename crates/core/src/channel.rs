@@ -1,97 +1,86 @@
-//! The session channel (docs/DESIGN.md section 4): Noise_IK between two paired
-//! keys over any byte stream (TCP on the LAN, TCP inside the WireGuard
-//! tunnel). The handheld initiates: it knows the computer's key from
-//! pairing. The computer learns the handheld's PeerId from the encrypted
-//! payload of the first message, checks it matches the static key Noise
-//! authenticated, and refuses it unless it is pinned.
+//! The session channel (docs/DESIGN.md section 4): mutual TLS 1.3 between
+//! two paired devices over any byte stream (TCP on the LAN, TCP inside the
+//! WireGuard tunnel). Each side presents its own certificate ([`crate::cert`])
+//! and checks the other's: the side that connects knows the other's key from
+//! pairing and accepts only a certificate carrying it; the side that accepts
+//! reads the connecting device's key from its certificate and refuses it
+//! unless it is pinned.
 //!
-//! An application message is a 4-byte length and its bytes, split across as
-//! many Noise messages as it needs.
+//! An application message is a 4-byte length and its bytes.
 
 use std::io::{Read, Write};
+use std::sync::Arc;
 
+use rustls::{ClientConnection, ServerConnection, StreamOwned};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use snow::{Builder, TransportState};
 
-use crate::frame::{read_short, write_short};
-use crate::keys::{x25519_public_of, DeviceKey, PeerId};
+use crate::cert;
+use crate::keys::{DeviceKey, PeerId};
 use crate::{error::protocol, Error, Result};
-
-const PATTERN: &str = "Noise_IK_25519_ChaChaPoly_BLAKE2s";
-const PROLOGUE: &[u8] = b"droidtop-agent/1";
-const MAX_NOISE: usize = 65535;
-const TAG: usize = 16;
-const MAX_PLAIN: usize = MAX_NOISE - TAG;
 
 /// The largest application message: a large library list fits many times.
 pub const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 
-pub struct Channel<S> {
-    stream: S,
-    noise: TransportState,
-    peer: PeerId,
-    out: Vec<u8>,
-    inp: Vec<u8>,
+enum Tls<S: Read + Write> {
+    Client(StreamOwned<ClientConnection, S>),
+    Server(StreamOwned<ServerConnection, S>),
 }
 
-fn builder<'a>(secret: &'a [u8; 32]) -> Builder<'a> {
-    Builder::new(PATTERN.parse().expect("a valid Noise pattern")).local_private_key(secret).prologue(PROLOGUE)
+pub struct Channel<S: Read + Write> {
+    tls: Tls<S>,
+    peer: PeerId,
+}
+
+/// A handshake that could not finish, said the way a person can act on.
+fn handshake(e: std::io::Error) -> Error {
+    if e.kind() == std::io::ErrorKind::UnexpectedEof {
+        // An agent or droidtop from before TLS closes the connection at the first bytes.
+        return Error::Tls("the other side closed the connection; it may run an older droidtop-agent or droidtop, so update both".into());
+    }
+    match e.get_ref().and_then(|inner| inner.downcast_ref::<rustls::Error>()) {
+        Some(rustls::Error::InvalidCertificate(_)) => Error::NotPaired,
+        Some(rustls::Error::AlertReceived(rustls::AlertDescription::BadCertificate)) => Error::NotPaired,
+        _ => Error::Io(e),
+    }
 }
 
 impl<S: Read + Write> Channel<S> {
-    /// The handheld's side: open a channel to the computer [`server`].
+    /// The side that connects (droidtop): open a channel to [`server`], the
+    /// device paired with this one.
     pub fn connect(mut stream: S, key: &DeviceKey, server: &PeerId) -> Result<Self> {
-        let secret = key.x25519_secret();
-        let remote = x25519_public_of(server)?;
-        let mut hs = builder(&secret).remote_public_key(&remote).build_initiator()?;
-        let mut buf = vec![0u8; MAX_NOISE];
-        let n = hs.write_message(&key.peer_id().0, &mut buf)?;
-        write_short(&mut stream, &buf[..n])?;
-        stream.flush()?;
-        let reply = read_short(&mut stream)?;
-        let mut payload = vec![0u8; MAX_NOISE];
-        hs.read_message(&reply, &mut payload)?;
-        let noise = hs.into_transport_mode()?;
-        Ok(Channel { stream, noise, peer: *server, out: buf, inp: payload })
+        let config = cert::client_config(key, server)?;
+        let mut conn = ClientConnection::new(Arc::new(config), cert::server_name(server))?;
+        while conn.is_handshaking() {
+            conn.complete_io(&mut stream).map_err(handshake)?;
+        }
+        Ok(Channel { tls: Tls::Client(StreamOwned::new(conn, stream)), peer: *server })
     }
 
-    /// The computer's side: accept a channel from a device [`trusted`] says is paired.
+    /// The side that accepts (the computer): a channel from a device [`trusted`] says is paired.
     pub fn accept(stream: S, key: &DeviceKey, trusted: impl Fn(&PeerId) -> bool) -> Result<Self> {
         Self::accept_any(stream, &[key], trusted).map(|(ch, _)| ch)
     }
 
     /// [`accept`] for a computer that answers to more than one key while it
-    /// moves to a new identity ([`crate::moved`]): the handheld's first
-    /// message opens only with the key it was sent to. Returns which of
+    /// moves to a new identity ([`crate::moved`]): it presents the
+    /// certificate of the key the other side asked for. Returns which of
     /// [`keys`] that was.
     pub fn accept_any(mut stream: S, keys: &[&DeviceKey], trusted: impl Fn(&PeerId) -> bool) -> Result<(Self, usize)> {
-        let first = read_short(&mut stream)?;
-        let mut payload = vec![0u8; MAX_NOISE];
-        let mut opened = None;
-        for (i, key) in keys.iter().enumerate() {
-            let secret = key.x25519_secret();
-            let mut hs = builder(&secret).build_responder()?;
-            if let Ok(n) = hs.read_message(&first, &mut payload) {
-                opened = Some((i, hs, n));
-                break;
-            }
+        let config = cert::server_config(keys)?;
+        let mut conn = ServerConnection::new(Arc::new(config))?;
+        while conn.is_handshaking() {
+            conn.complete_io(&mut stream).map_err(handshake)?;
         }
-        let Some((index, mut hs, n)) = opened else { return Err(Error::NotPaired) };
-        if n != 32 {
+        let peer = match conn.peer_certificates() {
+            Some([first, ..]) => cert::peer_of(first)?,
+            _ => return Err(Error::NotPaired),
+        };
+        if !trusted(&peer) {
             return Err(Error::NotPaired);
         }
-        let peer = PeerId(payload[..32].try_into().expect("32 bytes"));
-        let remote = hs.get_remote_static().ok_or(Error::NotPaired)?;
-        if x25519_public_of(&peer)?[..] != *remote || !trusted(&peer) {
-            return Err(Error::NotPaired);
-        }
-        let mut buf = vec![0u8; MAX_NOISE];
-        let n = hs.write_message(&[], &mut buf)?;
-        write_short(&mut stream, &buf[..n])?;
-        stream.flush()?;
-        let noise = hs.into_transport_mode()?;
-        Ok((Channel { stream, noise, peer, out: buf, inp: payload }, index))
+        let index = cert::named_index(keys, conn.server_name());
+        Ok((Channel { tls: Tls::Server(StreamOwned::new(conn, stream)), peer }, index))
     }
 
     /// The device on the other end.
@@ -99,48 +88,34 @@ impl<S: Read + Write> Channel<S> {
         self.peer
     }
 
+    fn io(&mut self) -> &mut dyn ReadWrite {
+        match &mut self.tls {
+            Tls::Client(s) => s,
+            Tls::Server(s) => s,
+        }
+    }
+
     pub fn send(&mut self, data: &[u8]) -> Result<()> {
         if data.len() > MAX_MESSAGE {
             return Err(protocol("a message too large to send"));
         }
-        let mut piece = Vec::with_capacity(MAX_PLAIN);
-        piece.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        let mut offset = 0;
-        loop {
-            let end = (offset + MAX_PLAIN - piece.len()).min(data.len());
-            piece.extend_from_slice(&data[offset..end]);
-            offset = end;
-            let n = self.noise.write_message(&piece, &mut self.out)?;
-            write_short(&mut self.stream, &self.out[..n])?;
-            piece.clear();
-            if offset >= data.len() {
-                break;
-            }
-        }
-        self.stream.flush()?;
+        let io = self.io();
+        io.write_all(&(data.len() as u32).to_be_bytes())?;
+        io.write_all(data)?;
+        io.flush()?;
         Ok(())
     }
 
     pub fn recv(&mut self) -> Result<Vec<u8>> {
-        let first = read_short(&mut self.stream)?;
-        let n = self.noise.read_message(&first, &mut self.inp)?;
-        if n < 4 {
-            return Err(protocol("a truncated message"));
-        }
-        let total = u32::from_be_bytes(self.inp[..4].try_into().expect("4 bytes")) as usize;
+        let io = self.io();
+        let mut length = [0u8; 4];
+        io.read_exact(&mut length)?;
+        let total = u32::from_be_bytes(length) as usize;
         if total > MAX_MESSAGE {
             return Err(protocol("a message too large to receive"));
         }
-        let mut data = Vec::with_capacity(total);
-        data.extend_from_slice(&self.inp[4..n]);
-        while data.len() < total {
-            let next = read_short(&mut self.stream)?;
-            let n = self.noise.read_message(&next, &mut self.inp)?;
-            data.extend_from_slice(&self.inp[..n]);
-        }
-        if data.len() != total {
-            return Err(protocol("a message longer than it said"));
-        }
+        let mut data = vec![0u8; total];
+        io.read_exact(&mut data)?;
         Ok(data)
     }
 
@@ -154,6 +129,9 @@ impl<S: Read + Write> Channel<S> {
         Ok(serde_json::from_slice(&bytes)?)
     }
 }
+
+trait ReadWrite: Read + Write {}
+impl<T: Read + Write> ReadWrite for T {}
 
 #[cfg(test)]
 mod tests {
@@ -184,6 +162,25 @@ mod tests {
         assert_eq!(ch.recv().unwrap(), big);
         ch.send(&[]).unwrap();
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn the_wire_is_tls_1_3_with_both_certificates() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = DeviceKey::generate();
+        let server_id = server.peer_id();
+        // What the client sends first, seen by a plain listener.
+        let handle = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut first = [0u8; 3];
+            s.read_exact(&mut first).unwrap();
+            first
+        });
+        let client = DeviceKey::generate();
+        let _ = Channel::connect(TcpStream::connect(addr).unwrap(), &client, &server_id);
+        // A TLS handshake record: a ClientHello, not the old Noise frame.
+        assert_eq!(handle.join().unwrap(), [0x16, 0x03, 0x01]);
     }
 
     #[test]

@@ -264,11 +264,16 @@ jobs:
               importlib.import_module("droidtop_agent." + name)
           me = store.identity()
           assert len(me["id"]) == 64, me
+          assert len(me["fingerprint"]) == 64, me
           print("droidtop_agent", droidtop_agent.__version__, "protocol", droidtop_agent.PROTOCOL_VERSION, me["name"])
           assert store.devices() == []
           assert droidtop_agent.service.serving() == {"state": "off"}
           assert droidtop_agent.service.events() == []
           assert droidtop_agent.service.events(since=0, wait=0.1) == []
+          store.set_announce("syncthing", {"syncthing": "CI-DEVICE-ID"})
+          assert store.announcements() == {"syncthing": {"syncthing": "CI-DEVICE-ID"}}
+          store.set_announce("syncthing")
+          assert store.announcements() == {}
           assert droidtop_agent.pair.status() == {"state": "idle"}
           assert isinstance(droidtop_agent.pair.places(), list)
           assert droidtop_agent.saves.copies() == []

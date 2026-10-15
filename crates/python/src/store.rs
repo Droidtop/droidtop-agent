@@ -1,6 +1,7 @@
 //! `droidtop_agent.store`: this computer's agent state (droidtop-agent-store):
 //! its identity, the paired handhelds, the settings and the library.
 
+use droidtop_agent_core::cert;
 use droidtop_agent_core::keys::PeerId;
 use droidtop_agent_store::{Settings, Store};
 use pyo3::prelude::*;
@@ -19,16 +20,22 @@ pub fn fill(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_launch, m)?)?;
     m.add_function(wrap_pyfunction!(library, m)?)?;
     m.add_function(wrap_pyfunction!(set_mark, m)?)?;
+    m.add_function(wrap_pyfunction!(announcements, m)?)?;
+    m.add_function(wrap_pyfunction!(set_announce, m)?)?;
     Ok(())
 }
 
-/// This computer as paired handhelds know it: `name` and `id`, and the
-/// agent's `config` and `data` folders.
+/// This computer as paired handhelds know it: `name`, `id` and its
+/// certificate's `fingerprint` (the pin a handheld keeps), and the agent's
+/// `config` and `data` folders.
 #[pyfunction]
 fn identity(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
         let a = agent()?;
-        Ok(json!({ "name": a.store.name(), "id": a.store.peer_id().to_hex(), "config": a.store.dirs.config, "data": a.store.dirs.data }))
+        let id = a.store.peer_id();
+        Ok(
+            json!({ "name": a.store.name(), "id": id.to_hex(), "fingerprint": cert::fingerprint_hex(&id), "config": a.store.dirs.config, "data": a.store.dirs.data }),
+        )
     })
 }
 
@@ -60,10 +67,12 @@ fn set_settings(py: Python<'_>, changes: Option<&Bound<'_, PyDict>>) -> PyResult
     })
 }
 
-/// The paired handhelds: each with `id`, `name`, `paired_ms`,
-/// `last_seen_ms`, `last_address`, whether it is still `trusted`, whether
-/// its saves win here (`primary`) and whether it may start games here
-/// (`launch`).
+/// The paired handhelds: each with `id`, its certificate's `fingerprint`,
+/// `name`, `kind` (`handheld`; None for one paired before pairing said),
+/// `paired_ms`, `last_seen_ms`, `last_address`, whether it is still
+/// `trusted`, whether its saves win here (`primary`), whether it may start
+/// games here (`launch`), and what it `announced` per plugin (and when,
+/// `announced_ms`).
 #[pyfunction]
 fn devices(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
@@ -81,6 +90,7 @@ fn devices(py: Python<'_>) -> PyResult<PyObject> {
                 let (is_primary, may_launch) = (primary.as_deref() == Some(d.id.as_str()), launch.contains(&d.id));
                 let mut v = serde_json::to_value(&d).unwrap_or(Value::Null);
                 v["trusted"] = json!(trusted);
+                v["fingerprint"] = json!(PeerId::from_hex(&d.id).ok().map(|p| cert::fingerprint_hex(&p)));
                 v["primary"] = json!(is_primary);
                 v["launch"] = json!(may_launch);
                 v
@@ -164,4 +174,33 @@ fn one_device(store: &Store, id: &str) -> Result<PeerId, String> {
         [] => Err("No paired handheld has that id.".into()),
         _ => Err("More than one paired handheld starts with that; give more of the id.".into()),
     }
+}
+
+/// What this computer announces to its paired devices, per plugin.
+#[pyfunction]
+fn announcements(py: Python<'_>) -> PyResult<PyObject> {
+    run(py, || {
+        let a = agent()?;
+        a.store.reload_settings();
+        let values = a.store.settings.lock().unwrap().announce.clone();
+        serde_json::to_value(values).map_err(|e| e.to_string())
+    })
+}
+
+/// Sets what this computer announces to its paired devices for `plugin`
+/// (its Syncthing module's `{"syncthing": "<device ID>"}`); None stops
+/// announcing it. A paired handheld learns it at its next session, and
+/// shows it only to the same plugin. At most 4096 bytes as JSON, for at
+/// most 64 plugins; a plugin id is 1 to 128 of A-Z a-z 0-9 . _ -.
+#[pyfunction]
+#[pyo3(signature = (plugin, value = None))]
+fn set_announce(py: Python<'_>, plugin: String, value: Option<&Bound<'_, PyAny>>) -> PyResult<PyObject> {
+    let value = match value {
+        Some(v) if !v.is_none() => Some(from_py(v)?),
+        _ => None,
+    };
+    run(py, move || {
+        agent()?.store.set_announce(&plugin, value)?;
+        Ok(json!(null))
+    })
 }

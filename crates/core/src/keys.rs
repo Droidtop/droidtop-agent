@@ -1,6 +1,7 @@
 //! A device's one key (docs/DESIGN.md section 3): windowcast's Ed25519
 //! identity, whose public key is the device's [`PeerId`], and the same key
-//! converted to X25519 for the Noise channel and WireGuard. The conversion is
+//! converted to X25519 for WireGuard and the cloud share's sealed letters.
+//! Its certificate for the TLS channel is [`crate::cert`]. The conversion is
 //! the standard one (libsodium's `crypto_sign_ed25519_*_to_curve25519`): the
 //! X25519 secret is the Ed25519 secret scalar, the X25519 public key is the
 //! Ed25519 point in Montgomery form.
@@ -47,7 +48,7 @@ impl DeviceKey {
         self.signing.sign(message).to_bytes()
     }
 
-    /// The X25519 secret: Noise and WireGuard clamp it the way Ed25519 does.
+    /// The X25519 secret: WireGuard clamps it the way Ed25519 does.
     pub fn x25519_secret(&self) -> [u8; 32] {
         self.signing.to_scalar_bytes()
     }

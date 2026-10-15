@@ -6,7 +6,7 @@ pub enum Error {
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("the connection's encryption failed ({0})")]
-    Noise(#[from] snow::Error),
+    Tls(String),
     #[error("a message could not be read ({0})")]
     Json(#[from] serde_json::Error),
     #[error("pairing failed: {0}")]
@@ -19,6 +19,12 @@ pub enum Error {
     Protocol(String),
     #[error("the key is not valid")]
     BadKey,
+}
+
+impl From<rustls::Error> for Error {
+    fn from(e: rustls::Error) -> Self {
+        Error::Tls(e.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

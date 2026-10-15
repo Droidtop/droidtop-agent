@@ -4,7 +4,7 @@
 //! - The handheld asks which of its paired computers are there; an agent
 //!   answers only a device it has pinned, signs the answer with its key, and
 //!   the handheld checks the signature, so a stranger cannot pose as the
-//!   computer (and the Noise handshake would refuse it anyway).
+//!   computer (and the TLS handshake would refuse it anyway).
 //! - While the pairing screen is open, the handheld answers the computer's
 //!   pairing query with its id, name and port. Nothing there is trusted:
 //!   SPAKE2 is what authenticates the pairing.

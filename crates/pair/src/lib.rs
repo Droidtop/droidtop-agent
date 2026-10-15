@@ -15,7 +15,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use droidtop_agent_core::pairing::{new_code, pair_client, pair_host, PairInvite};
+use droidtop_agent_core::pairing::{new_code, pair_client, pair_host, Kind, PairInvite, Paired};
 use droidtop_agent_core::{discovery, PAIR_PORT};
 
 use droidtop_agent_store::Store;
@@ -157,13 +157,8 @@ pub fn wait(store: &Store, showing: Showing, cancel: &AtomicBool) -> Result<Stri
             Ok((mut stream, from)) => {
                 let _ = stream.set_nonblocking(false);
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-                match pair_host(&mut stream, &store.key, &store.name(), &code) {
-                    Ok(paired) => {
-                        store
-                            .add_device(paired.peer, &paired.name)
-                            .map_err(|e| format!("Paired, but the pairing could not be saved: {e}"))?;
-                        return Ok(paired.name);
-                    }
+                match pair_host(&mut stream, &store.key, &store.name(), Kind::Computer, &code) {
+                    Ok(paired) => return keep(store, paired),
                     Err(e) => {
                         attempts += 1;
                         eprintln!("A pairing attempt from {} failed: {e}", from.ip());
@@ -205,12 +200,22 @@ pub fn pair(store: &Store, input: &str) -> Result<String, String> {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
         .map_err(|e| format!("Could not reach the handheld at {address}: {e}"))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-    let paired = pair_client(&mut stream, &store.key, &store.name(), &invite.code)
+    let paired = pair_client(&mut stream, &store.key, &store.name(), Kind::Computer, &invite.code)
         .map_err(|e| format!("Pairing did not finish: {e}. Check the code and try again."))?;
     if invite.peer.is_some_and(|p| p != paired.peer) {
         return Err("The handheld that answered is not the one in the QR code; nothing was paired.".into());
     }
-    store.add_device(paired.peer, &paired.name).map_err(|e| format!("Paired, but the pairing could not be saved: {e}"))?;
+    keep(store, paired)
+}
+
+/// Pins a device that paired, by its certificate's key, when it is a
+/// handheld: a computer serves handhelds and never connects to another
+/// computer, so pairing two computers would pin something nothing uses.
+fn keep(store: &Store, paired: Paired) -> Result<String, String> {
+    if paired.kind == Kind::Computer {
+        return Err(format!("{} is a computer; pair this computer with a handheld running droidtop.", paired.name));
+    }
+    store.add_device(paired.peer, &paired.name, paired.kind).map_err(|e| format!("Paired, but the pairing could not be saved: {e}"))?;
     Ok(paired.name)
 }
 

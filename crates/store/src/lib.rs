@@ -17,6 +17,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::Library;
+use droidtop_agent_core::pairing::Kind;
+use droidtop_agent_core::proto::{check_announcements, Announcements};
 use serde::{Deserialize, Serialize};
 use windowcast_identity::{Identity, TrustStore};
 
@@ -175,6 +177,11 @@ pub struct Settings {
     /// (`launch allow`); none until they do (docs/DESIGN.md section 17).
     #[serde(default)]
     pub launch_devices: Vec<String>,
+    /// What this computer announces to its paired devices, per plugin
+    /// (`set_announce`; Droidtop/tracker#556): a desktop manager's Syncthing
+    /// module puts its device ID here.
+    #[serde(default)]
+    pub announce: Announcements,
 }
 
 /// A fresh install's settings are the serde defaults (rendezvous on, Syncthing's servers).
@@ -192,7 +199,7 @@ pub struct Approval {
 }
 
 /// A paired device as this computer remembers it.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Device {
     pub id: String,
     pub name: String,
@@ -208,6 +215,15 @@ pub struct Device {
     /// computer moved to it ([`migrate`]).
     #[serde(default)]
     pub moved: bool,
+    /// A handheld or a computer, as it said when pairing; none for one
+    /// paired before pairing said (a handheld).
+    #[serde(default)]
+    pub kind: Option<Kind>,
+    /// What it announced last, per plugin, and when.
+    #[serde(default)]
+    pub announced: Announcements,
+    #[serde(default)]
+    pub announced_ms: i64,
 }
 
 /// Moves the agent onto the identity and trusted list it shares with
@@ -477,8 +493,8 @@ impl Store {
         result
     }
 
-    /// Pins a newly paired device and remembers its name.
-    pub fn add_device(&self, peer: PeerId, name: &str) -> io::Result<()> {
+    /// Pins a newly paired device and remembers its name and kind.
+    pub fn add_device(&self, peer: PeerId, name: &str, kind: Kind) -> io::Result<()> {
         TrustStore::update(&self.dirs.trust(), |t| t.pin(peer)).map_err(|e| io::Error::other(e.to_string()))?;
         self.edit_devices(|devices| {
             devices.retain(|d| d.id != peer.to_hex());
@@ -490,10 +506,40 @@ impl Store {
                 last_seen_ms: 0,
                 disco: None,
                 moved: true,
+                kind: Some(kind),
+                announced: Announcements::new(),
+                announced_ms: 0,
             });
             ((), true)
         });
         Ok(())
+    }
+
+    /// Keeps what paired device [`peer`] announced, in place of what it
+    /// announced before. Returns whether anything changed.
+    pub fn device_announced(&self, peer: &PeerId, values: Announcements) -> bool {
+        self.edit_devices(|devices| match devices.iter_mut().find(|d| d.id == peer.to_hex()) {
+            Some(d) if d.announced != values => {
+                d.announced = values;
+                d.announced_ms = droidtop_agent_core::library::now_ms();
+                (true, true)
+            }
+            _ => (false, false),
+        })
+    }
+
+    /// Sets what this computer announces for [`plugin`] (None stops), checked
+    /// against the limits a paired device enforces.
+    pub fn set_announce(&self, plugin: &str, value: Option<serde_json::Value>) -> Result<(), String> {
+        self.reload_settings();
+        let mut next = self.settings.lock().unwrap().announce.clone();
+        match value {
+            Some(v) => next.insert(plugin.to_string(), v),
+            None => next.remove(plugin),
+        };
+        check_announcements(&next)?;
+        self.settings.lock().unwrap().announce = next;
+        self.save_settings().map_err(|e| e.to_string())
     }
 
     /// Forgets a device: unpinned, so it can no longer connect.
@@ -535,7 +581,7 @@ impl Store {
             if devices.iter().all(|d| d.id != id) {
                 let Some(name) = recovered else { return ((), false) };
                 let paired_ms = droidtop_agent_core::library::now_ms();
-                devices.push(Device { id: id.clone(), name, paired_ms, last_address: None, last_seen_ms: 0, disco: None, moved: true });
+                devices.push(Device { id: id.clone(), name, paired_ms, moved: true, ..Default::default() });
             }
             if let Some(d) = devices.iter_mut().find(|d| d.id == id) {
                 d.last_seen_ms = droidtop_agent_core::library::now_ms();
@@ -614,7 +660,7 @@ mod tests {
         let window = Store::open_in(d.clone()).unwrap();
         // A handheld is paired by one copy after the other started.
         let handheld = DeviceKey::generate().peer_id();
-        window.add_device(handheld, "Handheld").unwrap();
+        window.add_device(handheld, "Handheld", Kind::Handheld).unwrap();
         // The serving copy notes the handheld's visit: it used to write its empty list over the pairing.
         serving.seen(&handheld, Some("10.0.2.15".into()));
         assert_eq!(window.devices_now().len(), 1);

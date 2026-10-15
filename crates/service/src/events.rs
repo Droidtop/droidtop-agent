@@ -32,7 +32,7 @@ pub struct Event {
     pub ms: u64,
     pub level: Level,
     /// `listening`, `session`, `launch`, `saves`, `library`, `arrived`,
-    /// `discovery`, `wireguard`, `rendezvous`, `share` or `manager`.
+    /// `announce`, `discovery`, `wireguard`, `rendezvous`, `share` or `manager`.
     pub kind: &'static str,
     /// The line the command line prints, in words a screen can show.
     pub message: String,

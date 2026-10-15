@@ -3,7 +3,10 @@
 //! the JSON header that announces them as raw messages of at most
 //! [`CHUNK`] bytes.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::context::{AdapterOffer, RecordChange, Records};
 use crate::library::Change;
@@ -12,6 +15,37 @@ use crate::saves::SaveSpec;
 
 /// The largest piece of a file's contents in one message.
 pub const CHUNK: usize = 1024 * 1024;
+
+/// What a device publishes to the devices paired with it, per plugin: each
+/// plugin's id and its small value (the Syncthing plugin's
+/// `{"syncthing": "<device ID>"}`), hello feature `announce`
+/// (Droidtop/tracker#556, #553). droidtop shows each plugin only its own.
+pub type Announcements = BTreeMap<String, Value>;
+
+/// The most a plugin's value may take, as JSON.
+pub const MAX_ANNOUNCED: usize = 4096;
+
+/// The most plugins one device announces for.
+pub const MAX_PLUGINS: usize = 64;
+
+/// Why [`a`] cannot be announced, if it cannot: too many plugins, a plugin
+/// id that is not 1 to 128 of `A-Z a-z 0-9 . _ -`, or a value over
+/// [`MAX_ANNOUNCED`] bytes.
+pub fn check_announcements(a: &Announcements) -> Result<(), String> {
+    if a.len() > MAX_PLUGINS {
+        return Err(format!("at most {MAX_PLUGINS} plugins announce"));
+    }
+    for (plugin, value) in a {
+        let named = (1..=128).contains(&plugin.len()) && plugin.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+        if !named {
+            return Err(format!("{plugin:?} is not a plugin id"));
+        }
+        if value.to_string().len() > MAX_ANNOUNCED {
+            return Err(format!("{plugin}'s value is over {MAX_ANNOUNCED} bytes"));
+        }
+    }
+    Ok(())
+}
 
 /// A game as the handheld names it: its key (`steam:440`, `title:...`) and
 /// its title, for the computer to find it by name when it has no store key.
@@ -102,6 +136,12 @@ pub enum Request {
     /// the handheld; it answers [`Response::Launch`].
     LaunchGame {
         game: GameRef,
+    },
+    /// This device's announcements, all of them, in place of those it sent
+    /// before (hello feature `announce`); the other answers
+    /// [`Response::Announced`] with its own.
+    Announce {
+        values: Announcements,
     },
     Bye,
 }
@@ -198,6 +238,10 @@ pub enum Response {
     GamePlaced {
         folder: String,
     },
+    /// The answering device's own announcements.
+    Announced {
+        values: Announcements,
+    },
 }
 
 #[cfg(test)]
@@ -223,5 +267,19 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn announcements_have_a_fixed_shape_and_limits() {
+        let values: Announcements = [("syncthing".to_string(), serde_json::json!({ "syncthing": "MFZWI3D-BONSGYC" }))].into();
+        let ask = Request::Announce { values: values.clone() };
+        assert_eq!(serde_json::to_string(&ask).unwrap(), r#"{"t":"announce","values":{"syncthing":{"syncthing":"MFZWI3D-BONSGYC"}}}"#);
+        let reply = Response::Announced { values: values.clone() };
+        assert_eq!(serde_json::to_string(&reply).unwrap(), r#"{"t":"announced","values":{"syncthing":{"syncthing":"MFZWI3D-BONSGYC"}}}"#);
+        assert!(check_announcements(&values).is_ok());
+        assert!(check_announcements(&[("a b".to_string(), Value::Null)].into()).is_err());
+        assert!(check_announcements(&[("big".to_string(), Value::String("x".repeat(MAX_ANNOUNCED)))].into()).is_err());
+        let many: Announcements = (0..=MAX_PLUGINS).map(|i| (format!("p{i}"), Value::Null)).collect();
+        assert!(check_announcements(&many).is_err());
     }
 }
