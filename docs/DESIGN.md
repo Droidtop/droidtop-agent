@@ -35,6 +35,7 @@ Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
 15. The window and the tray
 16. Inside a desktop manager (Pythia)
 17. Starting a game for a handheld
+18. Syncthing with the paired devices
 
 ## 1. What droidtop already has
 
@@ -279,7 +280,8 @@ replaces what that device announced before; the reply carries the other
 side's. A computer keeps them per device (`announced` in `devices`) and
 announces what its own modules set (`store.set_announce`); a handheld
 serving another keeps them in the file droidtop names. droidtop shows each
-plugin only its own value.
+plugin only its own value. This computer's Syncthing announces under the
+Syncthing plugin's id (section 18).
 
 Names inside a save set are canonical: a root token and a path with forward
 slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
@@ -1131,3 +1133,49 @@ library of its own (Pythia) can start those games for a handheld.
   wire. A handheld that does not know the field reads `started` as before.
 - The command-line agent and its window register no launcher: they state
   no `launch_host` and answer as before.
+
+## 18. Syncthing with the paired devices
+
+droidtop's Syncthing plugin (`droidtop.syncthing`, Droidtop/tracker#553;
+droidtop docs/plugin-api.md D21) pairs through droidtop's own device
+pairing, so Syncthing's pairing is never shown: it announces
+`{"syncthing": "<device ID>", "addresses": [...]}` to every paired device
+and accepts exactly the IDs its counterparts announce. Its README names
+droidtop-agent and Pythia as counterparts announcing the same shape under
+the same plugin id. This is that counterpart, in the service
+(`droidtop_agent_service::syncthing`), so the agent and Pythia both have it.
+
+- **Which Syncthing** (owner, 2026-10-16: "We control an existing one if it
+  exists, or spawn our own if one doesn't. We use the standard syncthing
+  config location regardless, to make sure the user can switch to or from a
+  dedicated instance if they want"):
+  - the home is Syncthing's standard one: `STHOMEDIR` when set; else
+    `%LOCALAPPDATA%\Syncthing` on Windows, `~/Library/Application
+    Support/Syncthing` on macOS, and on Linux `$XDG_STATE_HOME/syncthing`
+    unless an older `~/.config/syncthing` holds a configuration;
+  - a Syncthing already answering there is used as it is;
+  - otherwise the agent starts one over that home (`syncthing serve
+    --no-browser --no-restart --home=<home>`: `DROIDTOP_SYNCTHING`, one
+    beside the agent's program, or one on the PATH), which makes the home
+    the first time. A pass starts it again if it stopped. With no Syncthing
+    program, the agent says so once and does nothing more.
+  - It reaches Syncthing's REST API on loopback with the API key from its
+    `config.xml`. A web interface on HTTPS or a Unix socket is not reached
+    yet, and the agent says so.
+- **Announcing:** its device ID (from `cert.pem`, as Syncthing computes it)
+  and this computer's LAN addresses on its listening port, as `tcp://` and
+  `quic://`, through `store.set_announce`, only when the value changed.
+- **Accepting:** every 30 seconds, and from each trusted paired device's
+  announced value, each valid ID other than its own is added through
+  `PUT /rest/config/devices/<id>` over Syncthing's device defaults: named
+  as the person named the device, with the announced addresses plus
+  `dynamic`, trusted, not an introducer, and with its folders accepted
+  automatically (so the plugin's `droidtop` folder, the same ID
+  everywhere, is accepted at Syncthing's default folder path). A device
+  forgotten, or no longer announcing, is removed again.
+- **Only its own:** the devices it added are kept in `syncthing.json` in the
+  data folder, and only those are ever changed or removed. A device the
+  person added to Syncthing themselves is left as they set it, even when a
+  paired device announces it.
+- **Off:** `droidtop-agent syncthing off` (the `syncthing` setting, on by
+  default) withdraws the announcement and changes nothing in Syncthing.

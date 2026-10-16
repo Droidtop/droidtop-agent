@@ -105,6 +105,11 @@ impl Dirs {
     pub fn archive(&self) -> PathBuf {
         self.data.join("archive")
     }
+    /// The Syncthing devices this agent added for paired devices, so it
+    /// removes only those (docs/DESIGN.md section 18).
+    pub fn syncthing(&self) -> PathBuf {
+        self.data.join("syncthing.json")
+    }
 }
 
 fn scan_minutes() -> u64 {
@@ -182,6 +187,10 @@ pub struct Settings {
     /// module puts its device ID here.
     #[serde(default)]
     pub announce: Announcements,
+    /// Keep this computer's Syncthing in step with the paired devices'
+    /// (docs/DESIGN.md section 18): on unless the person turned it off.
+    #[serde(default = "yes")]
+    pub syncthing: bool,
 }
 
 /// A fresh install's settings are the serde defaults (rendezvous on, Syncthing's servers).

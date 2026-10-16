@@ -25,6 +25,10 @@ dirs.workspace = true
 plist.workspace = true
 # This computer's addresses, for the WireGuard endpoints it tells the handheld.
 if-addrs.workspace = true
+# This computer's Syncthing: its config.xml, and its REST API on loopback
+# (docs/DESIGN.md section 18).
+roxmltree.workspace = true
+ureq.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # The per-user Run key that starts the agent at sign-in.

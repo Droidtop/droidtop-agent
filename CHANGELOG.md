@@ -6,6 +6,12 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Syncthing with the paired devices (docs/DESIGN.md section 18,
+  Droidtop/tracker#553): the running agent uses the Syncthing already
+  answering in Syncthing's standard folder, or starts one there, announces
+  its device ID and LAN addresses as `droidtop.syncthing`, and adds each
+  paired device's announced Syncthing ID (removing only the ones it added
+  once they are forgotten). `droidtop-agent syncthing [on | off]`.
 - Pairing by comparing a code (droidtop SPEC 7o, "Pairing with Pythia"): a
   computer offering to pair answers `DTCQ1` with its id, name, port and
   program; the device that picks it runs a commit-and-reveal exchange
