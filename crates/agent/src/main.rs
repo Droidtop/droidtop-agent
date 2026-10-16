@@ -68,6 +68,9 @@ Usage:
   droidtop-agent rendezvous servers default | <url>...
                                        Discovery servers, in Syncthing's notation (default: Syncthing's)
   droidtop-agent rendezvous stun default | <host:port>...
+  droidtop-agent syncthing [on | off]  Keep this computer's Syncthing in step with the paired devices' (on
+                                       unless turned off): the one running here, or one started over
+                                       Syncthing's standard folder; each device's Syncthing is added for it
   droidtop-agent primary [<id> | none] The handheld whose saves win here when both changed (the start of its id
                                        is enough); with none, the newest copy wins
   droidtop-agent launch                Which handhelds may start games on this computer (none until you allow one)
@@ -245,6 +248,26 @@ fn main() {
                 _ => println!("No rendezvous state yet: it is kept while droidtop-agent runs."),
             }
             Ok(())
+        }
+        ["syncthing"] => {
+            let s = agent.store.settings.lock().unwrap().clone();
+            println!("Syncthing with the paired devices: {}", if s.syncthing { "on" } else { "off" });
+            match droidtop_agent_service::syncthing::home() {
+                Some(home) => match droidtop_agent_service::syncthing::read_config(&home) {
+                    Ok(c) => println!("Syncthing in {}: device ID {}", home.display(), c.device_id),
+                    Err(e) => println!("Syncthing in {}: {e}", home.display()),
+                },
+                None => println!("This system has no folder for Syncthing."),
+            }
+            match s.announce.get(droidtop_agent_service::syncthing::PLUGIN) {
+                Some(v) => println!("Announced to the paired devices: {v}"),
+                None => println!("Nothing announced to the paired devices yet: that happens while droidtop-agent runs."),
+            }
+            Ok(())
+        }
+        ["syncthing", on @ ("on" | "off")] => {
+            agent.store.settings.lock().unwrap().syncthing = *on == "on";
+            agent.store.save_settings().map_err(|e| e.to_string())
         }
         ["rendezvous", on @ ("on" | "off")] => {
             agent.store.settings.lock().unwrap().rendezvous = *on == "on";

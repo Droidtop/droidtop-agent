@@ -69,6 +69,14 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
         });
     }
 
+    {
+        let a = agent.clone();
+        thread::spawn(move || loop {
+            crate::syncthing::tick(&a);
+            thread::sleep(Duration::from_secs(30));
+        });
+    }
+
     // Direct WireGuard for a paired handheld away from the LAN: dual-stack
     // where the system allows it, and IPv4 beside it where it does not
     // (Windows binds [::] to IPv6 only).

@@ -12,5 +12,6 @@ pub mod manager;
 pub mod rendezvous;
 pub mod serve;
 pub mod share;
+pub mod syncthing;
 
 pub use agent::{scan_options, Agent};
