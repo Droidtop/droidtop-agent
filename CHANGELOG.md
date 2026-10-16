@@ -6,6 +6,10 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A computer pairs with another computer (owner, 2026-10-16): `droidtop-agent
+  pair` with nothing after it also prints an invitation another computer
+  types (`droidtop-agent pair '<invitation>'`), and each pins the other as a
+  computer. The refusal to pin a computer is gone (docs/DESIGN.md section 3).
 - Every session is mutual TLS 1.3 (rustls), each device presenting a
   self-signed certificate over its own key, in place of the Noise channel
   (docs/DESIGN.md sections 3 and 4, Droidtop/tracker#556). Pairing (now

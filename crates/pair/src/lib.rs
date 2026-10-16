@@ -140,11 +140,14 @@ pub fn show(store: &Store) -> Result<String, String> {
         println!("{} {}  ({})", if i == 0 { "Address:" } else { "     or:" }, place.address, place.label);
     }
     println!("Code:    {} {}", &code[..3], &code[3..]);
+    if !showing.addresses.is_empty() {
+        println!("On another computer: droidtop-agent pair '{}'", showing.invite(store));
+    }
     println!("(An Android emulator reaches this computer at 10.0.2.2:{port}.) Waiting up to 10 minutes; Ctrl+C stops.");
     wait(store, showing, &AtomicBool::new(false))
 }
 
-/// Waits for a handheld to pair with the code [`showing`] shows, until it
+/// Waits for a handheld or another computer to pair with the code [`showing`] shows, until it
 /// pairs, three codes were wrong, the time runs out or [`cancel`] is set.
 pub fn wait(store: &Store, showing: Showing, cancel: &AtomicBool) -> Result<String, String> {
     let Showing { listener, code, until: deadline, .. } = showing;
@@ -172,7 +175,7 @@ pub fn wait(store: &Store, showing: Showing, cancel: &AtomicBool) -> Result<Stri
             Err(e) => return Err(e.to_string()),
         }
     }
-    Err("No handheld paired in time. Run droidtop-agent pair again for a new code.".into())
+    Err("Nothing paired in time. Run droidtop-agent pair again for a new code.".into())
 }
 
 pub fn pair(store: &Store, input: &str) -> Result<String, String> {
@@ -197,24 +200,21 @@ pub fn pair(store: &Store, input: &str) -> Result<String, String> {
             }
         }
     };
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
-        .map_err(|e| format!("Could not reach the handheld at {address}: {e}"))?;
+    let mut stream =
+        TcpStream::connect_timeout(&address, Duration::from_secs(10)).map_err(|e| format!("Could not reach {address}: {e}"))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
     let paired = pair_client(&mut stream, &store.key, &store.name(), Kind::Computer, &invite.code)
         .map_err(|e| format!("Pairing did not finish: {e}. Check the code and try again."))?;
     if invite.peer.is_some_and(|p| p != paired.peer) {
-        return Err("The handheld that answered is not the one in the QR code; nothing was paired.".into());
+        return Err("The device that answered is not the one in the invitation; nothing was paired.".into());
     }
     keep(store, paired)
 }
 
-/// Pins a device that paired, by its certificate's key, when it is a
-/// handheld: a computer serves handhelds and never connects to another
-/// computer, so pairing two computers would pin something nothing uses.
+/// Pins a device that paired, by its certificate's key: a handheld, or
+/// another computer (owner, 2026-10-16: computer-to-computer pairing is a
+/// Pythia feature; docs/DESIGN.md section 3, "Kinds of device").
 fn keep(store: &Store, paired: Paired) -> Result<String, String> {
-    if paired.kind == Kind::Computer {
-        return Err(format!("{} is a computer; pair this computer with a handheld running droidtop.", paired.name));
-    }
     store.add_device(paired.peer, &paired.name, paired.kind).map_err(|e| format!("Paired, but the pairing could not be saved: {e}"))?;
     Ok(paired.name)
 }
@@ -232,6 +232,44 @@ mod tests {
         assert_eq!(network_kind("ZeroTier One Virtual Port", Ipv4Addr::new(10, 147, 17, 3)), "ZeroTier");
         assert_eq!(network_kind("wg0", Ipv4Addr::new(10, 8, 0, 2)), "VPN");
         assert!(network_kind("vEthernet (WSL)", Ipv4Addr::new(172, 25, 128, 1)).starts_with("Virtual"));
+    }
+
+    /// Owner, 2026-10-16: a computer pairs with another computer (Pythia's
+    /// reason for being). One shows a code, the other types its invitation,
+    /// and each pins the other as a computer.
+    #[test]
+    fn two_computers_pair_and_each_pins_the_other() {
+        use droidtop_agent_store::Dirs;
+        let store = |name: &str| {
+            let root = std::env::temp_dir().join(format!("dta-pair-{name}-{}", std::process::id()));
+            let dirs = Dirs { config: root.join("config"), data: root.join("data"), computer: root.join("computer") };
+            for p in [&dirs.config, &dirs.data, &dirs.computer] {
+                std::fs::create_dir_all(p).unwrap();
+            }
+            Store::open_in(dirs).unwrap()
+        };
+        let (a, b) = (store("a"), store("b"));
+        let showing = listen().unwrap();
+        let invite = PairInvite {
+            code: showing.code.clone(),
+            peer: Some(a.peer_id()),
+            name: Some(a.name()),
+            at: Some(format!("127.0.0.1:{}", showing.port)),
+        }
+        .to_uri();
+        let (a_peer, b_peer) = (a.peer_id(), b.peer_id());
+        let waiting = std::thread::spawn(move || {
+            let r = wait(&a, showing, &AtomicBool::new(false));
+            (r, a)
+        });
+        pair(&b, &invite).unwrap();
+        let (r, a) = waiting.join().unwrap();
+        r.unwrap();
+        let kind_of = |s: &Store, peer: droidtop_agent_core::keys::PeerId| {
+            s.devices_now().into_iter().find(|d| d.id == peer.to_hex()).and_then(|d| d.kind)
+        };
+        assert_eq!(kind_of(&a, b_peer), Some(Kind::Computer));
+        assert_eq!(kind_of(&b, a_peer), Some(Kind::Computer));
     }
 
     #[test]

@@ -156,8 +156,17 @@ follow (decision 1).
   (droidtop). Handhelds pair with each other with the same screens and the
   same exchange as with a computer (one shows the code, the other types it),
   and a handheld serves the handhelds paired with it while droidtop asks
-  (`serve_start`, section 12). A computer refuses to pair with a computer:
-  neither would ever connect to the other.
+  (`serve_start`, section 12).
+- **A computer pairs with a computer too** (owner, 2026-10-16, relayed by
+  the droidtop coordinator: "Computer to computer pairing is ABSOLUTELY a
+  pythia feature, it's the whole fucking reason it exists"). The same
+  exchange and the same device certificates: one computer shows a code
+  (`droidtop-agent pair` with nothing after it, or Pythia's Show a code)
+  and prints an invitation, `droidtop-pair:1?code=…&id=…&name=…&at=…`; the
+  other types it (`droidtop-agent pair '<invitation>'`). Each pins the
+  other as a `computer` (`pair::keep`). What two paired computers then
+  carry between them is Pythia's to define (Pythia docs/SPEC.md, C1); until
+  it does, the pin is kept and nothing else uses it.
 - **Any number of devices, any pairing graph** (owner, 2026-10-10: "if we have
   5 droidtop devices and 5 desktops, we should be able to connect and pair any
   number of permutations of these devices and have them work"). A computer
