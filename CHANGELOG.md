@@ -6,6 +6,14 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Pairing by comparing a code (droidtop SPEC 7o, "Pairing with Pythia"): a
+  computer offering to pair answers `DTCQ1` with its id, name, port and
+  program; the device that picks it runs a commit-and-reveal exchange
+  (`core::confirm`, `droidtop-agent pair-confirm v1`) and both screens show
+  one 6-digit code; both pin after the person says yes on both. On the
+  computer: `droidtop-agent pair compare` and `pair find`; in droidtop's
+  library: `computers_find`, `compare_start`, `compare_finish`,
+  `compare_cancel`.
 - A computer pairs with another computer (owner, 2026-10-16): `droidtop-agent
   pair` with nothing after it also prints an invitation another computer
   types (`droidtop-agent pair '<invitation>'`), and each pins the other as a

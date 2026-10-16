@@ -154,30 +154,30 @@ struct Hello {
 /// A side's description ([`About`], as the exact JSON text the proof
 /// signs), and its proof over the transcript that carries it.
 #[derive(Serialize, Deserialize)]
-struct Description {
-    about: String,
-    signature: String,
-    tag: String,
+pub(crate) struct Description {
+    pub(crate) about: String,
+    pub(crate) signature: String,
+    pub(crate) tag: String,
 }
 
 #[derive(Serialize, Deserialize)]
-struct About {
-    name: String,
-    kind: Kind,
+pub(crate) struct About {
+    pub(crate) name: String,
+    pub(crate) kind: Kind,
     /// The certificate's fingerprint, in hex.
-    cert: String,
+    pub(crate) cert: String,
 }
 
-fn send<T: Serialize>(stream: &mut impl Write, value: &T) -> Result<()> {
+pub(crate) fn send<T: Serialize>(stream: &mut impl Write, value: &T) -> Result<()> {
     write_frame(stream, &serde_json::to_vec(value)?)?;
     Ok(())
 }
 
-fn recv<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> Result<T> {
+pub(crate) fn recv<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> Result<T> {
     Ok(serde_json::from_slice(&read_frame(stream, MAX_PLAIN_FRAME)?)?)
 }
 
-fn clip(name: &str) -> String {
+pub(crate) fn clip(name: &str) -> String {
     name.chars().take(MAX_NAME).collect()
 }
 

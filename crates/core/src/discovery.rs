@@ -8,10 +8,16 @@
 //! - While the pairing screen is open, the handheld answers the computer's
 //!   pairing query with its id, name and port. Nothing there is trusted:
 //!   SPAKE2 is what authenticates the pairing.
+//! - While a computer offers to pair by comparing codes ([`offer`]), it
+//!   answers the query for computers that can pair (`DTCQ1`) with its id,
+//!   name, pairing port and program (droidtop SPEC 7o, "Pairing with
+//!   Pythia"). Nothing there is trusted either: the code both screens show
+//!   is what authenticates (`crate::confirm`).
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use rand_core::{OsRng, RngCore};
@@ -24,6 +30,42 @@ const QUERY: &[u8] = b"DTAQ1";
 const ANSWER: &[u8] = b"DTAR1";
 const PAIR_QUERY: &[u8] = b"DTPQ1";
 const PAIR_ANSWER: &[u8] = b"DTPR1";
+const COMPUTER_QUERY: &[u8] = b"DTCQ1";
+const COMPUTER_ANSWER: &[u8] = b"DTCR1";
+
+/// A computer that can pair by comparing codes, as it answers `DTCQ1`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Offer {
+    pub id: String,
+    pub name: String,
+    /// The TCP port its comparison listens on.
+    pub port: u16,
+    /// `pythia` or `droidtop-agent`.
+    pub program: String,
+}
+
+static OFFER: Mutex<Option<Offer>> = Mutex::new(None);
+
+/// Sets what this process answers `DTCQ1` with, or stops answering (None).
+/// Every answering loop in the process reads it.
+pub fn offer(o: Option<Offer>) {
+    *OFFER.lock().unwrap_or_else(|e| e.into_inner()) = o;
+}
+
+fn current_offer() -> Option<Offer> {
+    OFFER.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Answers a `DTCQ1` packet with the current offer; true when it was one.
+fn answer_offer(sock: &UdpSocket, data: &[u8], from: SocketAddr) -> bool {
+    if body(COMPUTER_QUERY, data).is_none() {
+        return false;
+    }
+    if let Some(o) = current_offer() {
+        let _ = sock.send_to(&packet(COMPUTER_ANSWER, &o), from);
+    }
+    true
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Query {
@@ -131,6 +173,9 @@ pub fn answer_agent_queries(
             Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => continue,
             Err(e) => return Err(e),
         };
+        if answer_offer(sock, &buf[..n], from) {
+            continue;
+        }
         let Some(q) = body(QUERY, &buf[..n]).and_then(|b| serde_json::from_slice::<Query>(b).ok()) else { continue };
         let Ok(asker) = PeerId::from_hex(&q.from) else { continue };
         if !trusted(&asker) {
@@ -159,6 +204,40 @@ pub fn find_pairing(timeout: Duration) -> io::Result<Vec<(Announce, SocketAddr)>
     Ok(found)
 }
 
+/// Computers that can pair by comparing codes, as they answered within
+/// [`timeout`]: each offer once, at the address it answered from.
+pub fn find_computers(timeout: Duration) -> io::Result<Vec<(Offer, SocketAddr)>> {
+    let sock = broadcast_socket()?;
+    sock.send_to(&packet(COMPUTER_QUERY, &Query { nonce: nonce(), from: String::new() }), (Ipv4Addr::BROADCAST, crate::PORT))?;
+    let mut found: Vec<(Offer, SocketAddr)> = Vec::new();
+    gather(&sock, timeout, |data, from| {
+        let Some(o) = body(COMPUTER_ANSWER, data).and_then(|b| serde_json::from_slice::<Offer>(b).ok()) else { return };
+        if PeerId::from_hex(&o.id).is_err() || found.iter().any(|(f, _)| f.id == o.id) {
+            return;
+        }
+        let addr = SocketAddr::new(from.ip(), o.port);
+        found.push((o, addr));
+    })?;
+    Ok(found)
+}
+
+/// A computer that is not serving (nothing else holds the agent's port):
+/// answers `DTCQ1` with the current offer until [`stop`].
+pub fn answer_offers(sock: &UdpSocket, stop: &AtomicBool) -> io::Result<()> {
+    sock.set_read_timeout(Some(Duration::from_millis(500)))?;
+    let mut buf = [0u8; 2048];
+    while !stop.load(Ordering::Relaxed) {
+        match sock.recv_from(&mut buf) {
+            Ok((n, from)) => {
+                answer_offer(sock, &buf[..n], from);
+            }
+            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 /// The handheld, pairing: answers pairing queries until [`stop`].
 pub fn answer_pairing(sock: &UdpSocket, me: &Announce, stop: &AtomicBool) -> io::Result<()> {
     sock.set_read_timeout(Some(Duration::from_millis(500)))?;
@@ -179,6 +258,24 @@ pub fn answer_pairing(sock: &UdpSocket, me: &Announce, stop: &AtomicBool) -> io:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_offer_is_answered_only_while_it_is_set() {
+        let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let asker = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        asker.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        let query = packet(COMPUTER_QUERY, &Query { nonce: nonce(), from: String::new() });
+        let o = Offer { id: DeviceKey::generate().peer_id().to_hex(), name: "Desk".into(), port: 47612, program: "pythia".into() };
+        offer(Some(o.clone()));
+        assert!(answer_offer(&sock, &query, asker.local_addr().unwrap()));
+        let mut buf = [0u8; 2048];
+        let (n, _) = asker.recv_from(&mut buf).unwrap();
+        assert_eq!(serde_json::from_slice::<Offer>(body(COMPUTER_ANSWER, &buf[..n]).unwrap()).unwrap(), o);
+        offer(None);
+        assert!(answer_offer(&sock, &query, asker.local_addr().unwrap()));
+        assert!(asker.recv_from(&mut buf).is_err());
+        assert!(!answer_offer(&sock, b"DTAQ1{}", asker.local_addr().unwrap()));
+    }
 
     #[test]
     fn answers_are_signed_over_the_nonce() {

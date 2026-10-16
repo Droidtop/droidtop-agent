@@ -9,6 +9,7 @@
 
 pub mod cert;
 pub mod channel;
+pub mod confirm;
 pub mod context;
 pub mod discovery;
 pub mod error;
