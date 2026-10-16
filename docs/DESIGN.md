@@ -993,10 +993,29 @@ identity, pairing, channel, transports, library, saves and scanner.
 - **One agent per computer.** `serve` starts the same service as
   `droidtop-agent run`, on threads of its own. If another agent already
   listens on port 47610 (droidtop-agent, its window, or another Pythia),
-  `serve` fails with that reason and the other one keeps serving. Since
-  both use the same files, either can take over from the other: the
-  pairings, the library's change log, the kept saves and the manager's
-  games stay as they are, with nothing to migrate.
+  `serve` fails with that reason and the other one keeps serving.
+- **Taking the agent role loses nothing** (owner, 2026-10-16: "pythia
+  imports the droidtop agent context when it takes the agent role, too, so
+  data shouldn't be lost"). Pythia keeps its state in a folder of its own
+  and, before it serves, turns this program off and takes in its state,
+  reading this program's folders and writing only its own (Pythia
+  docs/SPEC.md 1.8; `pythia._native.agent.sync`):
+  - the identity, its device certificate and the trusted devices are
+    shared in windowcast's host folder; an older agent's own
+    `identity.key` and `trusted-devices` are taken before Pythia opens its
+    state, so `store::migrate` makes them this computer's identity;
+  - `devices.json`, `settings.json` (with the adapters' approvals),
+    `saves.json`, `manager-games.json`, `launcher-marks.json` and
+    `adapter-offers.json`: the first time, every one this program has
+    comes in whatever its age, the paired devices merged with any Pythia
+    has; after that the newer copy wins;
+  - the library: both change logs are merged;
+  - the archive's save copies and the `adapters` folder: a file Pythia
+    lacks is copied, none is replaced or deleted.
+
+  While this program is off, Pythia writes its state back into this
+  program's folders, so turning it back on finds the same pairings,
+  library and save copies.
 - **Events for the host.** What the service does is an event, not only a
   printed line, so the program hosting it can log and show it (a handheld
   asking to start a game, a session ending or refused, saves and library
