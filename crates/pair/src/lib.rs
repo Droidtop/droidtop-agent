@@ -11,12 +11,14 @@
 //! computer's [`Store`], so the window, the command line and a desktop
 //! manager (Pythia) pair the same way.
 
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use droidtop_agent_core::confirm::{self, Comparing};
 use droidtop_agent_core::pairing::{new_code, pair_client, pair_host, Kind, PairInvite, Paired};
-use droidtop_agent_core::{discovery, PAIR_PORT};
+use droidtop_agent_core::{discovery, PAIR_PORT, PORT};
 
 use droidtop_agent_store::Store;
 
@@ -140,11 +142,14 @@ pub fn show(store: &Store) -> Result<String, String> {
         println!("{} {}  ({})", if i == 0 { "Address:" } else { "     or:" }, place.address, place.label);
     }
     println!("Code:    {} {}", &code[..3], &code[3..]);
+    if !showing.addresses.is_empty() {
+        println!("On another computer: droidtop-agent pair '{}'", showing.invite(store));
+    }
     println!("(An Android emulator reaches this computer at 10.0.2.2:{port}.) Waiting up to 10 minutes; Ctrl+C stops.");
     wait(store, showing, &AtomicBool::new(false))
 }
 
-/// Waits for a handheld to pair with the code [`showing`] shows, until it
+/// Waits for a handheld or another computer to pair with the code [`showing`] shows, until it
 /// pairs, three codes were wrong, the time runs out or [`cancel`] is set.
 pub fn wait(store: &Store, showing: Showing, cancel: &AtomicBool) -> Result<String, String> {
     let Showing { listener, code, until: deadline, .. } = showing;
@@ -172,7 +177,7 @@ pub fn wait(store: &Store, showing: Showing, cancel: &AtomicBool) -> Result<Stri
             Err(e) => return Err(e.to_string()),
         }
     }
-    Err("No handheld paired in time. Run droidtop-agent pair again for a new code.".into())
+    Err("Nothing paired in time. Run droidtop-agent pair again for a new code.".into())
 }
 
 pub fn pair(store: &Store, input: &str) -> Result<String, String> {
@@ -197,26 +202,180 @@ pub fn pair(store: &Store, input: &str) -> Result<String, String> {
             }
         }
     };
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
-        .map_err(|e| format!("Could not reach the handheld at {address}: {e}"))?;
+    let mut stream =
+        TcpStream::connect_timeout(&address, Duration::from_secs(10)).map_err(|e| format!("Could not reach {address}: {e}"))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
     let paired = pair_client(&mut stream, &store.key, &store.name(), Kind::Computer, &invite.code)
         .map_err(|e| format!("Pairing did not finish: {e}. Check the code and try again."))?;
     if invite.peer.is_some_and(|p| p != paired.peer) {
-        return Err("The handheld that answered is not the one in the QR code; nothing was paired.".into());
+        return Err("The device that answered is not the one in the invitation; nothing was paired.".into());
     }
     keep(store, paired)
 }
 
-/// Pins a device that paired, by its certificate's key, when it is a
-/// handheld: a computer serves handhelds and never connects to another
-/// computer, so pairing two computers would pin something nothing uses.
+/// Pins a device that paired, by its certificate's key: a handheld, or
+/// another computer (owner, 2026-10-16: computer-to-computer pairing is a
+/// Pythia feature; docs/DESIGN.md section 3, "Kinds of device").
 fn keep(store: &Store, paired: Paired) -> Result<String, String> {
-    if paired.kind == Kind::Computer {
-        return Err(format!("{} is a computer; pair this computer with a handheld running droidtop.", paired.name));
-    }
     store.add_device(paired.peer, &paired.name, paired.kind).map_err(|e| format!("Paired, but the pairing could not be saved: {e}"))?;
     Ok(paired.name)
+}
+
+/// How long a comparison waits for the person to answer on this screen
+/// and on the other device.
+const ANSWER_FOR: Duration = Duration::from_secs(120);
+
+/// This computer offering to pair by comparing codes (droidtop SPEC 7o,
+/// "Pairing with Pythia"): it answers `DTCQ1` with [`Offering::offer`] and
+/// listens for the device that picks it. Dropping it stops both.
+pub struct Offering {
+    listener: TcpListener,
+    pub offer: discovery::Offer,
+    stop: Arc<AtomicBool>,
+    answering: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Starts offering. [`program`] is what this computer runs (`pythia` or
+/// `droidtop-agent`). When nothing else in this process answers on the
+/// agent's port (it is not serving), this answers there itself.
+pub fn offer(store: &Store, program: &str) -> Result<Offering, String> {
+    let listener = TcpListener::bind(("0.0.0.0", PAIR_PORT))
+        .or_else(|_| TcpListener::bind(("0.0.0.0", 0)))
+        .map_err(|e| format!("Could not open a port for pairing: {e}"))?;
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let offer = discovery::Offer { id: store.peer_id().to_hex(), name: store.name(), port, program: program.into() };
+    discovery::offer(Some(offer.clone()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let answering = UdpSocket::bind(("0.0.0.0", PORT)).ok().map(|sock| {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let _ = discovery::answer_offers(&sock, &stop);
+        })
+    });
+    Ok(Offering { listener, offer, stop, answering })
+}
+
+impl Drop for Offering {
+    fn drop(&mut self) {
+        discovery::offer(None);
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.answering.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// A comparison under way: [`code`](Comparison::code) is what this screen
+/// shows, [`name`](Comparison::name) who is on the other end when known.
+pub struct Comparison {
+    stream: TcpStream,
+    comparing: Comparing,
+    pub code: String,
+    pub name: String,
+}
+
+impl Offering {
+    /// Waits for the one device that picks this computer, until [`cancel`]
+    /// is set, and starts the comparison. The offer ends here: one attempt
+    /// each time the screen opens.
+    pub fn accept(self, store: &Store, cancel: &AtomicBool) -> Result<Comparison, String> {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Pairing stopped.".into());
+            }
+            match self.listener.accept() {
+                Ok((mut stream, _)) => {
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(ANSWER_FOR));
+                    drop(self);
+                    let comparing = confirm::host_start(&mut stream, &store.key).map_err(|e| format!("Pairing did not start: {e}"))?;
+                    return Ok(Comparison::new(stream, comparing, String::new()));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    }
+}
+
+impl Comparison {
+    fn new(stream: TcpStream, comparing: Comparing, name: String) -> Comparison {
+        Comparison { code: comparing.code.clone(), stream, comparing, name }
+    }
+
+    /// The person's answer: [`same`] when the two screens show the same
+    /// code. Pins the other device when both said so, and returns its name.
+    pub fn finish(mut self, store: &Store, same: bool) -> Result<String, String> {
+        let paired = self
+            .comparing
+            .finish(&mut self.stream, &store.key, &store.name(), Kind::Computer, same)
+            .map_err(|e| format!("Nothing was paired: {e}"))?;
+        keep(store, paired)
+    }
+}
+
+/// Computers on this network offering to pair by comparing codes, other
+/// than this one, within [`timeout`].
+pub fn computers(store: &Store, timeout: Duration) -> Result<Vec<(discovery::Offer, SocketAddr)>, String> {
+    let me = store.peer_id().to_hex();
+    let found = discovery::find_computers(timeout).map_err(|e| format!("Could not look for computers on this network: {e}"))?;
+    Ok(found.into_iter().filter(|(o, _)| o.id != me).collect())
+}
+
+/// Picks [`offer`] at [`at`] and starts the comparison with it.
+pub fn pick(store: &Store, offer: &discovery::Offer, at: SocketAddr) -> Result<Comparison, String> {
+    let mut stream =
+        TcpStream::connect_timeout(&at, Duration::from_secs(10)).map_err(|e| format!("Could not reach {} at {at}: {e}", offer.name))?;
+    let _ = stream.set_read_timeout(Some(ANSWER_FOR));
+    let comparing = confirm::client_start(&mut stream, &store.key).map_err(|e| format!("Pairing did not start: {e}"))?;
+    if comparing.other.to_hex() != offer.id {
+        return Err(format!("The device at {at} is not {}; nothing was paired.", offer.name));
+    }
+    Ok(Comparison::new(stream, comparing, offer.name.clone()))
+}
+
+fn ask(question: &str) -> String {
+    use std::io::Write as _;
+    print!("{question} ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    line.trim().to_lowercase()
+}
+
+fn confirm_on_console(c: Comparison, store: &Store) -> Result<String, String> {
+    println!("Code: {} {}", &c.code[..3], &c.code[3..]);
+    let same = ask("Does the other screen show the same code? (y/n)").starts_with('y');
+    c.finish(store, same)
+}
+
+/// `droidtop-agent pair compare`: offers to pair until a device picks this
+/// computer, then compares codes on the console.
+pub fn compare_offer(store: &Store) -> Result<String, String> {
+    let offering = offer(store, "droidtop-agent")?;
+    println!("{} can be paired: on the handheld or the other computer, pick it from the list. Ctrl+C stops.", offering.offer.name);
+    let c = offering.accept(store, &AtomicBool::new(false))?;
+    confirm_on_console(c, store)
+}
+
+/// `droidtop-agent pair find`: lists the computers offering to pair and
+/// compares codes with the one picked.
+pub fn compare_find(store: &Store) -> Result<String, String> {
+    let found = computers(store, Duration::from_secs(3))?;
+    let (o, at) = match found.as_slice() {
+        [] => return Err("No computer is offering to pair on this network. On the other computer open Pythia's Devices page, or run droidtop-agent pair compare.".into()),
+        [one] => one.clone(),
+        many => {
+            for (i, (o, at)) in many.iter().enumerate() {
+                println!("{}. {} ({}, {at})", i + 1, o.name, o.program);
+            }
+            let n: usize = ask("Which one?").parse().map_err(|_| "Nothing was picked.".to_string())?;
+            many.get(n.wrapping_sub(1)).cloned().ok_or("Nothing was picked.")?
+        }
+    };
+    let c = pick(store, &o, at)?;
+    confirm_on_console(c, store)
 }
 
 #[cfg(test)]
@@ -232,6 +391,78 @@ mod tests {
         assert_eq!(network_kind("ZeroTier One Virtual Port", Ipv4Addr::new(10, 147, 17, 3)), "ZeroTier");
         assert_eq!(network_kind("wg0", Ipv4Addr::new(10, 8, 0, 2)), "VPN");
         assert!(network_kind("vEthernet (WSL)", Ipv4Addr::new(172, 25, 128, 1)).starts_with("Virtual"));
+    }
+
+    fn temp_store(name: &str) -> Store {
+        use droidtop_agent_store::Dirs;
+        let root = std::env::temp_dir().join(format!("dta-pair-{name}-{}", std::process::id()));
+        let dirs = Dirs { config: root.join("config"), data: root.join("data"), computer: root.join("computer") };
+        for p in [&dirs.config, &dirs.data, &dirs.computer] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        Store::open_in(dirs).unwrap()
+    }
+
+    fn compare(a_says: bool, b_says: bool, tag: &str) -> (Result<String, String>, Result<String, String>, Store, Store) {
+        let (a, b) = (temp_store(&format!("{tag}-a")), temp_store(&format!("{tag}-b")));
+        let offering = offer(&a, "pythia").unwrap();
+        let (o, port) = (offering.offer.clone(), offering.offer.port);
+        let waiting = std::thread::spawn(move || {
+            let c = offering.accept(&a, &AtomicBool::new(false)).unwrap();
+            let code = c.code.clone();
+            (c.finish(&a, a_says), code, a)
+        });
+        let c = pick(&b, &o, SocketAddr::from(([127, 0, 0, 1], port))).unwrap();
+        let code = c.code.clone();
+        let rb = c.finish(&b, b_says);
+        let (ra, a_code, a) = waiting.join().unwrap();
+        assert_eq!(a_code, code);
+        (ra, rb, a, b)
+    }
+
+    /// droidtop SPEC 7o: one code on both screens, confirmed on both.
+    #[test]
+    fn a_computer_picked_from_the_list_pairs_by_comparing_codes() {
+        let (ra, rb, a, b) = compare(true, true, "cmp");
+        assert!(ra.is_ok() && rb.is_ok(), "{ra:?} {rb:?}");
+        assert!(a.devices_now().iter().any(|d| d.id == b.peer_id().to_hex() && d.kind == Some(Kind::Computer)));
+        assert!(b.devices_now().iter().any(|d| d.id == a.peer_id().to_hex() && d.kind == Some(Kind::Computer)));
+    }
+
+    #[test]
+    fn a_no_on_either_screen_pins_nothing() {
+        let (ra, rb, a, b) = compare(true, false, "no");
+        assert!(ra.is_err() && rb.is_err());
+        assert!(a.devices_now().is_empty() && b.devices_now().is_empty());
+    }
+
+    /// Owner, 2026-10-16: a computer pairs with another computer (Pythia's
+    /// reason for being). One shows a code, the other types its invitation,
+    /// and each pins the other as a computer.
+    #[test]
+    fn two_computers_pair_and_each_pins_the_other() {
+        let (a, b) = (temp_store("a"), temp_store("b"));
+        let showing = listen().unwrap();
+        let invite = PairInvite {
+            code: showing.code.clone(),
+            peer: Some(a.peer_id()),
+            name: Some(a.name()),
+            at: Some(format!("127.0.0.1:{}", showing.port)),
+        }
+        .to_uri();
+        let (a_peer, b_peer) = (a.peer_id(), b.peer_id());
+        let waiting = std::thread::spawn(move || {
+            let r = wait(&a, showing, &AtomicBool::new(false));
+            (r, a)
+        });
+        pair(&b, &invite).unwrap();
+        let (r, a) = waiting.join().unwrap();
+        r.unwrap();
+        let kind_of = |s: &Store, peer: droidtop_agent_core::keys::PeerId| {
+            s.devices_now().into_iter().find(|d| d.id == peer.to_hex()).and_then(|d| d.kind)
+        };
+        assert_eq!(kind_of(&a, b_peer), Some(Kind::Computer));
+        assert_eq!(kind_of(&b, a_peer), Some(Kind::Computer));
     }
 
     #[test]

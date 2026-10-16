@@ -24,6 +24,9 @@ Usage:
   droidtop-agent pair                  Show this computer's address and a code to type on the handheld
                                        (droidtop: Pair a computer > Use a code from the computer),
                                        for a handheld this computer cannot reach
+  droidtop-agent pair compare          Offer to pair: a handheld or another computer picks this one
+                                       from its list, and both screens show one code to confirm
+  droidtop-agent pair find             Pick a computer offering to pair, and confirm the code
   droidtop-agent devices               List paired handhelds
   droidtop-agent unpair <id>           Forget a handheld (the start of its id is enough)
   droidtop-agent id                    Show this computer's name and id
@@ -92,6 +95,8 @@ fn main() {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match words.as_slice() {
         [] | ["run"] => serve::run(agent).map_err(|e| e.to_string()),
+        ["pair", "compare"] => pair::compare_offer(&agent.store).map(|name| println!("Paired with {name}.")),
+        ["pair", "find"] => pair::compare_find(&agent.store).map(|name| println!("Paired with {name}.")),
         ["pair", rest @ ..] if !rest.is_empty() => pair::pair(&agent.store, &rest.join(" ")).map(|name| println!("Paired with {name}.")),
         ["pair"] => pair::show(&agent.store).map(|name| println!("Paired with {name}.")),
         ["devices"] => {

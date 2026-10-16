@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use droidtop_agent_core::cert;
 use droidtop_agent_core::channel::Channel;
+use droidtop_agent_core::confirm;
 use droidtop_agent_core::context::{baseline_when_deferred, merge, AdapterOffer, ContextDecl, Records};
 use droidtop_agent_core::discovery::{self, Announce};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
@@ -42,6 +43,13 @@ pub fn call(op: &str, args: &str) -> String {
         "pair_connect" => pair_connect(&args),
         "pair_cancel" => {
             CANCEL.store(true, Ordering::Relaxed);
+            Ok(json!({}))
+        }
+        "computers_find" => computers_find(&args),
+        "compare_start" => compare_start(&args),
+        "compare_finish" => compare_finish(&args),
+        "compare_cancel" => {
+            COMPARE.lock().unwrap_or_else(|e| e.into_inner()).take();
             Ok(json!({}))
         }
         "find" => find(&args),
@@ -231,6 +239,50 @@ fn pair_connect(args: &Value) -> Outcome {
     if invite.peer.is_some_and(|p| p != paired.peer) {
         return Err(Failure::Error("the device that answered is not the one in the invitation; nothing was paired".into()));
     }
+    Ok(paired_json(&paired, SocketAddr::new(address.ip(), PORT).to_string()))
+}
+
+// Pairing by comparing a code (droidtop SPEC 7o, "Pairing with Pythia") ----
+
+/// The comparison under way: its stream, its state and the computer's address.
+static COMPARE: Mutex<Option<(TcpStream, confirm::Comparing, SocketAddr)>> = Mutex::new(None);
+
+/// Computers on this network offering to pair (they answer `DTCQ1`).
+fn computers_find(args: &Value) -> Outcome {
+    let timeout = Duration::from_millis(args["timeout_ms"].as_u64().unwrap_or(1500));
+    let found = discovery::find_computers(timeout).map_err(|e| Failure::Error(e.to_string()))?;
+    Ok(
+        json!({ "found": found.iter().map(|(o, at)| json!({ "id": o.id, "name": o.name, "program": o.program, "address": at.to_string() })).collect::<Vec<_>>() }),
+    )
+}
+
+/// Picks a listed computer and starts the comparison: returns the code to show.
+fn compare_start(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let want = peer_of(args["id"].as_str().unwrap_or_default())?;
+    let address: SocketAddr =
+        args["address"].as_str().and_then(|a| a.parse().ok()).ok_or_else(|| Failure::Error("no address for that computer".into()))?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
+        .map_err(|e| Failure::Unreachable(format!("the computer did not answer at {address} ({e})")))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
+    let comparing = confirm::client_start(&mut stream, &key)?;
+    if comparing.other != want {
+        return Err(Failure::Error("the device that answered is not the computer picked; nothing was paired".into()));
+    }
+    let code = comparing.code.clone();
+    *COMPARE.lock().unwrap_or_else(|e| e.into_inner()) = Some((stream, comparing, address));
+    Ok(json!({ "code": code }))
+}
+
+/// The person's answer (`same`): pins the computer when both said the codes match.
+fn compare_finish(args: &Value) -> Outcome {
+    let key = key_of(args)?;
+    let kind = kind_of(args)?;
+    let name = args["name"].as_str().unwrap_or("droidtop").to_string();
+    let same = args["same"].as_bool().unwrap_or(false);
+    let (mut stream, comparing, address) =
+        COMPARE.lock().unwrap_or_else(|e| e.into_inner()).take().ok_or_else(|| Failure::Error("no comparison was started".into()))?;
+    let paired = comparing.finish(&mut stream, &key, &name, kind, same)?;
     Ok(paired_json(&paired, SocketAddr::new(address.ip(), PORT).to_string()))
 }
 
@@ -1034,6 +1086,40 @@ mod tests {
         assert_eq!(paired.name, "Handheld");
         assert_eq!(paired.kind, Kind::Handheld);
         assert_eq!(paired.fingerprint, handheld["fingerprint"].as_str().unwrap());
+        assert_eq!(paired.peer.to_hex(), handheld["id"].as_str().unwrap());
+    }
+
+    /// droidtop SPEC 7o: the handheld picks a computer from the list, both
+    /// show one code, and both pin after both say it matches.
+    #[test]
+    fn pairing_by_comparing_the_code_both_screens_show() {
+        let handheld: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        let pc = DeviceKey::generate();
+        let pc_id = pc.peer_id();
+        let computer = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let c = confirm::host_start(&mut s, &pc).unwrap();
+            let code = c.code.clone();
+            (c.finish(&mut s, &pc, "Pythia PC", Kind::Computer, true).unwrap(), code)
+        });
+        let started: Value = serde_json::from_str(&call(
+            "compare_start",
+            &json!({ "seed": handheld["seed"], "id": pc_id.to_hex(), "address": at.to_string() }).to_string(),
+        ))
+        .unwrap();
+        let out: Value = serde_json::from_str(&call(
+            "compare_finish",
+            &json!({ "seed": handheld["seed"], "name": "Handheld", "same": true }).to_string(),
+        ))
+        .unwrap();
+        let (paired, code) = computer.join().unwrap();
+        assert_eq!(started["code"], json!(code), "{started}");
+        assert_eq!(out["peer"], json!(pc_id.to_hex()), "{out}");
+        assert_eq!(out["kind"], "computer");
+        assert_eq!(out["address"], json!(format!("127.0.0.1:{PORT}")));
+        assert_eq!(paired.kind, Kind::Handheld);
         assert_eq!(paired.peer.to_hex(), handheld["id"].as_str().unwrap());
     }
 
