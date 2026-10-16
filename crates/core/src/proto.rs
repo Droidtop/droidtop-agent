@@ -150,9 +150,15 @@ pub enum Request {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Launch {
-    /// Steam was asked to start the game. Steam may still be waiting for a
-    /// sign-in or an update before it runs.
-    Started,
+    /// The game was asked to start: by Steam, which may still be waiting for
+    /// a sign-in or an update before it runs, or by the program hosting the
+    /// agent (a desktop manager such as Pythia) for a game of its own.
+    /// `stream` says how the handheld shows it: `"windowcast"` for a window
+    /// windowcast can stream; absent, Steam Link as before.
+    Started {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stream: Option<String>,
+    },
     /// The person has not let this handheld start games on this computer.
     NotAllowed,
     /// The key is not one the computer can start, or the computer has not
@@ -254,7 +260,11 @@ mod tests {
         let ask = Request::LaunchGame { game: GameRef { key: "steam:440".into(), title: "TF2".into() } };
         assert_eq!(serde_json::to_string(&ask).unwrap(), r#"{"t":"launch_game","game":{"key":"steam:440","title":"TF2"}}"#);
         for (launch, json) in [
-            (Launch::Started, r#"{"t":"launch","outcome":{"result":"started"}}"#),
+            (Launch::Started { stream: None }, r#"{"t":"launch","outcome":{"result":"started"}}"#),
+            (
+                Launch::Started { stream: Some("windowcast".into()) },
+                r#"{"t":"launch","outcome":{"result":"started","stream":"windowcast"}}"#,
+            ),
             (Launch::NotAllowed, r#"{"t":"launch","outcome":{"result":"not_allowed"}}"#),
             (Launch::UnknownGame, r#"{"t":"launch","outcome":{"result":"unknown_game"}}"#),
             (Launch::SteamNotRunning, r#"{"t":"launch","outcome":{"result":"steam_not_running"}}"#),

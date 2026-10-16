@@ -37,6 +37,9 @@ pub struct Agent {
     pub rendezvous: std::sync::Arc<Mutex<crate::rendezvous::Shared>>,
     /// What the running agent did, for the program that hosts it.
     pub events: Events,
+    /// The program hosting the agent, when it starts games of its own
+    /// (crate::launch::Launcher): Pythia, for the games it tracks.
+    pub launcher: Mutex<Option<std::sync::Arc<dyn crate::launch::Launcher>>>,
 }
 
 impl Agent {
@@ -52,6 +55,7 @@ impl Agent {
             scan: Mutex::new(None),
             rendezvous: Default::default(),
             events: Events::default(),
+            launcher: Mutex::new(None),
             store,
         })
     }

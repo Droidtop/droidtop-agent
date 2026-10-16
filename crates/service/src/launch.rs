@@ -2,7 +2,10 @@
 //! section 17). The handheld names a game by its key; this program builds
 //! what it runs from that key and nothing else, so no text from the handheld
 //! is ever executed: `steam:<digits>` becomes `steam://rungameid/<digits>`,
-//! handed to the system's URL handler, and any other key is refused.
+//! handed to the system's URL handler. Any other key goes to the program
+//! hosting the agent when it has a [`Launcher`] (a desktop manager such as
+//! Pythia, starting a game of its own that windowcast then streams), which
+//! looks the key up among its own games; without one, it is refused.
 
 use droidtop_agent_core::proto::{GameRef, Launch};
 
@@ -15,6 +18,15 @@ pub trait System {
     fn open(&self, url: &str) -> Result<(), String>;
 }
 
+/// A program hosting the agent that starts games of its own (Pythia, for
+/// the games it tracks). It is asked only once the handheld may start games
+/// here, and only for keys that are not Steam's.
+pub trait Launcher: Send + Sync {
+    /// Starts [`game`] when its key is one of the host's own games, found by
+    /// the key and never run from it: `None` when the key is not the host's.
+    fn launch(&self, game: &GameRef) -> Option<Launch>;
+}
+
 /// The URL that starts a Steam game, from a `steam:<appid>` key: the app id
 /// must be one to ten ASCII digits. Anything else gives nothing.
 pub fn steam_url(key: &str) -> Option<String> {
@@ -23,14 +35,17 @@ pub fn steam_url(key: &str) -> Option<String> {
 }
 
 /// Starts [`game`] if [`allowed`] (the person let this handheld start games
-/// here) and [`installed`] (the scan found it on this computer). The order is
-/// the order of what a handheld may learn: one that is not allowed learns
+/// here) and [`installed`] (the scan found it on this computer), through
+/// Steam or, for any other key, the [`host`]'s launcher. The order is the
+/// order of what a handheld may learn: one that is not allowed learns
 /// nothing about this computer's games.
-pub fn launch(allowed: bool, installed: impl FnOnce() -> bool, game: &GameRef, os: &dyn System) -> Launch {
+pub fn launch(allowed: bool, installed: impl FnOnce() -> bool, game: &GameRef, os: &dyn System, host: Option<&dyn Launcher>) -> Launch {
     if !allowed {
         return Launch::NotAllowed;
     }
-    let Some(url) = steam_url(&game.key) else { return Launch::UnknownGame };
+    let Some(url) = steam_url(&game.key) else {
+        return host.and_then(|h| h.launch(game)).unwrap_or(Launch::UnknownGame);
+    };
     if !installed() {
         return Launch::UnknownGame;
     }
@@ -40,7 +55,7 @@ pub fn launch(allowed: bool, installed: impl FnOnce() -> bool, game: &GameRef, o
         return Launch::SteamNotRunning;
     }
     match os.open(&url) {
-        Ok(()) => Launch::Started,
+        Ok(()) => Launch::Started { stream: None },
         Err(message) => Launch::Failed { message },
     }
 }
@@ -168,7 +183,7 @@ mod tests {
     fn a_handheld_that_is_not_allowed_starts_nothing_and_learns_nothing() {
         let os = fake(true, None);
         for key in ["steam:440", "steam:abc", "title:x"] {
-            assert_eq!(launch(false, || panic!("the scan is not asked"), &game(key), &os), Launch::NotAllowed);
+            assert_eq!(launch(false, || panic!("the scan is not asked"), &game(key), &os, None), Launch::NotAllowed);
         }
         assert!(os.opened.borrow().is_empty());
     }
@@ -176,29 +191,62 @@ mod tests {
     #[test]
     fn a_key_it_cannot_map_or_a_game_not_installed_is_unknown() {
         let os = fake(true, None);
-        assert_eq!(launch(true, || true, &game("title:doom"), &os), Launch::UnknownGame);
-        assert_eq!(launch(true, || true, &game("steam:440; calc"), &os), Launch::UnknownGame);
-        assert_eq!(launch(true, || false, &game("steam:440"), &os), Launch::UnknownGame);
+        assert_eq!(launch(true, || true, &game("title:doom"), &os, None), Launch::UnknownGame);
+        assert_eq!(launch(true, || true, &game("steam:440; calc"), &os, None), Launch::UnknownGame);
+        assert_eq!(launch(true, || false, &game("steam:440"), &os, None), Launch::UnknownGame);
         assert!(os.opened.borrow().is_empty());
     }
 
     #[test]
     fn nothing_starts_while_steam_is_not_running() {
         let os = fake(false, None);
-        assert_eq!(launch(true, || true, &game("steam:440"), &os), Launch::SteamNotRunning);
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, None), Launch::SteamNotRunning);
         assert!(os.opened.borrow().is_empty());
     }
 
     #[test]
     fn an_allowed_installed_game_is_handed_to_the_url_handler_once() {
         let os = fake(true, None);
-        assert_eq!(launch(true, || true, &game("steam:440"), &os), Launch::Started);
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, None), Launch::Started { stream: None });
         assert_eq!(*os.opened.borrow(), ["steam://rungameid/440"]);
     }
 
     #[test]
     fn a_url_handler_that_fails_is_reported() {
         let os = fake(true, Some("no handler"));
-        assert_eq!(launch(true, || true, &game("steam:440"), &os), Launch::Failed { message: "no handler".into() });
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, None), Launch::Failed { message: "no handler".into() });
+    }
+
+    struct Host;
+
+    impl Launcher for Host {
+        fn launch(&self, game: &GameRef) -> Option<Launch> {
+            (game.key == "pythia:tracked").then(|| Launch::Started { stream: Some("windowcast".into()) })
+        }
+    }
+
+    #[test]
+    fn the_hosts_own_games_go_to_its_launcher_and_steam_stays_steams() {
+        let os = fake(true, None);
+        let host: &dyn Launcher = &Host;
+        assert_eq!(
+            launch(true, || panic!("the scan is not asked"), &game("pythia:tracked"), &os, Some(host)),
+            Launch::Started { stream: Some("windowcast".into()) }
+        );
+        assert_eq!(launch(true, || true, &game("title:doom"), &os, Some(host)), Launch::UnknownGame);
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, Some(host)), Launch::Started { stream: None });
+        assert_eq!(*os.opened.borrow(), vec!["steam://rungameid/440".to_string()]);
+    }
+
+    #[test]
+    fn a_handheld_that_is_not_allowed_never_reaches_the_hosts_launcher() {
+        struct Never;
+        impl Launcher for Never {
+            fn launch(&self, _: &GameRef) -> Option<Launch> {
+                panic!("the host is not asked")
+            }
+        }
+        let os = fake(true, None);
+        assert_eq!(launch(false, || true, &game("pythia:tracked"), &os, Some(&Never)), Launch::NotAllowed);
     }
 }

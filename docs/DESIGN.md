@@ -1077,4 +1077,29 @@ this request.
   for any sync, checks the `launch` feature (`agent_too_old` otherwise) and
   returns `{"result": ...}` with the usual `computer` and `path`.
 - No streaming code is here (windowcast is the streaming project); the
-  computer only starts the game that Steam Link then streams.
+  computer only starts the game that Steam Link, or windowcast, then streams.
+
+### Games the host starts (`launch_host`)
+
+Owner (2026-10-16): the agent launching only for Steam Link is the Steam
+case; "given windowcast, yeah, have it be able to do general launches".
+A program that hosts the agent's service in its own process and keeps a
+library of its own (Pythia) can start those games for a handheld.
+
+- **The host registers a `Launcher`** (droidtop-agent-service
+  `launch::Launcher`, `Agent::launcher`). The hello then also states feature
+  `launch_host` (the core's `Host::extra_features`), so a handheld can offer
+  "start on the computer" for games that are not Steam's.
+- **The same order and switch.** The per-handheld switch is checked first,
+  so a handheld that is not allowed learns nothing and the host is not
+  asked. `steam:` keys stay Steam's, exactly as above; any other key goes to
+  the host's launcher, which finds the key among its own games and starts
+  that game its own way; `None` (not one of its games) is `unknown_game`.
+  As for Steam, no text from the handheld is ever run: the key is only
+  looked up.
+- **`started` says how to show it.** `Launch::Started` carries an optional
+  `stream`: `"windowcast"` when the host started a game whose window
+  windowcast streams; absent for Steam, whose reply is unchanged on the
+  wire. A handheld that does not know the field reads `started` as before.
+- The command-line agent and its window register no launcher: they state
+  no `launch_host` and answer as before.

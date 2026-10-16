@@ -30,6 +30,11 @@ pub trait Host: Send + Sync {
     }
     /// A handheld said hello, with its global discovery ID when it has one.
     fn hello(&self, _peer: &PeerId, _disco: Option<&str>) {}
+    /// What this computer can do beyond the core's [`FEATURES`], stated in
+    /// `hello` after them (`launch_host`: it starts games other than Steam's).
+    fn extra_features(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// Where [`game`] keeps its saves, and this computer's folder for each token.
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)>;
     /// [`game`]'s archive here: the copies kept per device, and older ones.
@@ -125,7 +130,7 @@ fn session<S: Read + Write>(
                 Ok(Response::Hello {
                     name: host.name(),
                     version: PROTOCOL_VERSION,
-                    features: FEATURES.iter().map(|f| f.to_string()).collect(),
+                    features: FEATURES.iter().map(|f| f.to_string()).chain(host.extra_features()).collect(),
                     endpoints: host.endpoints(),
                     disco: host.disco_id(),
                     moved_to: moved.clone(),

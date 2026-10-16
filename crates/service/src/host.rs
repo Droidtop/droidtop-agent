@@ -38,6 +38,14 @@ impl Host for Agent {
         self.store.name()
     }
 
+    fn extra_features(&self) -> Vec<String> {
+        if self.launcher.lock().unwrap().is_some() {
+            vec!["launch_host".into()]
+        } else {
+            Vec::new()
+        }
+    }
+
     fn primary(&self, peer: &PeerId) -> bool {
         self.store.is_primary(peer)
     }
@@ -47,7 +55,8 @@ impl Host for Agent {
         // changed the switch since this process started.
         self.store.reload_settings();
         let installed = || self.fresh_scan(300).find(&game.key).is_some_and(|f| f.game.install.installed);
-        let outcome = crate::launch::launch(self.store.may_launch(peer), installed, game, &crate::launch::Local);
+        let host = self.launcher.lock().unwrap().clone();
+        let outcome = crate::launch::launch(self.store.may_launch(peer), installed, game, &crate::launch::Local, host.as_deref());
         let device = self.store.device_name(peer);
         self.events.info(
             "launch",

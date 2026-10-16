@@ -774,8 +774,10 @@ fn game_push(args: &Value) -> Outcome {
 // Starting a game on the computer ---------------------------------------------
 
 /// Asks the computer to start a game (droidtop-agent docs/DESIGN.md section
-/// 17). The reply is `{"result": ...}` with `started`, `not_allowed`,
-/// `unknown_game`, `steam_not_running`, `failed` (and a `message`) or
+/// 17). The reply is `{"result": ...}` with `started` (and a `stream` of
+/// `windowcast` when the game is the computer's own and windowcast shows it;
+/// none for Steam Link), `not_allowed`, `unknown_game`, `steam_not_running`,
+/// `failed` (and a `message`) or
 /// `agent_too_old`, for an agent that does not state the `launch` feature: it
 /// is not sent a request it cannot read.
 fn launch_game(args: &Value) -> Outcome {
@@ -1080,7 +1082,7 @@ mod tests {
         fn launch_game(&self, _peer: &PeerId, game: &GameRef) -> droidtop_agent_core::proto::Launch {
             use droidtop_agent_core::proto::Launch;
             match game.key.as_str() {
-                "steam:440" => Launch::Started,
+                "steam:440" => Launch::Started { stream: None },
                 "steam:1" => Launch::NotAllowed,
                 _ => Launch::Failed { message: "unexpected game".into() },
             }
