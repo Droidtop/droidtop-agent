@@ -36,6 +36,7 @@ Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
 16. Inside a desktop manager (Pythia)
 17. Starting a game for a handheld
 18. Syncthing with the paired devices
+19. Service mode: Windows security screens
 
 ## 1. What droidtop already has
 
@@ -1179,3 +1180,48 @@ the same plugin id. This is that counterpart, in the service
   paired device announces it.
 - **Off:** `droidtop-agent syncthing off` (the `syncthing` setting, on by
   default) withdraws the announcement and changes nothing in Syncthing.
+
+## 19. Service mode: Windows security screens
+
+windowcast's secure-screen helper (windowcast#467, windowcast
+docs/SECURITY.md, "Secure screen threat model") is a small fixed-purpose
+program that runs as SYSTEM so the Windows security screens ordinary
+programs cannot see (User Account Control prompts, the lock and sign-in
+screen) can be shown and answered from a paired device. It is part of the
+windowcast library; each application that wants it asks the person, then
+installs and enables it through windowcast's client API
+(`windowcast_secure_helper::Client`). This agent is one such application,
+and Pythia, built from these crates, is another
+(`droidtop_agent_service::secure_screen`).
+
+- **Asked, never assumed** (owner, on #467: "We won't just run code as
+  SYSTEM without user approval, we'll ask, and let them enable/disable in
+  settings at their own leisure"): service mode is off on every install.
+  Turning it on first shows what it does (`secure_screen::CONSENT`): the
+  helper is installed in Program Files and runs as SYSTEM; it only shows the
+  security screen, types and clicks on it, and says whether one is open; it
+  answers only installed programs running under the person's own Windows
+  account; and Windows asks for administrator approval to turn it on and
+  again to turn it off.
+- **Every change through UAC:** the unelevated program reads the person's
+  account SID, then asks Windows to run itself again with the `runas` verb
+  (`droidtop-agent service-mode <enable|disable|uninstall> --confirmed
+  [--grant-sid <sid>]`), in `System32`, and waits for its exit code. That
+  elevated copy does only the change, through windowcast's API: enable
+  installs the helper from beside the program into Program Files when it is
+  not there yet and grants the permission to that SID; disable removes the
+  permission and the helper's SYSTEM task; uninstall also removes the
+  helper. It runs before the agent opens any of its state, so it never
+  writes an administrator's profile. Declining the UAC prompt changes
+  nothing and says so.
+- **Where:** `droidtop-agent service-mode [enable | disable | uninstall]`
+  and Settings > Service mode in the window (on, off, or "Remove the
+  helper"); off Windows it says it is only on Windows and does nothing.
+- **The helper itself** is windowcast's own program at the windowcast this
+  workspace pins, built by CI's Windows job (`cargo install --locked`) and
+  released beside the agent as `windowcast-secure-helper-windows-x86_64.exe`;
+  the agent finds it beside itself under that name or as
+  `windowcast-secure-helper.exe`.
+- **Not yet:** using the helper. Showing and answering a security screen
+  from a handheld needs the screen-sharing side, which is windowcast's; this
+  section covers only the person's switch.

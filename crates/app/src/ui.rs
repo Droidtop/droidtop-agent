@@ -123,6 +123,9 @@ pub struct App {
     settings_outcome: Option<Result<String, String>>,
     autostart: bool,
     forget: Option<String>,
+    /// Service mode (docs/DESIGN.md section 19): its explanation is open, and how the last change went.
+    service_mode_confirm: bool,
+    service_mode_outcome: Outcome,
 }
 
 impl App {
@@ -152,6 +155,8 @@ impl App {
             settings_outcome: None,
             autostart: autostart::enabled(),
             forget: None,
+            service_mode_confirm: false,
+            service_mode_outcome: Default::default(),
         }
     }
 
@@ -1170,7 +1175,72 @@ impl App {
         if let Some(outcome) = &self.settings_outcome {
             outcome_label(ui, outcome);
         }
+        self.service_mode(ui);
     }
+
+    /// Service mode: off unless the person turns it on, after reading what it
+    /// does; each change asks Windows for administrator approval (owner, #467).
+    fn service_mode(&mut self, ui: &mut egui::Ui) {
+        use droidtop_agent_service::secure_screen::{self, Action};
+        ui.add_space(16.0);
+        ui.strong("Service mode");
+        let state = secure_screen::state();
+        ui.label(match state {
+            "enabled" => "On: a paired device can see and answer this computer's security screens.",
+            "disabled" => "Off. The secure-screen helper is installed but does nothing.",
+            "absent" => "Off.",
+            _ => "Only on Windows.",
+        });
+        if state == "not_available" {
+            return;
+        }
+        let mut run = None;
+        if self.service_mode_confirm {
+            ui.label(secure_screen::CONSENT);
+            ui.horizontal(|ui| {
+                if ui.button("Turn on (Windows asks for administrator approval)").clicked() {
+                    run = Some(Action::Enable);
+                }
+                if ui.button("Cancel").clicked() {
+                    self.service_mode_confirm = false;
+                }
+            });
+        } else {
+            ui.horizontal(|ui| {
+                if state == "enabled" {
+                    if ui.button("Turn off").clicked() {
+                        run = Some(Action::Disable);
+                    }
+                } else if ui.button("Turn on…").clicked() {
+                    self.service_mode_confirm = true;
+                }
+                if state != "absent" && ui.button("Remove the helper").clicked() {
+                    run = Some(Action::Uninstall);
+                }
+            });
+        }
+        if let Some(action) = run {
+            self.service_mode_confirm = false;
+            let outcome = self.service_mode_outcome.clone();
+            *outcome.lock().unwrap() = Some(Ok("Waiting for Windows' administrator approval…".into()));
+            std::thread::spawn(move || {
+                let result = agent_program().ok_or_else(|| "droidtop-agent is not beside this window.".to_string());
+                let result = result.and_then(|program| secure_screen::request(action, &program, &["service-mode"]));
+                *outcome.lock().unwrap() = Some(result);
+            });
+        }
+        if let Some(outcome) = self.service_mode_outcome.lock().unwrap().as_ref() {
+            outcome_label(ui, outcome);
+        }
+    }
+}
+
+/// droidtop-agent's command-line program beside this window (its release
+/// name is this one's without `-app`), which makes service mode's changes.
+fn agent_program() -> Option<PathBuf> {
+    let me = std::env::current_exe().ok()?;
+    let name = me.file_name()?.to_string_lossy().replacen("droidtop-agent-app", "droidtop-agent", 1);
+    Some(me.with_file_name(name)).filter(|p| p.is_file())
 }
 
 /// Draws a QR code, [`module`] points per module, with its quiet zone.

@@ -29,7 +29,11 @@ if-addrs.workspace = true
 # (docs/DESIGN.md section 18).
 roxmltree.workspace = true
 ureq.workspace = true
+# Service mode: windowcast's secure-screen helper (docs/DESIGN.md section 19).
+windowcast-secure-helper.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+# Asking Windows for administrator approval (UAC) to change service mode.
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # The per-user Run key that starts the agent at sign-in.
 winreg.workspace = true
