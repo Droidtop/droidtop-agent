@@ -90,6 +90,14 @@ jobs:
           }
           cargo build --release -p droidtop-agent -p droidtop-agent-app
           place target/release "$SYSTEM"
+          # Service mode's secure-screen helper (docs/DESIGN.md section 19): windowcast's
+          # own program at the windowcast this workspace pins, shipped beside the agent.
+          if [ "$SYSTEM" = windows-x86_64 ]; then
+            rev=$(sed -n 's/^windowcast-secure-helper = .*rev = "\([0-9a-f]*\)".*/\1/p' Cargo.toml)
+            test -n "$rev"
+            cargo install --locked --git https://github.com/Droidtop/windowcast --rev "$rev" windowcast-secure-helper --root helper
+            cp helper/bin/windowcast-secure-helper.exe dist/windowcast-secure-helper-windows-x86_64.exe
+          fi
           if [ -n "$ALSO" ]; then
             rustup target add "$ALSO"
             cargo build --release -p droidtop-agent -p droidtop-agent-app --target "$ALSO"

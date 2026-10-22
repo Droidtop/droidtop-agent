@@ -15,6 +15,9 @@ rust-version = "1.85"
 # this workspace is too.
 windowcast-identity = { git = "https://github.com/Droidtop/windowcast", rev = "cd1ed2371b1e793babf6703b5dcfab94d979f1c6" }
 windowcast-pairing = { git = "https://github.com/Droidtop/windowcast", rev = "cd1ed2371b1e793babf6703b5dcfab94d979f1c6" }
+# windowcast's secure-screen helper and its client API (windowcast#467):
+# service mode, docs/DESIGN.md section 19. The same windowcast as above.
+windowcast-secure-helper = { git = "https://github.com/Droidtop/windowcast", rev = "cd1ed2371b1e793babf6703b5dcfab94d979f1c6" }
 # Rendezvous away from the LAN (Syncthing's global discovery, STUN, hole
 # punching), shared with windowcast rather than copied. windowcast v0.35.0.
 windowcast-rendezvous = { git = "https://github.com/Droidtop/windowcast", rev = "cd1ed2371b1e793babf6703b5dcfab94d979f1c6" }

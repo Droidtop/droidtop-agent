@@ -10,6 +10,7 @@ pub mod host;
 pub mod launch;
 pub mod manager;
 pub mod rendezvous;
+pub mod secure_screen;
 pub mod serve;
 pub mod share;
 pub mod syncthing;

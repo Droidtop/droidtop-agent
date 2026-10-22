@@ -6,6 +6,13 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Service mode (docs/DESIGN.md section 19, windowcast#467): off unless the
+  person turns it on, after it says what it does; `droidtop-agent
+  service-mode [enable | disable | uninstall]` and Settings > Service mode
+  install, enable, disable or remove windowcast's secure-screen helper
+  through its client API, each change with Windows' administrator approval.
+  The Windows release carries the helper
+  (`windowcast-secure-helper-windows-x86_64.exe`).
 - Syncthing with the paired devices (docs/DESIGN.md section 18,
   Droidtop/tracker#553): the running agent uses the Syncthing already
   answering in Syncthing's standard folder, or starts one there, announces
