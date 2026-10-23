@@ -23,6 +23,7 @@ use droidtop_agent_store::{read_json, write_json};
 use serde::{Deserialize, Serialize};
 
 pub mod copies;
+pub mod engines;
 pub mod ludusavi;
 
 /// Save locations the person states for a game, ahead of the Ludusavi manifest.
@@ -75,8 +76,9 @@ impl Saves {
     }
 
     /// Where a game keeps its saves on this computer: the person's own entry
-    /// first, then their Ludusavi custom games, then the Ludusavi manifest
-    /// (fetched first when there is none yet and [`fetch`] allows it).
+    /// first, then their Ludusavi custom games, then its engine's own rule
+    /// ([`engines`]: Ren'Py's folders need no manifest), then the Ludusavi
+    /// manifest (fetched first when there is none yet and [`fetch`] allows it).
     /// [`scan`] is where the game is looked up, by key and then by title.
     pub fn lookup(&self, game: &GameRef, scan: &Scan, fetch: bool) -> Option<(SaveSpec, Roots, Option<Found>)> {
         let found = scan.find(&game.key).or_else(|| scan.find_title(&game.title)).cloned();
@@ -91,6 +93,9 @@ impl Saves {
         let title = found.as_ref().map(|f| f.game.title.clone()).unwrap_or_else(|| game.title.clone());
         if let Some(patterns) = ludusavi::custom_games(&droidtop_agent_scan::apps::ludusavi_config()).remove(&title_key(&title)) {
             return Some((SaveSpec { patterns }, roots, found));
+        }
+        if let Some(spec) = found.as_ref().and_then(|f| engines::spec_for(f.engine.as_deref()?, f.base.as_deref()?, &title, &roots)) {
+            return Some((spec, roots, found));
         }
         let folder = found.as_ref().and_then(|f| f.base.as_deref()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
         let spec = self.ludusavi_index(fetch)?.spec_for(&game.key, &title, folder.as_deref())?;

@@ -16,4 +16,4 @@ pub mod serve;
 pub mod share;
 pub mod syncthing;
 
-pub use agent::{scan_options, Agent};
+pub use agent::{scan_options, Agent, SavePlan};

@@ -158,8 +158,14 @@ impl Host for Agent {
         }
     }
 
+    /// The saves this agent syncs: none of what the Syncthing here already
+    /// carries (Agent::save_plan), so the two never write the same files.
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)> {
-        self.save_lookup(game, true).map(|(spec, roots, _)| (spec, roots))
+        let plan = self.save_plan(game, true)?;
+        if plan.all_by_syncthing() {
+            return None;
+        }
+        Some((plan.spec, plan.roots))
     }
 
     fn archive_dir(&self, game: &GameRef) -> PathBuf {

@@ -109,6 +109,58 @@ pub fn read_config(home: &Path) -> Result<Config, String> {
     Ok(Config { device_id: device_id(&pem_der(&cert)?), api: format!("http://{}", loopback(&address)), api_key, port })
 }
 
+/// A folder the Syncthing here syncs (its `config.xml`), named as the person
+/// labelled it. Save sync leaves a game's saves inside one to Syncthing
+/// (Droidtop/tracker#538): two programs writing the same files would fight.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct Folder {
+    pub label: String,
+    pub path: PathBuf,
+}
+
+/// The folders the Syncthing in [`home`] syncs, paused ones left out; none
+/// when it has no configuration. A path Syncthing writes as `~/...` is under
+/// the person's home.
+pub fn folders(home: &Path) -> Vec<Folder> {
+    let Ok(text) = fs::read_to_string(home.join("config.xml")) else { return Vec::new() };
+    let Ok(doc) = roxmltree::Document::parse(&text) else { return Vec::new() };
+    let config = doc.root_element();
+    config
+        .children()
+        .filter(|n| n.has_tag_name("folder") && n.attribute("paused") != Some("true"))
+        .filter_map(|n| {
+            let path = n.attribute("path").filter(|p| !p.is_empty())?;
+            let path = match path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+                Some(rest) => dirs::home_dir()?.join(rest),
+                None => PathBuf::from(path),
+            };
+            let label = n.attribute("label").filter(|l| !l.is_empty()).or(n.attribute("id")).unwrap_or_default();
+            Some(Folder { label: label.to_string(), path })
+        })
+        .collect()
+}
+
+/// The folder of [`folders`] that holds [`path`], compared without case on
+/// Windows and macOS, where file names are.
+pub fn holding<'a>(folders: &'a [Folder], path: &Path) -> Option<&'a Folder> {
+    let norm = |p: &Path| {
+        let p = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let text = p.to_string_lossy().replace('\\', "/");
+        // Windows' canonical form starts \\?\; a path that is not there yet has none.
+        let text = text.strip_prefix("//?/").unwrap_or(&text).trim_end_matches('/').to_string();
+        if cfg!(any(windows, target_os = "macos")) {
+            text.to_lowercase()
+        } else {
+            text
+        }
+    };
+    let path = norm(path);
+    folders.iter().find(|f| {
+        let folder = norm(&f.path);
+        path == folder || path.starts_with(&format!("{folder}/"))
+    })
+}
+
 /// The port in a listen address (`tcp://0.0.0.0:22000`); `default` is 22000.
 fn listen_port(address: &str) -> Option<u16> {
     if address == "default" {

@@ -66,6 +66,18 @@ impl Agent {
         self.saves.lookup(game, &self.fresh_scan(300), fetch)
     }
 
+    /// What this agent syncs of a game's saves, and what it leaves to the
+    /// Syncthing already running here (Droidtop/tracker#538). A save location
+    /// inside a folder Syncthing syncs is Syncthing's: two programs writing the
+    /// same files would fight. An engine that keeps one set of saves in several
+    /// places and merges them itself (Ren'Py) is Syncthing's as a whole once
+    /// Syncthing carries any one of them. None when no save location is known.
+    pub fn save_plan(&self, game: &GameRef, fetch: bool) -> Option<SavePlan> {
+        let (spec, roots, found) = self.save_lookup(game, fetch)?;
+        let folders = crate::syncthing::home().map(|h| crate::syncthing::folders(&h)).unwrap_or_default();
+        Some(SavePlan::new(spec, roots, found, &folders))
+    }
+
     /// Puts a kept copy of a game's saves back ([`Saves::restore`]); what is
     /// there now is kept first as this computer's own copy.
     pub fn restore_saves(&self, game: &GameRef, copy: &Path) -> Result<usize, String> {
@@ -109,5 +121,108 @@ impl Agent {
             self.rescan();
         }
         self.scan.lock().unwrap().as_ref().map(|(_, s)| s.clone()).unwrap_or_default()
+    }
+}
+
+/// A game's saves as this agent syncs them ([`Agent::save_plan`]).
+#[derive(Debug, Clone)]
+pub struct SavePlan {
+    /// Every location known for the game's saves.
+    pub all: SaveSpec,
+    /// The ones this agent syncs: [`all`] less Syncthing's.
+    pub spec: SaveSpec,
+    pub roots: Roots,
+    pub found: Option<Found>,
+    /// Each location left to Syncthing, with the label of its folder there.
+    pub by_syncthing: Vec<(String, crate::syncthing::Folder)>,
+}
+
+impl SavePlan {
+    pub fn new(all: SaveSpec, roots: Roots, found: Option<Found>, folders: &[crate::syncthing::Folder]) -> SavePlan {
+        let mut by_syncthing = Vec::new();
+        let mut kept = Vec::new();
+        for pattern in &all.patterns {
+            match fixed_folder(pattern, &roots).and_then(|path| crate::syncthing::holding(folders, &path)) {
+                Some(folder) => by_syncthing.push((pattern.clone(), folder.clone())),
+                None => kept.push(pattern.clone()),
+            }
+        }
+        let mirrors = droidtop_agent_saves::engines::mirrors(found.as_ref().and_then(|f| f.engine.as_deref()));
+        if mirrors && !by_syncthing.is_empty() {
+            kept.clear();
+        }
+        SavePlan { spec: SaveSpec { patterns: kept }, all, roots, found, by_syncthing }
+    }
+
+    /// Whether Syncthing carries all of the game's saves, so this agent syncs none.
+    pub fn all_by_syncthing(&self) -> bool {
+        self.spec.patterns.is_empty() && !self.by_syncthing.is_empty()
+    }
+}
+
+/// The folder a save template names before its first wildcard, on this
+/// computer: what Syncthing would have to hold for the template's files to be its.
+fn fixed_folder(pattern: &str, roots: &Roots) -> Option<std::path::PathBuf> {
+    let (token, parts) = droidtop_agent_core::saves::split(pattern)?;
+    let mut path = roots.get(token)?.clone();
+    for part in parts.iter().take_while(|p| !p.contains(['*', '?'])) {
+        path.push(part);
+    }
+    Some(path)
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+    use crate::syncthing::Folder;
+    use std::path::PathBuf;
+
+    fn found(engine: Option<&str>) -> Option<Found> {
+        Some(Found {
+            game: droidtop_agent_core::library::ScannedGame {
+                key: "title:g".into(),
+                title: "G".into(),
+                platform: None,
+                install: Default::default(),
+            },
+            base: Some(PathBuf::from("/sync/GameSync/G")),
+            prefix: None,
+            engine: engine.map(str::to_string),
+        })
+    }
+
+    fn roots() -> Roots {
+        Roots::from([("<base>".to_string(), PathBuf::from("/sync/GameSync/G")), ("<home>".to_string(), PathBuf::from("/home/p"))])
+    }
+
+    #[test]
+    fn a_location_inside_a_syncthing_folder_is_left_to_it() {
+        let folders = [Folder { label: "GameSync".into(), path: PathBuf::from("/sync/GameSync") }];
+        let all = SaveSpec { patterns: vec!["<base>/saves/*.sav".into(), "<home>/.local/share/G".into()] };
+        let plan = SavePlan::new(all, roots(), found(None), &folders);
+        assert_eq!(plan.spec.patterns, ["<home>/.local/share/G"]);
+        assert_eq!(plan.by_syncthing.len(), 1);
+        assert_eq!(plan.by_syncthing[0].1.label, "GameSync");
+        assert!(!plan.all_by_syncthing());
+    }
+
+    #[test]
+    fn renpy_saves_are_syncthings_as_a_whole_once_it_carries_one_copy() {
+        let folders = [Folder { label: "GameSync".into(), path: PathBuf::from("/sync/GameSync") }];
+        let all = SaveSpec { patterns: vec!["<base>/game/saves".into(), "<home>/.renpy/G-1".into()] };
+        let plan = SavePlan::new(all.clone(), roots(), found(Some("renpy")), &folders);
+        assert!(plan.all_by_syncthing());
+        // Without Syncthing, every location is the agent's.
+        let plan = SavePlan::new(all.clone(), roots(), found(Some("renpy")), &[]);
+        assert_eq!(plan.spec, all);
+        assert!(plan.by_syncthing.is_empty());
+    }
+
+    #[test]
+    fn a_folder_merely_named_alike_is_not_inside() {
+        let folders = [Folder { label: "Game".into(), path: PathBuf::from("/sync/Game") }];
+        let all = SaveSpec { patterns: vec!["<base>/saves".into()] };
+        let plan = SavePlan::new(all.clone(), roots(), found(None), &folders);
+        assert_eq!(plan.spec, all);
     }
 }

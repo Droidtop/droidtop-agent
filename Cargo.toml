@@ -49,6 +49,9 @@ regex = "1"
 dirs = "5"
 gethostname = "0.5"
 roxmltree = "0.20"
+# Reads Ren'Py's compiled scripts (zlib) for a game's save folder; already
+# in the tree through ureq.
+flate2 = "1"
 plist = "1"
 if-addrs = "0.13"
 winreg = "0.52"

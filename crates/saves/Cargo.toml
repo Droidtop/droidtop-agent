@@ -24,3 +24,5 @@ serde_yaml.workspace = true
 # needs it.
 ureq.workspace = true
 dirs.workspace = true
+# Ren'Py's compiled scripts are zlib streams (engines.rs).
+flate2.workspace = true

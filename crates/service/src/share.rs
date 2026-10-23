@@ -98,7 +98,11 @@ fn apply_saves(
     prefer: Prefer,
     sender: &str,
 ) -> Result<bool, String> {
-    let (spec, roots, _) = agent.save_lookup(game, false).ok_or("this computer knows no save location for the game")?;
+    let plan = agent.save_plan(game, false).ok_or("this computer knows no save location for the game")?;
+    if plan.all_by_syncthing() {
+        return Err("Syncthing already syncs this game's saves on this computer".into());
+    }
+    let (spec, roots) = (plan.spec, plan.roots);
     let current = manifest::build(saves::collect(&spec, &roots), &Manifest::new());
     let mut offset = 0usize;
     let mut blobs = Vec::new();

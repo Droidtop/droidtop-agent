@@ -18,21 +18,29 @@ pub fn fill(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 /// Where a game (by `key`, or by `title` when the key is not found) keeps
 /// its saves here: `patterns` (None when nothing is known) and the `files`
-/// found now, each with its `name` and `path`. With `fetch`, the Ludusavi
+/// found now, each with its `name` and `path`; `syncthing`, the locations the
+/// Syncthing here already syncs (each `pattern` with its folder's `label` and
+/// `path`), which this computer leaves to it, and `all_by_syncthing` when that
+/// is every one. With `fetch`, the Ludusavi
 /// manifest is fetched first when there is none yet. May rescan (slow).
 #[pyfunction]
 #[pyo3(signature = (key, title = String::new(), fetch = false))]
 fn lookup(py: Python<'_>, key: String, title: String, fetch: bool) -> PyResult<PyObject> {
     run(py, move || {
         let a = agent()?;
-        Ok(match a.save_lookup(&GameRef { key, title }, fetch) {
-            None => json!({ "patterns": null, "files": [] }),
-            Some((spec, roots, _)) => {
-                let files: Vec<_> = droidtop_agent_core::saves::collect(&spec, &roots)
+        Ok(match a.save_plan(&GameRef { key, title }, fetch) {
+            None => json!({ "patterns": null, "files": [], "syncthing": [], "all_by_syncthing": false }),
+            Some(plan) => {
+                let files: Vec<_> = droidtop_agent_core::saves::collect(&plan.all, &plan.roots)
                     .into_iter()
                     .map(|(name, path)| json!({ "name": name, "path": path }))
                     .collect();
-                json!({ "patterns": spec.patterns, "files": files })
+                let syncthing: Vec<_> = plan
+                    .by_syncthing
+                    .iter()
+                    .map(|(pattern, folder)| json!({ "pattern": pattern, "label": folder.label, "path": folder.path }))
+                    .collect();
+                json!({ "patterns": plan.all.patterns, "files": files, "syncthing": syncthing, "all_by_syncthing": plan.all_by_syncthing() })
             }
         })
     })
