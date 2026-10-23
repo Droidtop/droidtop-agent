@@ -528,14 +528,15 @@ droidtop's `docs/plugin-api.md` (F8). The shape:
   url when the copy is brought in, and F95Checker's own refresh fills in the
   rest.
 
-Open:
-
-1. How the computer-side plugin and the agent reach each other for `updated`
-   and `received`: a program the agent runs once per notice, as protocol 1
-   runs one per pull, or a plugin that stays running and connects to the
-   agent. Default here: the agent runs it (`received`), and checks the
-   published copy's time at each pass to learn of `updated`, so nothing has
-   to stay running.
+- **The notices are plugin API calls on both ends** (owner, 2026-10-23: the
+  plugin "is notified, and notifies, over the API"; droidtop's Python plugin
+  system is reused unchanged on computers). On the computer the plugin runs
+  in the agent's plugin host, confined, and calls the same API through the
+  host's broker as it does on the handheld: `updated` is a host call, and
+  `received` reaches the plugin as an event. The host, its broker and its
+  sandbox are Droidtop/tracker#606 and the computer plugin host's own
+  design. Until that host runs on a system, adapter protocol 1 stays the
+  way contexts sync there.
 
 ## 9. Both sides changed, and many devices
 
