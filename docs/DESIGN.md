@@ -1284,9 +1284,14 @@ gives the other is an offer, made by the giving side, to one device.
     (`save_spec`, `save_manifest`, `file_get`, `file_put`, `save_apply`).
     It needs `library`;
   - `launch`: the client may ask this device to start a game
-    (`launch_game`). This is `launch_devices` (section 17), kept as it is
-    and now listed with the rest, because starting a program is more than
-    sharing files.
+    (`launch_game`) and stream it: the game runs here and only that game's
+    windows are streamed to the client through windowcast (owner,
+    2026-10-23: "It launches the game, then streams JUST its windows using
+    windowcast"), or a Steam game through Steam Link. It is the only
+    streaming offer; there is no separate one for streaming or for running
+    a game on this computer's hardware. It is `launch_devices` (section
+    17), kept as it is and now listed with the rest, because starting a
+    program is more than sharing files.
 - **Advertised per device.** The hello this host answers states, after the
   core's features, what it offers *to the device that asked*:
   `offers_library` and `offers_saves` (`Host::offers`). So a client knows
@@ -1318,10 +1323,9 @@ gives the other is an offer, made by the giving side, to one device.
   never as its own games. It uses them to sync saves and to see which
   versions each device has. A game a client accepted joins its own library
   because it is now installed there.
-- **Plugin data is not offered** (owner, 2026-10-23: syncing plugin state
-  "is a security risk, so no"). An offer never carries plugin contexts
-  (section 8), and a computer never syncs them with another computer
-  (`Host::syncs_contexts`: a paired handheld only).
+- **Plugin state is never offered** (owner, 2026-10-23: syncing plugin
+  state "is a security risk, so no"). What a plugin may share is its
+  syncable data (section 8), and only through the `plugin_data` offer below.
 - **Handhelds start offered.** A handheld assumes a computer it pairs with
   is its library host and its save host. So when a handheld pairs, the
   computer's offer to it starts with `library` and `saves` on (and `launch`
@@ -1339,6 +1343,82 @@ gives the other is an offer, made by the giving side, to one device.
   <id> library|saves|launch on|off` changes one. They are kept in
   `Settings::offers` by device id only once the person changes one, so a
   device's default follows its kind until then (`offer_for`).
+
+### More that a device can offer
+
+Owner (2026-10-23): "We might want to look at what else can be offered",
+then, choosing from the list: "all of those, except 'streaming through
+windowcast'. That is what 'launching a game' is." Each is one more switch
+in an offer, per device, with the same rules as the three above: set by
+the giving side for one device, stated in the hello as `offers_<kind>`
+for the device that asked, checked again at each request, and refused
+with `not_offered` otherwise. Each defaults to off, because each gives the
+other device something of this one's. The one exception is the component
+cache for a handheld, which only serves software anyone could download
+and is checked by its digest. They are built in pieces after the client
+side of the first three.
+
+- **`downloads`: this device downloads for the other.** The client asks
+  this device to fetch a game or file from one of the sources it has (a
+  store it is signed in to, a plugin's source, A2 in droidtop
+  docs/plugin-api.md), into this device's own storage. The client then
+  takes it as for any offered game (`game_files`, `game_file_get`), so a
+  handheld on a slow or metered network uses the computer's connection.
+  The client names only a source and that source's result. This device
+  decides where the download is written and which account it uses, and a
+  plugin source runs here under the plugin host's confinement (section 21).
+  Messages: `download_start {source, result, choice}` → `download {job}`;
+  `download_status {job}` → `download {job, state, done, total, game?}`;
+  `download_cancel {job}`. Default: off.
+- **`storage`: a shared folder.** One folder that the person on this device
+  chooses for that device, read-only or read and write. Nothing outside it
+  is reachable: paths are relative, and symbolic links are not followed,
+  as for a game copy (section 7). Messages: `storage_list {path}` →
+  `storage {entries: [{name, dir, size, mtime_ms}]}`; `storage_get {path,
+  offset}` (the contents follow, as `game_file_get`'s do); `storage_put
+  {path, size}` then the contents, only when writable; `storage_remove
+  {path}`, only when writable. Default: off, and no folder.
+- **`components`: the Wine and Proton component cache.** Runners and the
+  libraries a Windows game needs (Wine and Proton builds, DXVK, VKD3D-Proton
+  and the like) that this device already downloaded, so the other device
+  takes them over the LAN instead of from the internet. A component is
+  named by kind, name and version and fetched by its SHA-256. The client
+  checks that digest against the one its own source publishes before it
+  uses the component, so this device cannot hand it different code.
+  Messages: `components_list` → `components {items: [{kind, name,
+  version, sha256, size}]}`; `component_get {sha256, offset}` (the contents
+  follow). Default: on for a handheld (public software, read only, checked
+  by digest), off for a computer.
+- **`media`: screenshots and recordings.** This device's screenshots and
+  game recordings, per game where it knows the game, so they can be seen
+  and copied on the other. Messages: `media_list {since}` → `media {items:
+  [{id, game?, kind: screenshot|video, taken_ms, size}], cursor}`;
+  `media_get {id, offset}` (the contents follow). Default: off.
+- **`stats`: achievements and play time.** Per game: play time, last
+  played, and the achievements this device knows were unlocked. Merged on
+  the other device per field: play time is kept per device and summed
+  where it is shown, achievements are a union, and last played is the
+  newest. Messages: `stats_pull {since}` → `stats {games: {<key>: {play_ms,
+  last_played_ms, achievements: [{id, unlocked_ms}]}}, cursor}`;
+  `stats_push {games}` for the client's own, which, like `library_push`,
+  is accepted as the client's to give. Default: off. A game's own play time
+  in the library's facts per device (section 7) stays as it is under
+  `library`.
+- **`settings`: settings and themes.** A fixed allowlist of this device's
+  interface choices that make sense elsewhere: the theme and its assets,
+  and the look and input settings that both devices have. It never
+  carries accounts, tokens, paths, pairing or anything a plugin keeps.
+  Messages: `settings_pull` → `settings {values, themes: [{id, sha256,
+  size}]}`; `theme_get {id, offset}` (the contents follow). The client
+  shows what would change and applies only what the person picks. Default:
+  off.
+- **`plugin_data`: plugin and source data.** The syncable-data contexts of
+  section 8: for each plugin the person approved on both devices, its copy,
+  moved atomically. Messages: section 8's (`context_pull`, `context_push`,
+  and protocol 2's whole-copy exchange). This switch replaces the rule
+  that only a handheld syncs contexts (`Host::syncs_contexts`). Default:
+  on for a handheld, which keeps what approved plugins do today; off for a
+  computer.
 
 ## 21. Plugins on the computer
 
