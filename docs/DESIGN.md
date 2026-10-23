@@ -1271,12 +1271,20 @@ gives the other is an offer, made by the giving side, to one device.
   `core::gamecopy` (section 7) into its first game folder, as a version
   folder. "Saves too", on by default, also brings the game's saves when the
   host offers `saves`. The client keeps a list of the games it accepted
-  from each host, and for each whether to keep in step: when on, each later
+  from each host, and for each whether to keep in step (off unless the
+  person turns it on; owner, 2026-10-23): when on, each later
   session syncs that game's saves both ways (section 6) and a newer version
   on the host is shown as an update, as droidtop shows one (section 7).
-- **Browsing is not merging.** A client shows a host's offered library as
-  that device's games ("On Desk"), apart from its own. A game it accepted
-  joins its own library because it is now installed there.
+- **Never merged** (owner, 2026-10-23: "The computer can be aware of it, but
+  mostly for sync and update purposes"). Another device's games are that
+  device's, on either side: a client shows a host's offered library as "On
+  Desk", and a computer keeps what a handheld tells it as the handheld's,
+  never as its own games. It uses them to sync saves and to see which
+  versions each device has. A game a client accepted joins its own library
+  because it is now installed there.
+- **Plugin data is not offered** (owner, 2026-10-23: syncing plugin state
+  "is a security risk, so no"). An offer never carries plugin contexts
+  (section 8).
 - **Handhelds start offered.** A handheld assumes a computer it pairs with
   is its library host and its save host. So when a handheld pairs, the
   computer's offer to it starts with `library` and `saves` on (and `launch`
@@ -1291,12 +1299,3 @@ gives the other is an offer, made by the giving side, to one device.
   switches on each device's page. `droidtop-agent offer <id>
   [library|saves|launch] [on|off]` sets them from a command line.
 
-Open:
-
-1. Plugin data (section 8): a fourth switch, `contexts`, with the same
-   handheld default as `library`? Default here: yes.
-2. Does a handheld's library still merge into the computer's own, as now,
-   or does it become "the handheld's games" too? Default here: it merges,
-   as now, so droidtop sees no change; only computers browse apart.
-3. "Keep in step" for an accepted game: on or off by default? Default
-   here: on, since saves are assumed to transfer.
