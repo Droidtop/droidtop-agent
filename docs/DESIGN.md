@@ -1244,6 +1244,9 @@ python environment", bundled, because the sandbox must control it. And:
   signature, catalog source and trust tier are droidtop's (plugin-api 1.2
   and 4). `native_bundle` and `flutter_embed` plugins are Android programs
   and do not run here.
+- **One package for both** (owner, 2026-10-23, "Yeah, that's the idea"): a
+  plugin's manifest says which points it provides on the handheld and which
+  on a computer, and each host calls only its own.
 - **One host, in Rust** (`crates/plugins`): it installs plugins, keeps their
   grants, starts each one confined, and answers its calls. The agent uses it
   directly and Pythia through `pythia._native`, so both run one
@@ -1303,10 +1306,6 @@ Open:
    computer, a handheld offering the plugins it has to its computers, or
    both. Default here: both, each installed only when the person approves on
    the computer.
-2. Whether the computer half of a plugin is the same package as its handheld
-   half (one manifest, with the points it provides per system) or may be a
-   package of its own. Default here: one package; a manifest names what it
-   provides on a computer.
-3. Whether section 8's `computers.context_adapter` programs go away once a
+2. Whether section 8's `computers.context_adapter` programs go away once a
    plugin's computer half runs here. Default here: yes, after the move;
    protocol 1 adapters keep working until then.
