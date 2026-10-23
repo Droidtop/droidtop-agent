@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::Library;
 use droidtop_agent_core::pairing::Kind;
-use droidtop_agent_core::proto::{check_announcements, Announcements};
+use droidtop_agent_core::proto::{check_announcements, Announcements, Offer};
 use serde::{Deserialize, Serialize};
 use windowcast_identity::{Identity, TrustStore};
 
@@ -182,6 +182,11 @@ pub struct Settings {
     /// (`launch allow`); none until they do (docs/DESIGN.md section 17).
     #[serde(default)]
     pub launch_devices: Vec<String>,
+    /// What this computer offers each paired device, by id, where the person
+    /// set it (docs/DESIGN.md section 20). A device not listed gets its
+    /// kind's default ([`Store::offers_to`]).
+    #[serde(default)]
+    pub offers: BTreeMap<String, Offer>,
     /// What this computer announces to its paired devices, per plugin
     /// (`set_announce`; Droidtop/tracker#556): a desktop manager's Syncthing
     /// module puts its device ID here.
@@ -197,6 +202,19 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         serde_json::from_str("{}").expect("every setting has a default")
+    }
+}
+
+/// What this computer offers paired [`device`] under [`settings`]: what the
+/// person set, or else its kind's default (docs/DESIGN.md section 20).
+pub fn offer_for(settings: &Settings, device: &Device) -> Offer {
+    if let Some(set) = settings.offers.get(&device.id) {
+        return *set;
+    }
+    match device.kind {
+        Some(Kind::Computer) => Offer::NONE,
+        // A device paired before pairing said its kind is a handheld.
+        Some(Kind::Handheld) | None => Offer::LIBRARY_AND_SAVES,
     }
 }
 
@@ -394,6 +412,42 @@ impl Store {
     /// Whether the person let [`peer`] start games on this computer.
     pub fn may_launch(&self, peer: &PeerId) -> bool {
         self.settings.lock().unwrap().launch_devices.contains(&peer.to_hex())
+    }
+
+    /// What this computer offers [`peer`]: what the person set, or else a
+    /// handheld's default, its library and its saves (a handheld assumes the
+    /// computer it pairs with is its library and save host). A computer, and
+    /// a device that is not paired, are offered nothing.
+    pub fn offers_to(&self, peer: &PeerId) -> Offer {
+        let id = peer.to_hex();
+        match self.devices_now().iter().find(|d| d.id == id) {
+            Some(device) => offer_for(&self.settings.lock().unwrap(), device),
+            None => Offer::NONE,
+        }
+    }
+
+    /// Sets what this computer offers the paired device [`id`]. Saves need
+    /// the library: offering saves offers the library too, and withdrawing
+    /// the library withdraws the saves. Call [`Store::save_settings`] after.
+    pub fn set_offer(&self, id: &str, library: Option<bool>, saves: Option<bool>) {
+        let peer = PeerId::from_hex(id);
+        let mut offer = peer.map(|p| self.offers_to(&p)).unwrap_or_default();
+        if let Some(on) = library {
+            offer.library = on;
+            offer.saves &= on;
+        }
+        if let Some(on) = saves {
+            offer.saves = on;
+            offer.library |= on;
+        }
+        self.settings.lock().unwrap().offers.insert(id.to_string(), offer);
+    }
+
+    /// Whether [`peer`] may sync plugin contexts here (section 8): a paired
+    /// handheld, never a computer.
+    pub fn syncs_contexts(&self, peer: &PeerId) -> bool {
+        let id = peer.to_hex();
+        matches!(self.devices_now().iter().find(|d| d.id == id).map(|d| d.kind), Some(Some(Kind::Handheld) | None))
     }
 
     /// A paired device's name, or the start of its id.
@@ -746,5 +800,45 @@ mod tests {
         migrate(&d, false).unwrap();
         assert_eq!(fs::read(d.identity()).unwrap(), shared);
         assert!(!d.previous_identity().exists());
+    }
+
+    #[test]
+    fn a_handheld_is_offered_library_and_saves_and_a_computer_nothing() {
+        let d = dirs("offers");
+        let store = Store::open_in(d.clone()).unwrap();
+        let (handheld, computer, old, stranger) = (
+            DeviceKey::generate().peer_id(),
+            DeviceKey::generate().peer_id(),
+            DeviceKey::generate().peer_id(),
+            DeviceKey::generate().peer_id(),
+        );
+        store.add_device(handheld, "Pocket", Kind::Handheld).unwrap();
+        store.add_device(computer, "Desk", Kind::Computer).unwrap();
+        // One paired before pairing said its kind: a handheld.
+        store.add_device(old, "Deck", Kind::Handheld).unwrap();
+        store.edit_devices(|ds| {
+            ds.iter_mut().find(|x| x.id == old.to_hex()).unwrap().kind = None;
+            ((), true)
+        });
+        assert_eq!(store.offers_to(&handheld), Offer::LIBRARY_AND_SAVES);
+        assert_eq!(store.offers_to(&old), Offer::LIBRARY_AND_SAVES);
+        assert_eq!(store.offers_to(&computer), Offer::NONE);
+        assert_eq!(store.offers_to(&stranger), Offer::NONE);
+        assert!(store.syncs_contexts(&handheld) && store.syncs_contexts(&old));
+        assert!(!store.syncs_contexts(&computer) && !store.syncs_contexts(&stranger));
+
+        // Saves need the library, both ways.
+        store.set_offer(&computer.to_hex(), None, Some(true));
+        assert_eq!(store.offers_to(&computer), Offer::LIBRARY_AND_SAVES);
+        store.set_offer(&computer.to_hex(), Some(false), None);
+        assert_eq!(store.offers_to(&computer), Offer::NONE);
+        store.set_offer(&handheld.to_hex(), None, Some(false));
+        assert_eq!(store.offers_to(&handheld), Offer { library: true, saves: false });
+
+        // What the person set is kept.
+        store.save_settings().unwrap();
+        let again = Store::open_in(d).unwrap();
+        assert_eq!(again.offers_to(&handheld), Offer { library: true, saves: false });
+        assert_eq!(again.offers_to(&computer), Offer::NONE);
     }
 }

@@ -151,7 +151,7 @@ pub fn send_file<S: Read + Write>(ch: &mut Channel<S>, root: &Path, path: &str, 
 fn receive_into<S: Read + Write>(ch: &mut Channel<S>, target: &Path, expected: &GameFile, progress: &mut dyn FnMut(u64)) -> Result<()> {
     let (size, offset) = match ch.recv_json()? {
         Response::GameFile { path, size, offset } if path == expected.path => (size, offset),
-        Response::Error { message } => return Err(Error::Remote(message)),
+        Response::Error { message, .. } => return Err(Error::Remote(message)),
         other => return Err(protocol(format!("expected {}, got {other:?}", expected.path))),
     };
     if let Some(parent) = target.parent() {
@@ -224,7 +224,7 @@ pub fn pull<S: Read + Write>(
     ch.send_json(&Request::GameFiles { game: game.clone() })?;
     let folder = match ch.recv_json()? {
         Response::GameFiles { folder } => folder,
-        Response::Error { message } => return Err(Error::Remote(message)),
+        Response::Error { message, .. } => return Err(Error::Remote(message)),
         other => return Err(protocol(format!("expected a game's files, got {other:?}"))),
     };
     if let Some(bad) = folder.files.iter().find(|f| !safe_relative(&f.path)) {
@@ -275,7 +275,7 @@ pub fn push<S: Read + Write>(
     ch.send_json(&Request::GamePutStart { game: game.clone(), folder: folder.clone() })?;
     let have = match ch.recv_json()? {
         Response::GamePutHave { have } => have,
-        Response::Error { message } => return Err(Error::Remote(message)),
+        Response::Error { message, .. } => return Err(Error::Remote(message)),
         other => return Err(protocol(format!("expected what the computer has, got {other:?}"))),
     };
     let total = folder.bytes();
@@ -293,7 +293,7 @@ pub fn push<S: Read + Write>(
         send_file(ch, source, &f.path, offset)?;
         match ch.recv_json()? {
             Response::Ok => {}
-            Response::Error { message } => return Err(Error::Remote(message)),
+            Response::Error { message, .. } => return Err(Error::Remote(message)),
             other => return Err(protocol(format!("expected ok, got {other:?}"))),
         }
         done = before + f.size;
@@ -310,7 +310,7 @@ pub fn push<S: Read + Write>(
 fn ask<S: Read + Write>(ch: &mut Channel<S>, request: &Request) -> Result<Response> {
     ch.send_json(request)?;
     match ch.recv_json()? {
-        Response::Error { message } => Err(Error::Remote(message)),
+        Response::Error { message, .. } => Err(Error::Remote(message)),
         other => Ok(other),
     }
 }

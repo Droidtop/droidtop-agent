@@ -665,7 +665,7 @@ fn push_changes(ch: &mut Channel<impl Read + Write>, changes: Vec<Change>) -> Re
     ch.send_json(&Request::LibraryPush { changes })?;
     match ch.recv_json::<Response>()? {
         Response::Ok => Ok(()),
-        Response::Error { message } => Err(Failure::Error(message)),
+        Response::Error { message, .. } => Err(Failure::Error(message)),
         other => Err(Failure::Error(format!("the computer answered {other:?}"))),
     }
 }
@@ -675,7 +675,7 @@ fn pull_changes(ch: &mut Channel<impl Read + Write>, since: u64) -> Result<(Vec<
     ch.send_json(&Request::LibraryPull { since })?;
     match ch.recv_json::<Response>()? {
         Response::LibraryChanges { changes, cursor } => Ok((changes, cursor)),
-        Response::Error { message } => Err(Failure::Error(message)),
+        Response::Error { message, .. } => Err(Failure::Error(message)),
         other => Err(Failure::Error(format!("the computer answered {other:?}"))),
     }
 }
@@ -840,7 +840,7 @@ fn launch_game(args: &Value) -> Outcome {
         s.ch.send_json(&Request::LaunchGame { game })?;
         match s.ch.recv_json::<Response>()? {
             Response::Launch { outcome } => serde_json::to_value(outcome)?,
-            Response::Error { message } => return Err(Failure::Error(message)),
+            Response::Error { message, .. } => return Err(Failure::Error(message)),
             other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
         }
     } else {
@@ -870,7 +870,7 @@ fn announce(args: &Value) -> Outcome {
     s.ch.send_json(&Request::Announce { values })?;
     let theirs = match s.ch.recv_json::<Response>()? {
         Response::Announced { values } => values,
-        Response::Error { message } => return Err(Failure::Error(message)),
+        Response::Error { message, .. } => return Err(Failure::Error(message)),
         other => return Err(Failure::Error(format!("the other device answered {other:?}"))),
     };
     let v = located(json!({ "announced": theirs }), &s);
@@ -892,6 +892,12 @@ struct HandheldHost {
 impl droidtop_agent_core::server::Host for HandheldHost {
     fn name(&self) -> String {
         self.name.clone()
+    }
+    fn offers(&self, _peer: &PeerId) -> droidtop_agent_core::proto::Offer {
+        droidtop_agent_core::proto::Offer::NONE
+    }
+    fn syncs_contexts(&self, _peer: &PeerId) -> bool {
+        false
     }
     fn saves(&self, _game: &GameRef) -> Option<(droidtop_agent_core::saves::SaveSpec, Roots)> {
         None
@@ -1016,7 +1022,7 @@ fn sync_context(args: &Value) -> Outcome {
     ch.send_json(&Request::ContextPull { context: decl.id.clone(), adapter })?;
     let theirs = match ch.recv_json::<Response>()? {
         Response::Context { records } => records,
-        Response::Error { message } => return Err(Failure::Error(message)),
+        Response::Error { message, .. } => return Err(Failure::Error(message)),
         other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
     };
     let m = merge(&decl, &device, &theirs, &baseline);
@@ -1026,7 +1032,7 @@ fn sync_context(args: &Value) -> Outcome {
         ch.send_json(&Request::ContextPush { context: decl.id.clone(), changes: m.to_computer.clone() })?;
         match ch.recv_json::<Response>()? {
             Response::ContextApplied { deferred, message } => (deferred, message),
-            Response::Error { message } => return Err(Failure::Error(message)),
+            Response::Error { message, .. } => return Err(Failure::Error(message)),
             other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
         }
     };
@@ -1161,6 +1167,12 @@ mod tests {
         }
         fn endpoints(&self) -> Vec<String> {
             vec!["wg:203.0.113.7:47611".into()]
+        }
+        fn offers(&self, _peer: &PeerId) -> droidtop_agent_core::proto::Offer {
+            droidtop_agent_core::proto::Offer::LIBRARY_AND_SAVES
+        }
+        fn syncs_contexts(&self, _peer: &PeerId) -> bool {
+            true
         }
         fn saves(&self, _game: &GameRef) -> Option<(droidtop_agent_core::saves::SaveSpec, Roots)> {
             None

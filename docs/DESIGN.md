@@ -1259,12 +1259,18 @@ gives the other is an offer, made by the giving side, to one device.
     sharing files.
 - **Advertised per device.** The hello this host answers states, after the
   core's features, what it offers *to the device that asked*:
-  `offers_library`, `offers_saves`, and `launch` (and `launch_host`) only
-  when `launch` is on. So a client knows what to show without asking for
-  something it will be refused. `Host::extra_features` takes the peer.
+  `offers_library` and `offers_saves` (`Host::offers`). So a client knows
+  what to show without asking for something it will be refused. `launch`
+  stays stated whatever the switch says: it names what the agent can do,
+  and a device that may not start games is answered `not_allowed`
+  (section 17), which a handheld that sees no `launch` would read as an
+  agent too old instead.
 - **Gated where it is served.** The server checks the offer for each request
   above, again at each request so a change holds at once. One that is not
-  offered gets `not_offered`, and learns nothing about the host's games.
+  offered gets an `error` whose `code` is `not_offered` and whose message
+  says only that, and learns nothing about the host's games. A save file
+  sent to a host that does not offer saves is read through and refused, so
+  the session goes on.
   What a client sends of its own (`library_push`, `game_put_*`) is the
   client's choice to give and is accepted as now.
 - **Accepting a game** is the client's: it copies the game's folder with
@@ -1284,7 +1290,8 @@ gives the other is an offer, made by the giving side, to one device.
   because it is now installed there.
 - **Plugin data is not offered** (owner, 2026-10-23: syncing plugin state
   "is a security risk, so no"). An offer never carries plugin contexts
-  (section 8).
+  (section 8), and a computer never syncs them with another computer
+  (`Host::syncs_contexts`: a paired handheld only).
 - **Handhelds start offered.** A handheld assumes a computer it pairs with
   is its library host and its save host. So when a handheld pairs, the
   computer's offer to it starts with `library` and `saves` on (and `launch`
@@ -1294,8 +1301,12 @@ gives the other is an offer, made by the giving side, to one device.
   offers existed are read the same way by kind: a handheld (or a device with
   no kind, which is one) starts with `library` and `saves`, a computer with
   nothing.
-- **Where the person sets it.** Settings lists each paired device with its
-  three switches, replacing the "Start games" list; Pythia shows the same
-  switches on each device's page. `droidtop-agent offer <id>
-  [library|saves|launch] [on|off]` sets them from a command line.
+- **Where the person sets it.** The window's Settings lists each paired
+  device under "Offered" with three switches (Library, Saves, Starting games
+  here), replacing the "Start games" list; Pythia shows the same switches on
+  each device's page (`droidtop_agent.store.set_offer`, and `offered` in
+  `devices()`). `droidtop-agent offer` lists them and `droidtop-agent offer
+  <id> library|saves|launch on|off` changes one. They are kept in
+  `Settings::offers` by device id only once the person changes one, so a
+  device's default follows its kind until then (`offer_for`).
 

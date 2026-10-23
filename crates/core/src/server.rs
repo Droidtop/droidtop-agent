@@ -12,7 +12,7 @@ use crate::context::{AdapterOffer, RecordChange, Records};
 use crate::keys::PeerId;
 use crate::library::Change;
 use crate::manifest::{self, Manifest};
-use crate::proto::{check_announcements, Announcements, GameRef, Launch, Request, Response};
+use crate::proto::{check_announcements, Announcements, GameRef, Launch, Offer, Request, Response, NOT_OFFERED};
 use crate::saves::{self, Roots, SaveSpec};
 use crate::savesync::{entry_for, keep_copy, receive_file, send_contents};
 use crate::{Error, Result, FEATURES, PROTOCOL_VERSION};
@@ -35,6 +35,12 @@ pub trait Host: Send + Sync {
     fn extra_features(&self) -> Vec<String> {
         Vec::new()
     }
+    /// What this device offers [`peer`] (docs/DESIGN.md section 20), read
+    /// again at each request it gates, so a change holds at once.
+    fn offers(&self, peer: &PeerId) -> Offer;
+    /// Whether [`peer`] may sync plugin contexts here (section 8): never part
+    /// of an offer.
+    fn syncs_contexts(&self, peer: &PeerId) -> bool;
     /// Where [`game`] keeps its saves, and this computer's folder for each token.
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)>;
     /// [`game`]'s archive here: the copies kept per device, and older ones.
@@ -122,6 +128,17 @@ fn session<S: Read + Write>(
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => return Err(e),
         };
+        if let Some(refusal) = refusal(host, &peer, &request) {
+            // A save file's contents follow its header whatever happens.
+            if let Request::FilePut { file, .. } = &request {
+                let mut left = file.size;
+                while left > 0 {
+                    left = left.saturating_sub(ch.recv()?.len() as u64);
+                }
+            }
+            ch.send_json(&refusal)?;
+            continue;
+        }
         let mut spec_of = |game: &GameRef| specs.entry(game.clone()).or_insert_with(|| host.saves(game)).clone();
         let reply = match request {
             Request::Bye => return Ok(()),
@@ -130,7 +147,7 @@ fn session<S: Read + Write>(
                 Ok(Response::Hello {
                     name: host.name(),
                     version: PROTOCOL_VERSION,
-                    features: FEATURES.iter().map(|f| f.to_string()).chain(host.extra_features()).collect(),
+                    features: features(host, &peer),
                     endpoints: host.endpoints(),
                     disco: host.disco_id(),
                     moved_to: moved.clone(),
@@ -237,9 +254,42 @@ fn session<S: Read + Write>(
                 .context_push(&context, changes)
                 .map(|deferred| Response::ContextApplied { deferred: deferred.is_some(), message: deferred }),
         };
-        let reply = reply.unwrap_or_else(|e| Response::Error { message: e.to_string() });
+        let reply = reply.unwrap_or_else(|e| Response::Error { message: e.to_string(), code: None });
         ch.send_json(&reply)?;
     }
+}
+
+/// The core's features, what this device offers [`peer`]
+/// (`offers_library`, `offers_saves`), then the host's own.
+fn features(host: &dyn Host, peer: &PeerId) -> Vec<String> {
+    let offer = host.offers(peer);
+    let offered = [("offers_library", offer.library), ("offers_saves", offer.saves)];
+    FEATURES
+        .iter()
+        .map(|f| f.to_string())
+        .chain(offered.iter().filter(|(_, on)| *on).map(|(f, _)| f.to_string()))
+        .chain(host.extra_features())
+        .collect()
+}
+
+/// The answer to a request this device does not offer [`peer`]: it says only
+/// that, so a device that is not offered learns nothing of the games here.
+/// What a device sends of its own (its library, a game folder) and starting a
+/// game (section 17, its own switch) are not gated here.
+fn refusal(host: &dyn Host, peer: &PeerId, request: &Request) -> Option<Response> {
+    let what = match request {
+        Request::LibraryPull { .. } | Request::GameFiles { .. } | Request::GameFileGet { .. } => {
+            (!host.offers(peer).library).then_some("its library")
+        }
+        Request::SaveSpec { .. }
+        | Request::SaveManifest { .. }
+        | Request::FileGet { .. }
+        | Request::FilePut { .. }
+        | Request::SaveApply { .. } => (!host.offers(peer).saves).then_some("its saves"),
+        Request::ContextPull { .. } | Request::ContextPush { .. } => (!host.syncs_contexts(peer)).then_some("plugin data"),
+        _ => None,
+    }?;
+    Some(Response::Error { message: format!("{} does not offer {what} to this device.", host.name()), code: Some(NOT_OFFERED.into()) })
 }
 
 /// Returns how many files it removed.
