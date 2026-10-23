@@ -25,7 +25,7 @@ Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
 5. The protocol
 6. Saves
 7. Library
-8. Plugin contexts
+8. Syncable data from plugins
 9. Conflicts
 10. Transports, in order
 11. The computer's scanner
@@ -431,23 +431,56 @@ marks on a game are shared.
   streaming it with windowcast. How far they merge into droidtop's main
   library is decision 6.
 
-## 8. Plugin contexts
+## 8. Syncable data from plugins
 
 The owner (#380): "It's context SYNC. It's meant to allow you to do things on
-the computer and have them synced." A context is a plugin's supporting state,
-and it syncs both ways between the device and the computer. The first context
-is F95Checker's database for the F95 plugin. The plugin API side is in
-droidtop's `docs/plugin-api.md` ("Context sync"). The shape:
+the computer and have them synced." And (2026-10-23), on what may travel:
+"Plugin STATE should not be synced. Plugins can be permitted to expose a
+'syncable data' context, for data that CAN be synced, but in general, plugin
+states can include sensitive user data and cookies, and we can't guarantee a
+third party plugin has secured it correctly." A syncable data context "is an
+explicit NON-USABLE context. It is a separate context of data, probably in a
+database, that is syncable. Plugins will notify when they have updated the
+syncable dataset, and plugins will be updated when they have received an
+update to it." It "should be part of the plugin sandbox"; "the point is that
+the sync is atomic, and it's not the live dataset". The plugin API side is in
+droidtop's `docs/plugin-api.md` (F8). The shape:
 
-- **A context is a set of records**, `key -> {field -> JSON value}`, plus a
-  declaration from the plugin: which fields exist, whether each is two-way,
+- **A plugin's own state never syncs.** Nothing here reads or writes the data
+  a plugin, or the app it serves, works from. Cookies, tokens and passwords
+  stay where they are because the sync never reaches them.
+- **A syncable data context is a copy kept only to be synced.** The plugin
+  chooses what goes into it and writes it there itself; nothing runs from it.
+  It lives in the plugin's sandbox: on the handheld, droidtop's; on the
+  computer, the computer-side plugin's (the program below, under the agent's
+  data folder, `adapters/<context>/`). Both ends have the same context, by
+  the same id. F95's is a copy of the declared columns of F95Checker's
+  database, not `db.sqlite3` itself.
+- **A context is a set of records**, `key -> {field -> JSON value}`, with the
+  plugin's declaration: which fields exist, whether each is two-way,
   computer-to-device or device-to-computer, and its conflict rule (`device`,
   `computer`, or `ask`).
-- **The computer side is a context adapter: a separate program the plugin
-  publishes**, one per kind of third-party store. The agent carries no
-  third-party format itself (coordinator decision, 2026-10-09: the F95Checker
-  adapter belongs with the F95 plugin, in gamegrab-sources). The agent asks
-  an adapter which context it serves and keeps the pair in its settings.
+- **Atomic, both ways.** A plugin publishes a whole new copy in one step (it
+  writes it apart, then makes it current); the sync reads only a published
+  copy. A copy that arrives is written apart and made current in one step. A
+  plugin never sees half a copy, and a sync that stops changes nothing.
+- **Notified over the plugin API, both ways.** The plugin says it has
+  published a new copy (`updated`), and the sync then runs for that context.
+  When a new copy has arrived, the plugin is told (`received`). Bringing it
+  into its own data is the plugin's, when that is safe: the F95 plugin's
+  computer side waits until F95Checker is closed, because F95Checker keeps its
+  database in memory and writes it back over anything changed under it.
+- **Merge is three-way per field**, between the two copies and the baseline
+  the handheld keeps per computer and context. If only one side changed a
+  field, that change wins. If both changed it differently, the field's rule
+  decides; `ask` puts the record in the context's conflict list for the
+  person. The merged copy is what each side then receives, atomically.
+- **Not part of offers** (section 20): an offer never carries a context.
+- **The computer-side plugin is a program the plugin publishes**, one per
+  kind of third-party store. The agent carries no third-party format itself
+  (coordinator decision, 2026-10-09: the F95Checker adapter belongs with the
+  F95 plugin, in gamegrab-sources).
+
 - **How an adapter gets onto the computer** (coordinator, 2026-10-09):
   - **Offered by the plugin.** The plugin's signed manifest declares the
     program in droidtop's `computers.context_adapter` point: the context, and
@@ -468,47 +501,43 @@ droidtop's `docs/plugin-api.md` ("Context sync"). The shape:
     by hand, changes nothing.
   - **By hand.** `droidtop-agent contexts add <program>` still installs one
     the person downloaded; it is never replaced by an offer.
-- **The adapter contract (protocol 1)**, JSON over standard input and output,
-  one run per pull or push:
-  - `<adapter> describe` prints `{"protocol": 1, "id": "<context>",
-    "description": "..."}`;
-  - `<adapter> pull` prints `{"records": {<key>: {<field>: <value>}}}`;
-  - `<adapter> push` reads `{"changes": [...]}` (the core's `RecordChange`:
-    `{"op": "upsert", "key", "fields"}` or `{"op": "remove", "key"}`) and
-    prints `{"deferred": null}`, or `{"deferred": "<why>"}` when the changes
-    must wait;
-  - any of them may print `{"error": "<words a screen can show>"}`; a
-    non-zero exit is an error too, with what it wrote to standard error. A
-    run is stopped after 120 s.
 - **Why a program and not a loadable module.** Rust has no stable ABI, so a
   dynamic module would need a C interface, `unsafe` on both sides and a build
   per system matching the agent's own; a crash in it would take the agent
   down with it. A program needs none of that: it can be written in any
   language (F95Checker itself is Python), it is built and released by the
   plugin's own repository on the plugin's own schedule, a fault ends only
-  that run, and it is a plain process boundary between two separately
-  licensed works. A run costs a process start per sync, which a sync that
-  happens around a game's launch or on request can afford.
-- **Merge is three-way per field**, against the baseline the handheld keeps
-  per computer and context. If only one side changed a field, that change
-  wins. If both changed it differently, the field's rule decides; `ask` puts
-  the record in the context's conflict list for the person.
-- **Writing a third-party app's store** happens only while that app is closed.
-  F95Checker keeps its database in memory and writes it back, so a change made
-  under it would be lost. While it runs, the adapter replies `deferred` and
-  the change is made at the next sync after it closes.
-- **The F95 plugin's adapter** is gamegrab-sources/droidtop-agent-f95-adapter.
+  that program, and it is a plain process boundary between two separately
+  licensed works.
+- **Today (adapter protocol 1) is the old shape**: the agent runs the adapter
+  once per pull or push (`describe`, `pull`, `push` over standard input and
+  output), and the F95 adapter reads and writes F95Checker's live
+  `db.sqlite3`, replying `deferred` while F95Checker runs. Protocol 2 replaces
+  it with the copy and the two notifications; protocol 1 adapters stay
+  readable until every published one moves.
+- **The F95 plugin's computer side** is gamegrab-sources/droidtop-agent-f95-adapter.
   It finds F95Checker's `db.sqlite3` (Windows `%APPDATA%\f95checker`, Linux
   `~/.config/f95checker`, macOS `~/Library/Application Support/f95checker`),
-  reads only the declared columns of the `games` table, and never reads or
-  carries the `cookies` table or the settings table's passwords and tokens.
+  copies only the declared columns of the `games` table into its context, and
+  never the `cookies` table or the settings table's passwords and tokens.
   Its fields:
   - two-way: `installed`, `finished`, `archived`, `rating`, `notes`, and the
     record's presence (watching a thread);
   - computer to device: `name`, `url`, `version`, `developer`, `status`,
     `type`, `last_updated`.
-  A thread watched on the device is inserted with its id, name and url, and
-  F95Checker's own refresh fills in the rest.
+  A thread watched on the device is added to F95Checker with its id, name and
+  url when the copy is brought in, and F95Checker's own refresh fills in the
+  rest.
+
+- **The notices are plugin API calls on both ends** (owner, 2026-10-23: the
+  plugin "is notified, and notifies, over the API"; droidtop's Python plugin
+  system is reused unchanged on computers). On the computer the plugin runs
+  in the agent's plugin host, confined, and calls the same API through the
+  host's broker as it does on the handheld: `updated` is a host call, and
+  `received` reaches the plugin as an event. The host, its broker and its
+  sandbox are Droidtop/tracker#606 and the computer plugin host's own
+  design. Until that host runs on a system, adapter protocol 1 stays the
+  way contexts sync there.
 
 ## 9. Both sides changed, and many devices
 
