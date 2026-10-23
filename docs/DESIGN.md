@@ -1299,13 +1299,12 @@ python environment", bundled, because the sandbox must control it. And:
   permissions is the person's, on that computer: Pythia's plugin page, the
   agent's window, or `droidtop-agent plugins`. A grant on the handheld does
   not grant on the computer.
-
-Open:
-
-1. Where a computer finds plugins: droidtop's catalog sources added on the
-   computer, a handheld offering the plugins it has to its computers, or
-   both. Default here: both, each installed only when the person approves on
-   the computer.
-2. Whether section 8's `computers.context_adapter` programs go away once a
-   plugin's computer half runs here. Default here: yes, after the move;
-   protocol 1 adapters keep working until then.
+- **Where a computer finds plugins** (owner, 2026-10-23): from droidtop's
+  catalog sources added on the computer, and from a handheld offering the
+  plugins it has to its computers. Either way a plugin is installed only when
+  the person approves it on the computer.
+- **Context adapters go away** (owner, 2026-10-23: "anything that's missing
+  gets ported"): once a plugin's computer half runs in this host, section 8's
+  `computers.context_adapter` programs are retired, and whatever they do that
+  the host does not yet serve is ported to it first. Protocol 1 adapters keep
+  working until then.
