@@ -27,6 +27,10 @@ pub struct ManagerGame {
     pub game: ScannedGame,
     #[serde(default)]
     pub base: Option<PathBuf>,
+    /// The engine the manager identified (an engines-database id: `renpy`...),
+    /// so the save lookup can ask the engine's own rule (saves::engines).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
 }
 
 /// What `manager-games.json` holds: which manager, and its games.
@@ -61,7 +65,7 @@ impl ManagerGames {
                 }
                 _ => true,
             })
-            .map(|g| Found { game: g.game.clone(), base: g.base.clone(), prefix: None, engine: None })
+            .map(|g| Found { game: g.game.clone(), base: g.base.clone(), prefix: None, engine: g.engine.clone() })
             .collect()
     }
 }
@@ -93,6 +97,7 @@ mod tests {
         ManagerGame {
             game: ScannedGame { key: key.into(), title: key.into(), platform: Some("pc".into()), install: Default::default() },
             base,
+            engine: None,
         }
     }
 
@@ -124,5 +129,16 @@ mod tests {
         assert!(folder_allowed(&root.join("games"), &dirs).is_ok());
         assert!(folder_allowed(&root, &dirs).is_err(), "it holds the agent's files");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_engine_a_manager_names_reaches_the_scan() {
+        let json =
+            r#"{"key":"title:moonlit harbor","title":"Moonlit Harbor","platform":"pc","install":{"installed":true},"engine":"renpy"}"#;
+        let one: ManagerGame = serde_json::from_str(json).unwrap();
+        assert_eq!(one.engine.as_deref(), Some("renpy"));
+        let found = ManagerGames { manager: "Pythia".into(), games: vec![one] }
+            .usable(&Dirs { config: "c".into(), data: "d".into(), computer: "h".into() }, &Events::default());
+        assert_eq!(found[0].engine.as_deref(), Some("renpy"));
     }
 }
