@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use droidtop_agent_core::cert;
 use droidtop_agent_core::channel::Channel;
+use droidtop_agent_core::client::{self, ConnectError, RendezvousSettings, Session, Target};
 use droidtop_agent_core::confirm;
 use droidtop_agent_core::context::{baseline_when_deferred, merge, AdapterOffer, ContextDecl, Records};
 use droidtop_agent_core::discovery::{self, Announce};
@@ -21,12 +22,10 @@ use droidtop_agent_core::library::{Change, Cursor, Library, Marks, ScannedGame};
 use droidtop_agent_core::mailbox::{self, Envelope};
 use droidtop_agent_core::pairing::{self, Kind, PairInvite, Paired};
 use droidtop_agent_core::proto::{check_announcements, Announcements, GameRef, Request, Response};
-use droidtop_agent_core::rendezvous;
 use droidtop_agent_core::saves::{prefix_roots, Roots};
 use droidtop_agent_core::savesync::{self, SaveSyncRequest, Side};
-use droidtop_agent_core::tunnel::{self, TunnelStream};
-use droidtop_agent_core::{hex, Error, PAIR_PORT, PORT, PROTOCOL_VERSION};
-use serde::{Deserialize, Serialize};
+use droidtop_agent_core::{hex, Error, PAIR_PORT, PORT};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 pub fn error(message: &str) -> String {
@@ -301,244 +300,28 @@ fn find(args: &Value) -> Outcome {
     )
 }
 
-fn parse_address(text: &str) -> Option<SocketAddr> {
-    text.parse().ok().or_else(|| format!("{text}:{PORT}").parse().ok())
-}
-
-/// The stream a session runs on: TCP on the LAN, or TCP inside a WireGuard tunnel.
-pub enum Link {
-    Tcp(TcpStream),
-    Tunnel(TunnelStream),
-}
-
-impl Read for Link {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Link::Tcp(s) => s.read(buf),
-            Link::Tunnel(s) => s.read(buf),
-        }
-    }
-}
-
-impl Write for Link {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self {
-            Link::Tcp(s) => s.write(buf),
-            Link::Tunnel(s) => s.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            Link::Tcp(s) => s.flush(),
-            Link::Tunnel(s) => s.flush(),
-        }
-    }
-}
-
-/// Which way a session reached the computer.
-#[derive(Clone, Copy)]
-enum Path {
-    /// This network: a known address or the LAN broadcast.
-    Lan,
-    /// WireGuard to an endpoint the computer stated (a forwarded port, IPv6).
-    Wireguard,
-    /// WireGuard through a hole punched after a global discovery rendezvous.
-    Rendezvous,
-}
-
-impl Path {
-    fn name(self) -> &'static str {
-        match self {
-            Path::Lan => "lan",
-            Path::Wireguard => "wireguard",
-            Path::Rendezvous => "rendezvous",
-        }
-    }
-}
-
-/// A session with the computer: where and how it answered, its name, its
-/// WireGuard endpoints and its global discovery ID.
-struct Session {
-    ch: Channel<Link>,
-    address: String,
-    path: Path,
-    computer: String,
-    endpoints: Vec<String>,
-    disco: Option<String>,
-    /// What the computer's agent supports (the `features` of its hello); an
-    /// older agent states fewer.
-    features: Vec<String>,
-    /// The computer moved to a new identity; droidtop re-pins it.
-    moved_to: Option<PeerId>,
-}
-
-fn hello(mut ch: Channel<Link>, address: String, path: Path, key: &DeviceKey, args: &Value) -> Result<Session, Failure> {
-    let name = args["name"].as_str().unwrap_or("droidtop").to_string();
-    let features = droidtop_agent_core::FEATURES.iter().map(|f| f.to_string()).collect();
-    let disco = rendezvous::certificate(key).ok().map(|c| c.device_id());
-    ch.send_json(&Request::Hello { name, version: PROTOCOL_VERSION, features, disco })?;
-    let (computer, endpoints, disco, moved, features) = match ch.recv_json::<Response>()? {
-        Response::Hello { name, endpoints, disco, moved_to, features, .. } => (name, endpoints, disco, moved_to, features),
-        _ => (String::new(), Vec::new(), None, None, Vec::new()),
-    };
-    // Only a move both keys signed, from the identity this session reached.
-    let moved_to = moved.and_then(|m| m.check(&ch.peer()));
-    Ok(Session { ch, address, path, computer, endpoints, disco, features, moved_to })
-}
-
-/// The rendezvous settings droidtop passes (`rendezvous` in the arguments):
-/// the discovery servers (`default` is Syncthing's), the STUN servers, and a
-/// small file where this device keeps when it may announce and ask again.
-#[derive(Deserialize)]
-struct RendezvousArgs {
-    #[serde(default = "default_list")]
-    servers: Vec<String>,
-    #[serde(default = "default_list")]
-    stun: Vec<String>,
-    state: PathBuf,
-}
-
-fn default_list() -> Vec<String> {
-    vec!["default".into()]
-}
-
-/// When this device last announced, what, and when it may ask again, so its
-/// use of the discovery servers stays at Syncthing's own client's pace.
-#[derive(Serialize, Deserialize, Default)]
-struct RendezvousState {
-    #[serde(default)]
-    announced: Option<String>,
-    #[serde(default)]
-    announce_after_ms: i64,
-    /// By computer discovery ID: no lookup before this time.
-    #[serde(default)]
-    lookup_after_ms: std::collections::BTreeMap<String, i64>,
-    /// By computer discovery ID: what the last lookup found, and until when it is used.
-    #[serde(default)]
-    found: std::collections::BTreeMap<String, (Vec<String>, i64)>,
-}
-
-fn later_ms(d: Duration) -> i64 {
-    droidtop_agent_core::library::now_ms() + d.as_millis() as i64
-}
-
-/// The computer away from both LAN and stated endpoints: ask global
-/// discovery where it is, tell it where this device is, and punch through
-/// both NATs with WireGuard handshakes from the socket whose mapping was
-/// announced. The computer answers only its pinned keys, and every byte of
-/// the sync goes through that tunnel.
-fn rendezvous(key: &DeviceKey, peer: &PeerId, computer: &str, settings: &RendezvousArgs) -> Result<TunnelStream, String> {
-    let mut state: RendezvousState = std::fs::read(&settings.state).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    let now = droidtop_agent_core::library::now_ms();
-    let cached = state.found.get(computer).filter(|(_, until)| *until > now).map(|(a, _)| a.clone());
-    if cached.is_none() && state.lookup_after_ms.get(computer).is_some_and(|t| *t > now) {
-        return Err("global discovery did not know where it was a moment ago; it is asked again in a minute".into());
-    }
-    let servers = rendezvous::Server::list(&settings.servers);
-    let udp = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-    let stun = rendezvous::resolve_stun(&settings.stun);
-    let mine = rendezvous::query_stun(&udp, &stun, Duration::from_secs(2));
-    let answer = match cached {
-        Some(addresses) => rendezvous::Answer::Found(addresses),
-        None => rendezvous::lookup(&servers, computer),
-    };
-    let found = match answer {
-        rendezvous::Answer::Found(addresses) => {
-            // Syncthing keeps a found address for five minutes.
-            if !state.found.get(computer).is_some_and(|(_, until)| *until > now) {
-                state.found.insert(computer.to_string(), (addresses.clone(), later_ms(rendezvous::FOUND_CACHE)));
-            }
-            addresses
-        }
-        rendezvous::Answer::Wait(d) | rendezvous::Answer::Announced(d) => {
-            state.lookup_after_ms.insert(computer.to_string(), later_ms(d));
-            let _ = std::fs::write(&settings.state, serde_json::to_vec(&state).unwrap_or_default());
-            return Err("global discovery does not know where it is (it announces itself while droidtop-agent runs)".into());
-        }
-    };
-    // Tell the computer where to punch from: the address the NAT gave this
-    // socket, announced again only when it changed or the server asked.
-    if let (Some(mine), Ok(cert)) = (mine, rendezvous::certificate(key)) {
-        let address = format!("{}{mine}", rendezvous::SCHEME);
-        if state.announced.as_deref() != Some(address.as_str()) || state.announce_after_ms <= now {
-            match rendezvous::announce(&servers, &cert, std::slice::from_ref(&address)) {
-                rendezvous::Answer::Announced(d) => {
-                    state.announced = Some(address);
-                    state.announce_after_ms = later_ms(d);
-                }
-                rendezvous::Answer::Wait(d) => state.announce_after_ms = later_ms(d),
-                rendezvous::Answer::Found(_) => {}
-            }
-        }
-    }
-    let _ = std::fs::write(&settings.state, serde_json::to_vec(&state).unwrap_or_default());
-    let targets = rendezvous::wg_endpoints(&found);
-    if targets.is_empty() {
-        return Err("global discovery knows the computer but no WireGuard address for it".into());
-    }
-    // The computer looks this device up on Syncthing's schedule (about once a
-    // minute while it has not found it), so the handshakes keep coming that long.
-    tunnel::connect_on(udp, key, peer, &targets, Duration::from_secs(75)).map_err(|e| e.to_string())
-}
-
-/// A session with the computer, in the design's order (docs/DESIGN.md
-/// section 10): its known LAN addresses, then the LAN by broadcast, then its
-/// WireGuard endpoints (`wg:<ip>:<port>`).
+/// A session with the computer (`core::client`), from droidtop's arguments:
+/// `peer`, `addresses`, `name`, and `disco` with `rendezvous` when it has them.
 fn connect(key: &DeviceKey, args: &Value) -> Result<Session, Failure> {
     let peer = peer_of(args["peer"].as_str().unwrap_or_default())?;
-    let known: Vec<String> =
+    let addresses: Vec<String> =
         args["addresses"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let mut candidates: Vec<SocketAddr> = known.iter().filter(|a| !a.starts_with("wg:")).filter_map(|a| parse_address(a)).collect();
-    let tunnels: Vec<SocketAddr> = known.iter().filter_map(|a| a.strip_prefix("wg:")).filter_map(|a| a.parse().ok()).collect();
-    let mut tried_lan = false;
-    let mut last = String::from("it did not answer on this network");
-    loop {
-        for addr in std::mem::take(&mut candidates) {
-            let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(3)) else { continue };
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
-            let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
-            match Channel::connect(Link::Tcp(stream), key, &peer) {
-                Ok(ch) => return hello(ch, addr.to_string(), Path::Lan, key, args),
-                Err(e) => last = e.to_string(),
-            }
-        }
-        if tried_lan {
-            break;
-        }
-        tried_lan = true;
-        if let Ok(found) = discovery::find_agents(&key.peer_id(), &[peer], Duration::from_millis(1500)) {
-            candidates = found.into_iter().map(|f| f.addr).collect();
-        }
-    }
-    if !tunnels.is_empty() {
-        match tunnel::connect(key, &peer, &tunnels, Duration::from_secs(8)) {
-            Ok(mut stream) => {
-                stream.set_read_timeout(Some(Duration::from_secs(120)));
-                let ch = Channel::connect(Link::Tunnel(stream), key, &peer)?;
-                return hello(ch, String::new(), Path::Wireguard, key, args);
-            }
-            Err(e) => last = format!("{last}; through WireGuard: {e}"),
-        }
-    }
-    // Last, a rendezvous through global discovery, when droidtop has it on and
-    // knows the computer's discovery ID from an earlier session.
-    let settings: Option<RendezvousArgs> = serde_json::from_value(args["rendezvous"].clone()).ok();
-    if let (Some(settings), Some(computer)) = (settings, args["disco"].as_str().filter(|d| !d.is_empty())) {
-        match rendezvous(key, &peer, computer, &settings) {
-            Ok(mut stream) => {
-                stream.set_read_timeout(Some(Duration::from_secs(120)));
-                let ch = Channel::connect(Link::Tunnel(stream), key, &peer)?;
-                return hello(ch, String::new(), Path::Rendezvous, key, args);
-            }
-            Err(e) => last = format!("{last}; through global discovery: {e}"),
-        }
-    }
-    Err(Failure::Unreachable(last))
+    let settings: Option<RendezvousSettings> = serde_json::from_value(args["rendezvous"].clone()).ok();
+    let target = Target {
+        peer,
+        name: args["name"].as_str().unwrap_or("droidtop"),
+        addresses: &addresses,
+        disco: args["disco"].as_str(),
+        rendezvous: settings.as_ref(),
+    };
+    client::connect(key, &target).map_err(|e| match e {
+        ConnectError::Unreachable(m) => Failure::Unreachable(m),
+        ConnectError::Failed(e) => Failure::Error(e.to_string()),
+    })
 }
 
-fn bye(mut ch: Channel<Link>) {
-    let _ = ch.send_json(&Request::Bye);
+fn bye(s: Session) {
+    s.bye();
 }
 
 /// Adds where the computer answered, its name and its endpoints to a reply.
@@ -546,7 +329,7 @@ fn located(mut v: Value, s: &Session) -> Value {
     if !s.address.is_empty() {
         v["address"] = json!(s.address);
     }
-    v["computer"] = json!(s.computer);
+    v["computer"] = json!(s.name);
     v["endpoints"] = json!(s.endpoints);
     v["path"] = json!(s.path.name());
     if let Some(disco) = &s.disco {
@@ -619,7 +402,7 @@ fn sync_saves(args: &Value) -> Outcome {
     };
     let outcome = savesync::sync(&mut s.ch, &request);
     let v = located(serde_json::to_value(outcome?)?, &s);
-    bye(s.ch);
+    bye(s);
     Ok(v)
 }
 
@@ -707,7 +490,7 @@ fn sync_library(args: &Value) -> Outcome {
     lib.cursors.insert(peer_hex, Cursor { pulled: their, pushed: seq });
     local.save()?;
     let v = located(json!({ "pushed": pushed, "pulled": pulled, "marks": local.to_write() }), &s);
-    bye(s.ch);
+    bye(s);
     Ok(v)
 }
 
@@ -805,7 +588,7 @@ fn game_pull(args: &Value) -> Outcome {
     let mut s = connect(&key, args)?;
     let copied = droidtop_agent_core::gamecopy::pull(&mut s.ch, &game, &parent, &name, &mut progress);
     let v = located(serde_json::to_value(copied?)?, &s);
-    bye(s.ch);
+    bye(s);
     Ok(v)
 }
 
@@ -819,7 +602,7 @@ fn game_push(args: &Value) -> Outcome {
     let mut s = connect(&key, args)?;
     let copied = droidtop_agent_core::gamecopy::push(&mut s.ch, &game, &source, &name, version, &mut progress);
     let v = located(serde_json::to_value(copied?)?, &s);
-    bye(s.ch);
+    bye(s);
     Ok(v)
 }
 
@@ -847,7 +630,7 @@ fn launch_game(args: &Value) -> Outcome {
         json!({ "result": "agent_too_old" })
     };
     let v = located(outcome, &s);
-    bye(s.ch);
+    bye(s);
     Ok(v)
 }
 
@@ -862,7 +645,7 @@ fn announce(args: &Value) -> Outcome {
     check_announcements(&values).map_err(Failure::Error)?;
     let mut s = connect(&key, args)?;
     if !s.features.iter().any(|f| f == "announce") {
-        bye(s.ch);
+        bye(s);
         return Err(Failure::Error(
             "the other device runs an older droidtop-agent or droidtop; update it to share plugins' devices".into(),
         ));
@@ -874,7 +657,7 @@ fn announce(args: &Value) -> Outcome {
         other => return Err(Failure::Error(format!("the other device answered {other:?}"))),
     };
     let v = located(json!({ "announced": theirs }), &s);
-    bye(s.ch);
+    bye(s);
     Ok(v)
 }
 
@@ -1048,13 +831,14 @@ fn sync_context(args: &Value) -> Outcome {
         }),
         &s,
     );
-    bye(s.ch);
+    bye(s);
     Ok(v)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use droidtop_agent_core::tunnel;
 
     /// One pairing screen at a time: the tests that open one take this.
     static SCREEN: Mutex<()> = Mutex::new(());

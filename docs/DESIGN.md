@@ -1311,6 +1311,25 @@ gives the other is an offer, made by the giving side, to one device.
   person turns it on; owner, 2026-10-23): when on, each later
   session syncs that game's saves both ways (section 6) and a newer version
   on the host is shown as an update, as droidtop shows one (section 7).
+- **Built: the client on a computer** (`droidtop_agent_service::remote`;
+  `droidtop-agent offered | accept | play-on | accepted`; Pythia through
+  `droidtop_agent.remote`). It reaches the paired device the way the
+  handheld does (`core::client`, shared with droidtop's library: where it
+  was last seen and the agent's port on that host, the LAN, its WireGuard
+  endpoints, a rendezvous when that is on), reads what the hello says it
+  offers, and then:
+  - browses: pulls the offered library and lists the games installed on
+    that device, with their versions and the person's marks;
+  - accepts: copies one game under the other device's own folder name (" (2)"
+    and on when that is taken, never over a folder that is there), rescans,
+    and records it in `accepted.json` (`key`, `title`, `from`, `folder`,
+    `version`, `at_ms`, `keep_in_step`);
+  - asks to play: `launch_game`, answered by the other device's own switch.
+
+  A computer serving another computer sends only its own games: installs of
+  other devices, and marks on games only they have, stay with it, and the
+  applications its scan lists (`app:` keys) are never offered. Not built
+  yet: "saves too" and keeping in step, which follow.
 - **Never merged** (owner, 2026-10-23: "The computer can be aware of it, but
   mostly for sync and update purposes"). Another device's games are that
   device's, on either side: a client shows a host's offered library as "On

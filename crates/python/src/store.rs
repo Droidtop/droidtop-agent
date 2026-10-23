@@ -183,13 +183,13 @@ fn set_mark(py: Python<'_>, game: String, field: String, value: &Bound<'_, PyAny
 }
 
 /// The paired device whose id starts with [`id`].
-fn one_device(store: &Store, id: &str) -> Result<PeerId, String> {
+pub(crate) fn one_device(store: &Store, id: &str) -> Result<PeerId, String> {
     let id = id.to_lowercase();
     let matches: Vec<String> = store.devices_now().into_iter().filter(|d| d.id.starts_with(&id)).map(|d| d.id).collect();
     match matches.as_slice() {
         [one] => PeerId::from_hex(one).map_err(|e| e.to_string()),
-        [] => Err("No paired handheld has that id.".into()),
-        _ => Err("More than one paired handheld starts with that; give more of the id.".into()),
+        [] => Err("No paired device has that id.".into()),
+        _ => Err("More than one paired device starts with that; give more of the id.".into()),
     }
 }
 
