@@ -73,6 +73,11 @@ Usage:
                                        Syncthing's standard folder; each device's Syncthing is added for it
   droidtop-agent primary [<id> | none] The handheld whose saves win here when both changed (the start of its id
                                        is enough); with none, the newest copy wins
+  droidtop-agent offer                 What this computer offers each paired device: its library, its saves,
+                                       and starting games here (a handheld starts with library and saves,
+                                       a computer with nothing)
+  droidtop-agent offer <id> library|saves|launch on|off
+                                       Change one (the start of its id is enough); saves need the library
   droidtop-agent launch                Which handhelds may start games on this computer (none until you allow one)
   droidtop-agent launch allow <id>     Let a handheld start Steam games here, e.g. for streaming them with
                                        Steam Link (the start of its id is enough)
@@ -338,6 +343,11 @@ fn main() {
             Ok(())
         }
         ["launch", verb @ ("allow" | "deny"), id] => launch_switch(&agent, id, *verb == "allow"),
+        ["offer"] => {
+            offers(&agent);
+            Ok(())
+        }
+        ["offer", id, what @ ("library" | "saves" | "launch"), on @ ("on" | "off")] => offer_switch(&agent, id, what, *on == "on"),
         ["autostart"] => {
             println!("Starting when you sign in: {}", if autostart::enabled() { "on" } else { "off" });
             Ok(())
@@ -379,6 +389,51 @@ fn unpair(agent: &Agent, id: &str) -> Result<(), String> {
         }
         [] => Err("No paired handheld has that id.".into()),
         _ => Err("More than one paired handheld starts with that; give more of the id.".into()),
+    }
+}
+
+fn offers(agent: &Agent) {
+    let devices = agent.store.devices_now();
+    if devices.is_empty() {
+        println!("No device is paired.");
+    }
+    let launch = agent.store.settings.lock().unwrap().launch_devices.clone();
+    for d in &devices {
+        let offer = PeerId::from_hex(&d.id).map(|p| agent.store.offers_to(&p)).unwrap_or_default();
+        let given: Vec<&str> = [("library", offer.library), ("saves", offer.saves), ("starting games", launch.contains(&d.id))]
+            .into_iter()
+            .filter(|(_, on)| *on)
+            .map(|(what, _)| what)
+            .collect();
+        let given = if given.is_empty() { "nothing".to_string() } else { given.join(", ") };
+        println!("{}  {}  offered: {given}", &d.id[..16], d.name);
+    }
+}
+
+fn offer_switch(agent: &Agent, id: &str, what: &str, on: bool) -> Result<(), String> {
+    if what == "launch" {
+        return launch_switch(agent, id, on);
+    }
+    let matches: Vec<_> = agent.store.devices_now().into_iter().filter(|d| d.id.starts_with(&id.to_lowercase())).collect();
+    match matches.as_slice() {
+        [one] => {
+            if what == "library" {
+                agent.store.set_offer(&one.id, Some(on), None);
+            } else {
+                agent.store.set_offer(&one.id, None, Some(on));
+            }
+            agent.store.save_settings().map_err(|e| e.to_string())?;
+            let offer = PeerId::from_hex(&one.id).map(|p| agent.store.offers_to(&p)).unwrap_or_default();
+            let said = match (offer.library, offer.saves) {
+                (true, true) => "its library and its saves",
+                (true, false) => "its library",
+                _ => "nothing of its library or saves",
+            };
+            println!("This computer now offers {} {said}.", one.name);
+            Ok(())
+        }
+        [] => Err("No paired device has that id.".into()),
+        _ => Err("More than one paired device starts with that; give more of the id.".into()),
     }
 }
 

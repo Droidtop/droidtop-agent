@@ -68,6 +68,12 @@ impl Host for Computer {
     fn name(&self) -> String {
         self.name.clone()
     }
+    fn offers(&self, _peer: &PeerId) -> droidtop_agent_core::proto::Offer {
+        droidtop_agent_core::proto::Offer::LIBRARY_AND_SAVES
+    }
+    fn syncs_contexts(&self, _peer: &PeerId) -> bool {
+        true
+    }
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)> {
         (game.key == "steam:1")
             .then(|| (SaveSpec { patterns: vec!["<winAppData>/Game".into()] }, Roots::from([("<winAppData>".into(), self.appdata())])))
@@ -141,6 +147,10 @@ fn start_agent(name: &str, games: &Path, paired: Vec<PeerId>) -> ((&'static Agen
         settings.game_folders = vec![games.to_path_buf()];
     }
     agent.store.save_settings().unwrap();
+    // Paired as handhelds, so the agent offers them its library and saves.
+    for peer in &paired {
+        agent.store.add_device(*peer, &peer.to_hex()[..8], droidtop_agent_core::pairing::Kind::Handheld).unwrap();
+    }
     let seed = agent.store.key.seed();
     let id = agent.store.peer_id();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -388,6 +398,12 @@ fn a_newer_version_comes_from_a_computer_through_droidtops_call() {
     impl Host for GamePc {
         fn name(&self) -> String {
             "PC".into()
+        }
+        fn offers(&self, _peer: &PeerId) -> droidtop_agent_core::proto::Offer {
+            droidtop_agent_core::proto::Offer::LIBRARY_AND_SAVES
+        }
+        fn syncs_contexts(&self, _peer: &PeerId) -> bool {
+            true
         }
         fn saves(&self, _game: &G) -> Option<(SaveSpec, Roots)> {
             None

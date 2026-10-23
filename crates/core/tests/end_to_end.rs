@@ -32,6 +32,12 @@ impl Host for TestHost {
     fn name(&self) -> String {
         "Test PC".into()
     }
+    fn offers(&self, _peer: &PeerId) -> droidtop_agent_core::proto::Offer {
+        droidtop_agent_core::proto::Offer::LIBRARY_AND_SAVES
+    }
+    fn syncs_contexts(&self, _peer: &PeerId) -> bool {
+        true
+    }
     fn saves(&self, game: &GameRef) -> Option<(SaveSpec, Roots)> {
         (game.key == "steam:1").then(|| (SaveSpec { patterns: vec!["<winAppData>/Game".into()] }, self.roots.clone()))
     }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
 use droidtop_agent_core::keys::PeerId;
 use droidtop_agent_core::library::Change;
-use droidtop_agent_core::proto::{Announcements, GameRef, Launch};
+use droidtop_agent_core::proto::{Announcements, GameRef, Launch, Offer};
 use droidtop_agent_core::saves::{Roots, SaveSpec};
 use droidtop_agent_core::server::Host;
 use droidtop_agent_core::{Error, Result};
@@ -48,6 +48,17 @@ impl Host for Agent {
 
     fn primary(&self, peer: &PeerId) -> bool {
         self.store.is_primary(peer)
+    }
+
+    fn offers(&self, peer: &PeerId) -> Offer {
+        // Read again, as for starting a game: the window or a command line
+        // may have changed it since this process started.
+        self.store.reload_settings();
+        self.store.offers_to(peer)
+    }
+
+    fn syncs_contexts(&self, peer: &PeerId) -> bool {
+        self.store.syncs_contexts(peer)
     }
 
     fn launch_game(&self, peer: &PeerId, game: &GameRef) -> Launch {

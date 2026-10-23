@@ -37,6 +37,7 @@ Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
 17. Starting a game for a handheld
 18. Syncthing with the paired devices
 19. Service mode: Windows security screens
+20. Offers: what one device shares with another
 
 ## 1. What droidtop already has
 
@@ -1225,3 +1226,87 @@ and Pythia, built from these crates, is another
 - **Not yet:** using the helper. Showing and answering a security screen
   from a handheld needs the screen-sharing side, which is windowcast's; this
   section covers only the person's switch.
+
+## 20. Offers: what one device shares with another
+
+Owner (2026-10-22): two paired computers "don't share anything by
+default. The rest should be controlled by the settings menu." And, on the
+shape (2026-10-23): "consoles advertise what they can offer, but the
+sharing is requested. A console host can OFFER its game library. A console
+client can then ACCEPT a specific game for transfer, or TELL the console to
+play it." An offer goes "to ANOTHER device, not ALL devices"; "saves should
+be assumed to transfer, but we can probably wire up a special 'saves too'
+toggle"; ongoing sync "CAN be"; handhelds use the same model.
+
+Pairing makes two devices trust each other and nothing more. What one
+gives the other is an offer, made by the giving side, to one device.
+
+- **Two sides.** The *host* is the device whose games they are; it offers.
+  The *client* is the device that was offered; it browses, then accepts a
+  game or asks the host to play it. Every pair of devices has two
+  directions, each with its own offer: A offering to B says nothing about
+  B offering to A.
+- **What an offer holds.** Per device, in `Settings::offers` (by device
+  id), each off unless set:
+  - `library`: the client may read this device's library (`library_pull`)
+    and copy any game in it (`game_files`, `game_file_get`);
+  - `saves`: the client may read and write the saves of those games
+    (`save_spec`, `save_manifest`, `file_get`, `file_put`, `save_apply`).
+    It needs `library`;
+  - `launch`: the client may ask this device to start a game
+    (`launch_game`). This is `launch_devices` (section 17), kept as it is
+    and now listed with the rest, because starting a program is more than
+    sharing files.
+- **Advertised per device.** The hello this host answers states, after the
+  core's features, what it offers *to the device that asked*:
+  `offers_library` and `offers_saves` (`Host::offers`). So a client knows
+  what to show without asking for something it will be refused. `launch`
+  stays stated whatever the switch says: it names what the agent can do,
+  and a device that may not start games is answered `not_allowed`
+  (section 17), which a handheld that sees no `launch` would read as an
+  agent too old instead.
+- **Gated where it is served.** The server checks the offer for each request
+  above, again at each request so a change holds at once. One that is not
+  offered gets an `error` whose `code` is `not_offered` and whose message
+  says only that, and learns nothing about the host's games. A save file
+  sent to a host that does not offer saves is read through and refused, so
+  the session goes on.
+  What a client sends of its own (`library_push`, `game_put_*`) is the
+  client's choice to give and is accepted as now.
+- **Accepting a game** is the client's: it copies the game's folder with
+  `core::gamecopy` (section 7) into its first game folder, as a version
+  folder. "Saves too", on by default, also brings the game's saves when the
+  host offers `saves`. The client keeps a list of the games it accepted
+  from each host, and for each whether to keep in step (off unless the
+  person turns it on; owner, 2026-10-23): when on, each later
+  session syncs that game's saves both ways (section 6) and a newer version
+  on the host is shown as an update, as droidtop shows one (section 7).
+- **Never merged** (owner, 2026-10-23: "The computer can be aware of it, but
+  mostly for sync and update purposes"). Another device's games are that
+  device's, on either side: a client shows a host's offered library as "On
+  Desk", and a computer keeps what a handheld tells it as the handheld's,
+  never as its own games. It uses them to sync saves and to see which
+  versions each device has. A game a client accepted joins its own library
+  because it is now installed there.
+- **Plugin data is not offered** (owner, 2026-10-23: syncing plugin state
+  "is a security risk, so no"). An offer never carries plugin contexts
+  (section 8), and a computer never syncs them with another computer
+  (`Host::syncs_contexts`: a paired handheld only).
+- **Handhelds start offered.** A handheld assumes a computer it pairs with
+  is its library host and its save host. So when a handheld pairs, the
+  computer's offer to it starts with `library` and `saves` on (and `launch`
+  off, as now), which is today's behaviour, and an onboarding step at
+  pairing lets the person change that. A computer that pairs with a
+  computer starts with nothing offered either way. Devices paired before
+  offers existed are read the same way by kind: a handheld (or a device with
+  no kind, which is one) starts with `library` and `saves`, a computer with
+  nothing.
+- **Where the person sets it.** The window's Settings lists each paired
+  device under "Offered" with three switches (Library, Saves, Starting games
+  here), replacing the "Start games" list; Pythia shows the same switches on
+  each device's page (`droidtop_agent.store.set_offer`, and `offered` in
+  `devices()`). `droidtop-agent offer` lists them and `droidtop-agent offer
+  <id> library|saves|launch on|off` changes one. They are kept in
+  `Settings::offers` by device id only once the person changes one, so a
+  device's default follows its kind until then (`offer_for`).
+

@@ -15,7 +15,7 @@ use droidtop_agent_core::saves;
 use droidtop_agent_saves::copies::{self, GameCopies, Kept};
 use droidtop_agent_scan::Found;
 use droidtop_agent_service::{autostart, rendezvous, scan_options, Agent};
-use droidtop_agent_store::{read_json, Settings};
+use droidtop_agent_store::{offer_for, read_json, Settings};
 use eframe::egui::{self, Color32, RichText};
 use {droidtop_agent_contexts as contexts, droidtop_agent_pair as pair};
 
@@ -1093,20 +1093,36 @@ impl App {
                 }
             });
             ui.end_row();
-            ui.label("Start games");
+            ui.label("Offered");
             ui.vertical(|ui| {
                 if devices.is_empty() {
-                    ui.label("No handheld is paired.");
+                    ui.label("No device is paired.");
                 }
                 for d in &devices {
-                    let mut on = draft.launch_devices.contains(&d.id);
-                    let text = format!("Let {} start Steam games on this computer (to stream them with Steam Link)", d.name);
-                    if ui.checkbox(&mut on, text).changed() {
-                        draft.launch_devices.retain(|id| *id != d.id);
-                        if on {
-                            draft.launch_devices.push(d.id.clone());
+                    // What this computer gives each device; a handheld starts
+                    // with its library and saves, a computer with nothing
+                    // (docs/DESIGN.md section 20). Saves need the library.
+                    let mut offer = offer_for(draft, d);
+                    let mut launch = draft.launch_devices.contains(&d.id);
+                    ui.label(egui::RichText::new(&d.name).strong());
+                    ui.horizontal(|ui| {
+                        let library = ui.checkbox(&mut offer.library, "Library").changed();
+                        let saves = ui.checkbox(&mut offer.saves, "Saves").changed();
+                        if library || saves {
+                            if library {
+                                offer.saves &= offer.library;
+                            } else {
+                                offer.library |= offer.saves;
+                            }
+                            draft.offers.insert(d.id.clone(), offer);
                         }
-                    }
+                        if ui.checkbox(&mut launch, "Starting games here").changed() {
+                            draft.launch_devices.retain(|id| *id != d.id);
+                            if launch {
+                                draft.launch_devices.push(d.id.clone());
+                            }
+                        }
+                    });
                 }
             });
             ui.end_row();

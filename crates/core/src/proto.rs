@@ -170,6 +170,28 @@ pub enum Launch {
     Failed { message: String },
 }
 
+/// What a device offers one other device (docs/DESIGN.md section 20):
+/// nothing unless the person, or a handheld's pairing, set it.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Offer {
+    /// Its library: the other device may read it and copy any game in it.
+    #[serde(default)]
+    pub library: bool,
+    /// The saves of those games: the other device may read and write them.
+    #[serde(default)]
+    pub saves: bool,
+}
+
+impl Offer {
+    pub const NONE: Offer = Offer { library: false, saves: false };
+    /// What a computer offers a handheld unless the person changed it.
+    pub const LIBRARY_AND_SAVES: Offer = Offer { library: true, saves: true };
+}
+
+/// The `code` of an [`Response::Error`] for a request the device does not
+/// offer to the one that asked.
+pub const NOT_OFFERED: &str = "not_offered";
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Response {
@@ -197,6 +219,9 @@ pub enum Response {
     Ok,
     Error {
         message: String,
+        /// A reason a program can act on ([`NOT_OFFERED`]); absent for others.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
     LibraryChanges {
         changes: Vec<Change>,

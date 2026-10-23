@@ -28,6 +28,12 @@ impl Host for Pc {
     fn name(&self) -> String {
         "PC".into()
     }
+    fn offers(&self, _peer: &PeerId) -> droidtop_agent_core::proto::Offer {
+        droidtop_agent_core::proto::Offer::LIBRARY_AND_SAVES
+    }
+    fn syncs_contexts(&self, _peer: &PeerId) -> bool {
+        true
+    }
     fn saves(&self, _game: &GameRef) -> Option<(SaveSpec, Roots)> {
         None
     }

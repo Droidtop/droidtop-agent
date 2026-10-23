@@ -180,7 +180,7 @@ fn save_baseline(path: &Path, m: &Manifest) -> Result<()> {
 fn ask<S: Read + Write>(ch: &mut Channel<S>, request: &Request) -> Result<Response> {
     ch.send_json(request)?;
     match ch.recv_json()? {
-        Response::Error { message } => Err(Error::Remote(message)),
+        Response::Error { message, .. } => Err(Error::Remote(message)),
         other => Ok(other),
     }
 }
@@ -315,7 +315,7 @@ fn pull<S: Read + Write>(
         ch.send_json(&Request::FileGet { game: req.game.clone(), name: entry.name.clone() })?;
         let file = match ch.recv_json()? {
             Response::File { file } => file,
-            Response::Error { message } => return Err(Error::Remote(message)),
+            Response::Error { message, .. } => return Err(Error::Remote(message)),
             other => return Err(protocol(format!("expected a file, got {other:?}"))),
         };
         if manifest::key(&file.name) != manifest::key(&entry.name) || !spec.matches(&file.name) {
@@ -366,7 +366,7 @@ fn push<S: Read + Write>(
         send_contents(ch, &path, file.size)?;
         match ch.recv_json()? {
             Response::Ok => {}
-            Response::Error { message } => return Err(Error::Remote(message)),
+            Response::Error { message, .. } => return Err(Error::Remote(message)),
             other => return Err(protocol(format!("expected ok, got {other:?}"))),
         }
         bytes += file.size;
