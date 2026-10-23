@@ -443,6 +443,12 @@ impl Store {
         self.settings.lock().unwrap().offers.insert(id.to_string(), offer);
     }
 
+    /// Whether [`peer`] paired as a computer.
+    pub fn is_computer(&self, peer: &PeerId) -> bool {
+        let id = peer.to_hex();
+        self.devices_now().iter().any(|d| d.id == id && d.kind == Some(Kind::Computer))
+    }
+
     /// Whether [`peer`] may sync plugin contexts here (section 8): a paired
     /// handheld, never a computer.
     pub fn syncs_contexts(&self, peer: &PeerId) -> bool {

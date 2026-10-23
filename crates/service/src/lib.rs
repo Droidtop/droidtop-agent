@@ -9,6 +9,7 @@ pub mod events;
 pub mod host;
 pub mod launch;
 pub mod manager;
+pub mod remote;
 pub mod rendezvous;
 pub mod secure_screen;
 pub mod serve;

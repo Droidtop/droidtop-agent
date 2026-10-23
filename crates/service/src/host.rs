@@ -175,7 +175,20 @@ impl Host for Agent {
 
     fn library_pull(&self, peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)> {
         self.fresh_scan(120);
-        let (changes, cursor) = self.store.library_now().changes_since(since);
+        let library = self.store.library_now();
+        let (mut changes, cursor) = library.changes_since(since);
+        // A computer is offered this computer's own games, never what it
+        // knows of other devices' (docs/DESIGN.md section 20): their installs
+        // and the marks on games only they have stay here, and so do the
+        // applications the scan lists (`app:` keys), which are no games.
+        if self.store.is_computer(peer) {
+            let own = self.store.peer_id().to_hex();
+            let mine = |game: &str| !game.starts_with("app:") && library.games.get(game).is_some_and(|g| g.installs.contains_key(&own));
+            changes.retain(|c| match c {
+                Change::Install { game, device, .. } => *device == own && mine(game),
+                Change::Mark { game, .. } => mine(game),
+            });
+        }
         if !changes.is_empty() {
             let device = self.store.device_name(peer);
             self.events.info(

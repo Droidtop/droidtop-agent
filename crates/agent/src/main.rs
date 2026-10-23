@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use droidtop_agent_core::keys::{short, PeerId};
 use droidtop_agent_core::library::title_key;
-use droidtop_agent_core::proto::GameRef;
+use droidtop_agent_core::proto::{GameRef, Launch};
 use droidtop_agent_core::saves;
 
 use droidtop_agent_saves::ludusavi;
@@ -78,6 +78,11 @@ Usage:
                                        a computer with nothing)
   droidtop-agent offer <id> library|saves|launch on|off
                                        Change one (the start of its id is enough); saves need the library
+  droidtop-agent offered <id>          What a paired device offers this computer, and its games
+  droidtop-agent accept <id> <game>    Copy a game a device offers into this computer's first game folder
+                                       (its key, or the start of its title)
+  droidtop-agent play-on <id> <game>   Ask that device to start the game there and stream it
+  droidtop-agent accepted              The games this computer accepted from other devices
   droidtop-agent launch                Which handhelds may start games on this computer (none until you allow one)
   droidtop-agent launch allow <id>     Let a handheld start Steam games here, e.g. for streaming them with
                                        Steam Link (the start of its id is enough)
@@ -348,6 +353,20 @@ fn main() {
             Ok(())
         }
         ["offer", id, what @ ("library" | "saves" | "launch"), on @ ("on" | "off")] => offer_switch(&agent, id, what, *on == "on"),
+        ["offered", id] => offered(&agent, id),
+        ["accept", id, key] => accept(&agent, id, key),
+        ["play-on", id, key] => play_on(&agent, id, key),
+        ["accepted"] => {
+            let all = agent.accepted();
+            if all.is_empty() {
+                println!("No game was accepted from another device.");
+            }
+            for a in all {
+                let from = PeerId::from_hex(&a.from).map(|p| agent.store.device_name(&p)).unwrap_or(a.from.clone());
+                println!("{}  from {from}  {}", a.title, a.folder.display());
+            }
+            Ok(())
+        }
         ["autostart"] => {
             println!("Starting when you sign in: {}", if autostart::enabled() { "on" } else { "off" });
             Ok(())
@@ -408,6 +427,76 @@ fn offers(agent: &Agent) {
         let given = if given.is_empty() { "nothing".to_string() } else { given.join(", ") };
         println!("{}  {}  offered: {given}", &d.id[..16], d.name);
     }
+}
+
+/// The paired device whose id starts with [`id`].
+fn one_device(agent: &Agent, id: &str) -> Result<PeerId, String> {
+    let matches: Vec<String> =
+        agent.store.devices_now().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
+    match matches.as_slice() {
+        [one] => PeerId::from_hex(one).map_err(|e| e.to_string()),
+        [] => Err("No paired device has that id.".into()),
+        _ => Err("More than one paired device starts with that; give more of the id.".into()),
+    }
+}
+
+/// The offered game [`key`] (or the start of its title) on [`peer`].
+fn offered_game(agent: &Agent, peer: &PeerId, key: &str) -> Result<GameRef, String> {
+    let seen = agent.browse(peer)?;
+    let wanted = key.to_lowercase();
+    let game = seen
+        .games
+        .iter()
+        .find(|g| g.key == key)
+        .or_else(|| seen.games.iter().find(|g| g.title.to_lowercase().starts_with(&wanted)))
+        .ok_or_else(|| format!("{} offers no game {key}.", seen.name))?;
+    Ok(GameRef { key: game.key.clone(), title: game.title.clone() })
+}
+
+fn offered(agent: &Agent, id: &str) -> Result<(), String> {
+    let peer = one_device(agent, id)?;
+    let seen = agent.browse(&peer)?;
+    let given: Vec<&str> = [("its library", seen.offered.library), ("its saves", seen.offered.saves)]
+        .into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(what, _)| what)
+        .collect();
+    println!("{} offers this computer {}.", seen.name, if given.is_empty() { "nothing".to_string() } else { given.join(" and ") });
+    for g in &seen.games {
+        let version = g.version.as_deref().map(|v| format!(" {v}")).unwrap_or_default();
+        println!("{:<40} {:<36}{version}{}", g.title, g.key, if g.accepted { "  (accepted)" } else { "" });
+    }
+    Ok(())
+}
+
+fn accept(agent: &Agent, id: &str, key: &str) -> Result<(), String> {
+    let peer = one_device(agent, id)?;
+    let game = offered_game(agent, &peer, key)?;
+    let mut shown = 0u64;
+    let accepted = agent.accept(&peer, &game, &mut |done: u64, total: u64| {
+        let percent = (done * 100).checked_div(total).unwrap_or(100);
+        if percent >= shown + 10 || done == total {
+            shown = percent;
+            println!("{percent}%");
+        }
+    })?;
+    println!("Copied {} into {}.", accepted.title, accepted.folder.display());
+    Ok(())
+}
+
+fn play_on(agent: &Agent, id: &str, key: &str) -> Result<(), String> {
+    let peer = one_device(agent, id)?;
+    let game = offered_game(agent, &peer, key)?;
+    let said = match agent.play_on(&peer, &game)? {
+        Launch::Started { stream: Some(s) } => format!("Started; it streams through {s}."),
+        Launch::Started { stream: None } => "Started.".into(),
+        Launch::NotAllowed => "That device does not let this computer start games there.".into(),
+        Launch::UnknownGame => "That device does not have that game installed.".into(),
+        Launch::SteamNotRunning => "Steam is not running on that device.".into(),
+        Launch::Failed { message } => format!("It could not start: {message}"),
+    };
+    println!("{said}");
+    Ok(())
 }
 
 fn offer_switch(agent: &Agent, id: &str, what: &str, on: bool) -> Result<(), String> {
