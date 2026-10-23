@@ -37,6 +37,7 @@ Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
 17. Starting a game for a handheld
 18. Syncthing with the paired devices
 19. Service mode: Windows security screens
+21. Plugins on the computer
 
 ## 1. What droidtop already has
 
@@ -1225,3 +1226,87 @@ and Pythia, built from these crates, is another
 - **Not yet:** using the helper. Showing and answering a security screen
   from a handheld needs the screen-sharing side, which is windowcast's; this
   section covers only the person's switch.
+
+## 21. Plugins on the computer
+
+Owner (2026-10-23): computer-side plugins can do what a handheld's can where
+it makes sense ("Downloaders and stuff are great"), and droidtop's Python
+plugins are the computer's plugins too: "We're simplifying by just
+completely reusing the python plugin system." Both the command-line agent
+and Pythia host them, through a broker in Rust; the agent gets "a minimal
+python environment", bundled, because the sandbox must control it. And:
+"sandboxing needs to ensure that calls CAN'T be run if they aren't allowed."
+
+- **The same plugins.** A droidtop plugin of kind `python` (contract 2: a
+  module-level `handle(call_json) -> reply_json`, and `droidtop.host.call`
+  and `droidtop.host.open` for everything it asks; droidtop
+  docs/plugin-api.md 1.3) runs on the computer unchanged. Its manifest,
+  signature, catalog source and trust tier are droidtop's (plugin-api 1.2
+  and 4). `native_bundle` and `flutter_embed` plugins are Android programs
+  and do not run here.
+- **One host, in Rust** (`crates/plugins`): it installs plugins, keeps their
+  grants, starts each one confined, and answers its calls. The agent uses it
+  directly and Pythia through `pythia._native`, so both run one
+  implementation and one permission check.
+- **A bundled Python.** A small CPython, its version pinned, ships beside the
+  agent and in Pythia's wheels: the interpreter, the standard library as one
+  zip, and the standard library's own extension modules. No `pip` and no
+  `site-packages`. A plugin brings only its own Python files. Pythia never
+  runs a plugin in its own interpreter. The `droidtop` and `droidtop.host`
+  modules are this host's, speaking the same JSON as droidtop's
+  (`plugin-host/native/src/droidtoppy_jni.c` on the handheld) over the
+  sandbox's channel to the broker.
+- **Confined by the operating system, so a call that is not allowed cannot
+  be made.** Each plugin runs in its own process under bi0shacker001/sandbox:
+  seccomp lockdown with every path call brokered on Linux (built), an
+  AppContainer in a job object on Windows, and a Seatbelt profile on macOS
+  (Droidtop/tracker#606). The process holds only its channel to the broker:
+  it can open no file by itself, has no network, and can start no program.
+  Python is not trusted for any of this (`ctypes`, sockets and `subprocess`
+  end at the same refused system calls).
+- **Fail closed.** Plugins do not run on a system whose sandbox backend is not
+  built and passing its escape tests; the host says so and starts nothing.
+- **The broker checks every call** against what the manifest declares and the
+  person granted, at each call. It answers with droidtop's replies and closed
+  set of error codes: a call outside the grants is `PERMISSION_DENIED`, and
+  an op this computer does not serve is `UNSUPPORTED`, so a plugin written for
+  the handheld learns what is not here the way it already does.
+- **What a computer serves** (from plugin-api 3):
+  - as on the handheld: jobs (J1), host info (J4), events (J2), the plugin's
+    own storage (H1, under the host's data folder), the vault (G1, in the
+    system's keychain), background services and schedules (E8, E9), network
+    state and requests to declared domains (D1, D2), web sessions (G3), the
+    GitHub token (G4), sources and downloads (A2: `search`, `lookup`,
+    `options`, `acquire` into a game folder the host chose, then
+    `library.files.report_changed`), metadata, artwork, update checks and
+    BIOS providers (A3, A4, A6, A11), and UI as data: settings rows,
+    notifications, toasts, prompts and rows on a game's page (C1, C6, C6a,
+    C14, C18), drawn from the view schema (plugin-api 1.6) by Pythia and the
+    agent's window;
+  - in a computer's own form: library reads (A1, this computer's library),
+    launch providers and hooks (B1, B3, through the `Launcher` of section
+    17), save locations and sync (A7), syncable data (F8, section 8),
+    installed programs (F1, F4), storage and files (D3, D5), the tray (C8),
+    "open with" (C9), and a plugin's own UI (C16, a window);
+  - not at all (`UNSUPPORTED`): the gaming shell and Quick Menu points,
+    in-game overlays, controller mapping, performance, RetroArch's commands,
+    Android app catalogs, intents, root and Shizuku, and the device's
+    hardware.
+- **Granted on the computer.** Installing a plugin there and granting its
+  permissions is the person's, on that computer: Pythia's plugin page, the
+  agent's window, or `droidtop-agent plugins`. A grant on the handheld does
+  not grant on the computer.
+
+Open:
+
+1. Where a computer finds plugins: droidtop's catalog sources added on the
+   computer, a handheld offering the plugins it has to its computers, or
+   both. Default here: both, each installed only when the person approves on
+   the computer.
+2. Whether the computer half of a plugin is the same package as its handheld
+   half (one manifest, with the points it provides per system) or may be a
+   package of its own. Default here: one package; a manifest names what it
+   provides on a computer.
+3. Whether section 8's `computers.context_adapter` programs go away once a
+   plugin's computer half runs here. Default here: yes, after the move;
+   protocol 1 adapters keep working until then.
