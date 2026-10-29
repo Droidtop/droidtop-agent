@@ -6,7 +6,6 @@
 
 use droidtop_agent_core::sync::LockExt;
 use std::net::{TcpListener, UdpSocket};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -19,7 +18,7 @@ use droidtop_agent_core::tunnel;
 use droidtop_agent_core::PORT;
 use serde_json::json;
 
-use crate::Agent;
+use crate::{periodic, Agent};
 
 pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", PORT))?;
@@ -28,7 +27,9 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
         format!("{} ({}) is listening on port {PORT}.", agent.store.name(), short(&agent.store.peer_id())),
         json!({ "name": agent.store.name(), "id": agent.store.peer_id().to_hex(), "port": PORT }),
     );
-    let stop = Arc::new(AtomicBool::new(false));
+    // The flag the discovery answerer and the WireGuard loop poll; Agent::shutdown sets it.
+    let stop = agent.stop.flag();
+    agent.stop.listening_on(listener.local_addr()?);
 
     match UdpSocket::bind(("0.0.0.0", PORT)) {
         Ok(sock) => {
@@ -48,35 +49,30 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
         ),
     }
 
-    {
-        let a = agent.clone();
-        thread::spawn(move || loop {
+    periodic::spawn(
+        "scan",
+        &agent,
+        Duration::ZERO,
+        |a| Duration::from_secs(a.store.settings.locked().scan_minutes.max(5) * 60),
+        |a| {
             let changes = a.rescan();
             if changes > 0 {
                 a.events.info("library", format!("Library: {changes} changes from the scan."), json!({ "changes": changes }));
             }
-            let minutes = a.store.settings.locked().scan_minutes.max(5);
-            thread::sleep(Duration::from_secs(minutes * 60));
-        });
-    }
-
-    {
-        let a = agent.clone();
-        thread::spawn(move || loop {
-            if let Err(e) = crate::share::process(&a) {
+        },
+    );
+    periodic::spawn(
+        "share",
+        &agent,
+        Duration::ZERO,
+        |_| Duration::from_secs(60),
+        |a| {
+            if let Err(e) = crate::share::process(a) {
                 a.events.warn("share", format!("Cloud share: {e}"), json!({}));
             }
-            thread::sleep(Duration::from_secs(60));
-        });
-    }
-
-    {
-        let a = agent.clone();
-        thread::spawn(move || loop {
-            crate::syncthing::tick(&a);
-            thread::sleep(Duration::from_secs(30));
-        });
-    }
+        },
+    );
+    periodic::spawn("syncthing", &agent, Duration::ZERO, |_| Duration::from_secs(30), crate::syncthing::tick);
 
     // Direct WireGuard for a paired handheld away from the LAN: dual-stack
     // where the system allows it, and IPv4 beside it where it does not
@@ -126,6 +122,9 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
     }
 
     for stream in listener.incoming() {
+        if agent.stop.is_stopped() {
+            break;
+        }
         let Ok(stream) = stream else { continue };
         let a = agent.clone();
         thread::spawn(move || {

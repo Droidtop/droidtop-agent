@@ -41,6 +41,8 @@ pub struct Agent {
     /// The program hosting the agent, when it starts games of its own
     /// (crate::launch::Launcher): Pythia, for the games it tracks.
     pub launcher: Mutex<Option<std::sync::Arc<dyn crate::launch::Launcher>>>,
+    /// Ends the recurring work and the listener ([`Agent::shutdown`]).
+    pub stop: crate::periodic::Stop,
 }
 
 impl Agent {
@@ -57,8 +59,14 @@ impl Agent {
             rendezvous: Default::default(),
             events: Events::default(),
             launcher: Mutex::new(None),
+            stop: crate::periodic::Stop::new(store.changes.clone()),
             store,
         })
+    }
+
+    /// Stops everything `serve::run` started: its recurring tasks end and the listener returns.
+    pub fn shutdown(&self) {
+        self.stop.stop();
     }
 
     /// Where a game keeps its saves on this computer ([`Saves::lookup`]),

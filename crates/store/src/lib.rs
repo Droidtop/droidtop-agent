@@ -347,6 +347,9 @@ pub struct Store {
     /// still answered until every paired handheld has heard of the move.
     pub previous: Option<DeviceKey>,
     pub settings: Mutex<Settings>,
+    /// Notified when the settings are saved or taken in from another copy of the agent, for work that follows them
+    /// (the service's periodic tasks re-read their interval at once).
+    pub changes: std::sync::Arc<droidtop_agent_core::sync::Pulse>,
     /// The paired devices as last read; [`Store::devices_now`] and
     /// [`Store::edit_devices`] keep it current with the file.
     devices: Mutex<Vec<Device>>,
@@ -374,6 +377,7 @@ impl Store {
         let library = Library::load(&dirs.library())?;
         Ok(Store {
             settings: Mutex::new(read_json(&dirs.settings())?),
+            changes: Default::default(),
             devices_stamp: Mutex::new(stamp(&dirs.peers())),
             devices: Mutex::new(devices),
             previous,
@@ -476,7 +480,9 @@ impl Store {
     }
 
     pub fn save_settings(&self) -> io::Result<()> {
-        write_json(&self.dirs.settings(), &*self.settings.locked())
+        let saved = write_json(&self.dirs.settings(), &*self.settings.locked());
+        self.changes.notify();
+        saved
     }
 
     /// Takes in settings another copy of the agent (the window, a command
@@ -484,6 +490,7 @@ impl Store {
     pub fn reload_settings(&self) {
         if let Ok(fresh) = read_json::<Settings>(&self.dirs.settings()) {
             *self.settings.locked() = fresh;
+            self.changes.notify();
         }
     }
 

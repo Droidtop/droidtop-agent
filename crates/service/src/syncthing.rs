@@ -419,7 +419,7 @@ static STARTED: Mutex<Option<Child>> = Mutex::new(None);
 /// Starts Syncthing over `home` with no browser and no monitor process (a
 /// pass starts it again if it stopped), and waits up to `wait` for
 /// its configuration and API. Syncthing makes `home` the first time.
-fn start(program: &Path, home: &Path, wait: Duration) -> Result<Rest, String> {
+fn start(program: &Path, home: &Path, wait: Duration, stop: &crate::periodic::Stop) -> Result<Rest, String> {
     let mut started = STARTED.locked();
     if let Some(child) = started.as_mut() {
         if child.try_wait().ok().flatten().is_some() {
@@ -456,7 +456,10 @@ fn start(program: &Path, home: &Path, wait: Duration) -> Result<Rest, String> {
         if Instant::now() > until {
             return Err("Syncthing started but its API did not answer".into());
         }
-        std::thread::sleep(Duration::from_millis(500));
+        // Asked again every half second, and ended by the agent stopping.
+        if stop.sleep(Duration::from_millis(500)) {
+            return Err("Syncthing's start was abandoned: the agent is stopping".into());
+        }
     }
 }
 
@@ -509,7 +512,7 @@ fn pass(agent: &Agent) -> Result<Pass, String> {
         Some(rest) => rest,
         None => {
             let program = program().ok_or("Syncthing is not installed on this computer")?;
-            start(&program, &home, Duration::from_secs(60))?
+            start(&program, &home, Duration::from_secs(60), &agent.stop)?
         }
     };
     let value = announcement(&rest.config, &lan_ips());
@@ -638,7 +641,8 @@ mod tests {
         let home = std::env::temp_dir().join(format!("dta-syncthing-real-{}", std::process::id()));
         let _ = fs::remove_dir_all(&home);
         std::env::set_var("STNODEFAULTFOLDER", "1");
-        let rest = start(&program, &home, Duration::from_secs(60)).unwrap();
+        let stop = crate::periodic::Stop::new(Default::default());
+        let rest = start(&program, &home, Duration::from_secs(60), &stop).unwrap();
         let status = rest.get("/rest/system/status").unwrap();
         assert_eq!(status["myID"].as_str().unwrap(), rest.config.device_id);
 

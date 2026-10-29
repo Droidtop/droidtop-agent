@@ -17,14 +17,13 @@
 use droidtop_agent_core::sync::LockExt;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use droidtop_agent_core::rendezvous::{self, Answer, Server, StunKeeper};
 use droidtop_agent_core::tunnel::Hooks;
 use serde::{Deserialize, Serialize};
 
-use crate::Agent;
+use crate::{periodic, Agent};
 
 /// What the WireGuard loop and the announcer share.
 #[derive(Default)]
@@ -104,7 +103,7 @@ pub struct Status {
 /// Announces and looks up for as long as the agent runs. Blocking work
 /// (names, https) happens here, never in the WireGuard loop.
 pub fn run(agent: Arc<Agent>) {
-    thread::spawn(move || {
+    {
         let Ok(cert) = rendezvous::certificate(&agent.store.key) else {
             agent.events.warn(
                 "rendezvous",
@@ -120,75 +119,80 @@ pub fn run(agent: Arc<Agent>) {
         // Never before a server's Retry-After, or 5 minutes after a failure.
         let mut blocked_until = Instant::now();
         let mut lookup_at: std::collections::BTreeMap<String, Instant> = Default::default();
-        loop {
-            thread::sleep(Duration::from_secs(5));
-            let (on, servers, stun) = {
-                let s = agent.store.settings.locked();
-                (s.rendezvous, Server::list(&s.discovery_servers), s.stun_servers.clone())
-            };
-            if !on {
-                agent.rendezvous.locked().stun.clear();
-                continue;
-            }
-            if stun_resolved.is_none_or(|t| t.elapsed() > Duration::from_secs(3600)) {
-                let resolved = rendezvous::resolve_stun(&stun);
-                stun_resolved = Some(Instant::now());
-                agent.rendezvous.locked().stun = resolved;
-            }
-            // Announce what this computer can be reached at, when it changed
-            // (after a 5 s settle, as Syncthing does) or when the server said.
-            let addresses = addresses(&agent);
-            if !addresses.is_empty() && (addresses != announced || Instant::now() >= announce_at) {
-                if addresses != announced && Instant::now() + Duration::from_secs(5) < announce_at {
-                    announce_at = (Instant::now() + Duration::from_secs(5)).max(blocked_until);
+        periodic::spawn(
+            "rendezvous",
+            &agent,
+            Duration::from_secs(5),
+            |_| Duration::from_secs(5),
+            move |agent| {
+                let (on, servers, stun) = {
+                    let s = agent.store.settings.locked();
+                    (s.rendezvous, Server::list(&s.discovery_servers), s.stun_servers.clone())
+                };
+                if !on {
+                    agent.rendezvous.locked().stun.clear();
+                    return;
                 }
-                if Instant::now() >= announce_at {
-                    match rendezvous::announce(&servers, &cert, &addresses) {
-                        Answer::Announced(after) => {
-                            announced = addresses.clone();
-                            announce_at = Instant::now() + after;
-                            status.announced = addresses;
-                            status.announced_at_ms = droidtop_agent_core::library::now_ms();
-                            status.next_announce_ms = status.announced_at_ms + after.as_millis() as i64;
-                            status.last_problem = None;
-                        }
-                        Answer::Wait(after) => {
-                            announce_at = Instant::now() + after;
-                            blocked_until = announce_at;
-                            status.last_problem = Some(format!("announcing failed; trying again in {} s", after.as_secs()));
-                        }
-                        Answer::Found(_) => {}
+                if stun_resolved.is_none_or(|t| t.elapsed() > Duration::from_secs(3600)) {
+                    let resolved = rendezvous::resolve_stun(&stun);
+                    stun_resolved = Some(Instant::now());
+                    agent.rendezvous.locked().stun = resolved;
+                }
+                // Announce what this computer can be reached at, when it changed
+                // (after a 5 s settle, as Syncthing does) or when the server said.
+                let addresses = addresses(agent);
+                if !addresses.is_empty() && (addresses != announced || Instant::now() >= announce_at) {
+                    if addresses != announced && Instant::now() + Duration::from_secs(5) < announce_at {
+                        announce_at = (Instant::now() + Duration::from_secs(5)).max(blocked_until);
                     }
-                }
-            }
-            // Look the paired handhelds up on Syncthing's schedule.
-            let devices: Vec<(String, String)> =
-                agent.store.devices_now().iter().filter_map(|d| d.disco.clone().map(|id| (d.name.clone(), id))).collect();
-            for (name, id) in devices {
-                if lookup_at.get(&id).is_some_and(|t| Instant::now() < *t) {
-                    continue;
-                }
-                match rendezvous::lookup(&servers, &id) {
-                    Answer::Found(found) => {
-                        lookup_at.insert(id.clone(), Instant::now() + rendezvous::FOUND_CACHE);
-                        let until = Instant::now() + rendezvous::FOUND_CACHE;
-                        let mut shared = agent.rendezvous.locked();
-                        for to in rendezvous::wg_endpoints(&found).into_iter().filter(SocketAddr::is_ipv4) {
-                            shared.punch.retain(|(a, _)| *a != to);
-                            shared.punch.push((to, until));
-                            status.found.retain(|(n, _)| *n != name);
-                            status.found.push((name.clone(), to.to_string()));
+                    if Instant::now() >= announce_at {
+                        match rendezvous::announce(&servers, &cert, &addresses) {
+                            Answer::Announced(after) => {
+                                announced = addresses.clone();
+                                announce_at = Instant::now() + after;
+                                status.announced = addresses;
+                                status.announced_at_ms = droidtop_agent_core::library::now_ms();
+                                status.next_announce_ms = status.announced_at_ms + after.as_millis() as i64;
+                                status.last_problem = None;
+                            }
+                            Answer::Wait(after) => {
+                                announce_at = Instant::now() + after;
+                                blocked_until = announce_at;
+                                status.last_problem = Some(format!("announcing failed; trying again in {} s", after.as_secs()));
+                            }
+                            Answer::Found(_) => {}
                         }
                     }
-                    Answer::Wait(after) | Answer::Announced(after) => {
-                        lookup_at.insert(id.clone(), Instant::now() + after.max(rendezvous::NOT_FOUND_CACHE));
+                }
+                // Look the paired handhelds up on Syncthing's schedule.
+                let devices: Vec<(String, String)> =
+                    agent.store.devices_now().iter().filter_map(|d| d.disco.clone().map(|id| (d.name.clone(), id))).collect();
+                for (name, id) in devices {
+                    if lookup_at.get(&id).is_some_and(|t| Instant::now() < *t) {
+                        continue;
+                    }
+                    match rendezvous::lookup(&servers, &id) {
+                        Answer::Found(found) => {
+                            lookup_at.insert(id.clone(), Instant::now() + rendezvous::FOUND_CACHE);
+                            let until = Instant::now() + rendezvous::FOUND_CACHE;
+                            let mut shared = agent.rendezvous.locked();
+                            for to in rendezvous::wg_endpoints(&found).into_iter().filter(SocketAddr::is_ipv4) {
+                                shared.punch.retain(|(a, _)| *a != to);
+                                shared.punch.push((to, until));
+                                status.found.retain(|(n, _)| *n != name);
+                                status.found.push((name.clone(), to.to_string()));
+                            }
+                        }
+                        Answer::Wait(after) | Answer::Announced(after) => {
+                            lookup_at.insert(id.clone(), Instant::now() + after.max(rendezvous::NOT_FOUND_CACHE));
+                        }
                     }
                 }
-            }
-            status.mapped = agent.rendezvous.locked().mapped.map(|m| m.to_string());
-            let _ = droidtop_agent_store::write_json(&agent.store.dirs.rendezvous(), &status);
-        }
-    });
+                status.mapped = agent.rendezvous.locked().mapped.map(|m| m.to_string());
+                let _ = droidtop_agent_store::write_json(&agent.store.dirs.rendezvous(), &status);
+            },
+        );
+    }
 }
 
 /// What this computer announces: the address STUN found for its WireGuard
