@@ -32,6 +32,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
+use droidtop_agent_core::exec_gate;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -57,28 +58,16 @@ pub struct Adapter {
 /// JSON object it prints.
 fn run(program: &Path, verb: &str, input: Option<Value>) -> Result<Value, String> {
     let name = program.display();
-    let start = || {
+    // Started through the exec gate, so an adapter written a moment ago is never open for writing in a child another thread
+    // is starting (Linux's "text file busy").
+    let mut child = exec_gate::spawn(
         Command::new(program)
             .arg(verb)
             .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    };
-    // A program written a moment ago (an adapter just installed) can still be
-    // open for writing in a process another thread is starting, and Linux then
-    // refuses to run it ("text file busy") until that process has started.
-    let mut started = start();
-    for _ in 0..20 {
-        match &started {
-            Err(e) if e.raw_os_error() == Some(26) && cfg!(unix) => {
-                std::thread::sleep(Duration::from_millis(50));
-                started = start();
-            }
-            _ => break,
-        }
-    }
-    let mut child = started.map_err(|e| format!("the context adapter {name} could not start ({e})"))?;
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|e| format!("the context adapter {name} could not start ({e})"))?;
     if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
         let mut bytes = serde_json::to_vec(&input).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
@@ -335,12 +324,7 @@ pub fn install(store: &Store, context: &str, offer: &AdapterOffer) -> Result<Pat
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(if cfg!(windows) { "adapter.exe" } else { "adapter" });
     let tmp = dir.join(if cfg!(windows) { "adapter.new.exe" } else { "adapter.new" });
-    std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
-    }
+    exec_gate::write_program(&tmp, &bytes).map_err(|e| e.to_string())?;
     let served = describe(&tmp);
     if !matches!(&served, Ok((id, _)) if id == context) {
         let _ = std::fs::remove_file(&tmp);
@@ -394,12 +378,10 @@ mod tests {
 
     /// A shell script standing in for an adapter.
     fn stand_in(name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("dta-adapter-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("adapter");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        exec_gate::write_program(&path, format!("#!/bin/sh\n{body}\n").as_bytes()).unwrap();
         path
     }
 

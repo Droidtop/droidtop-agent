@@ -439,7 +439,9 @@ fn start(program: &Path, home: &Path, wait: Duration) -> Result<Rest, String> {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        *started = Some(cmd.spawn().map_err(|e| format!("Syncthing ({}) did not start: {e}", program.display()))?);
+        *started = Some(
+            droidtop_agent_core::exec_gate::spawn(&mut cmd).map_err(|e| format!("Syncthing ({}) did not start: {e}", program.display()))?,
+        );
     }
     drop(started);
     let until = Instant::now() + wait;

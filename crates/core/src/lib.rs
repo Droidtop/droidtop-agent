@@ -15,6 +15,7 @@ pub mod context;
 pub mod copy;
 pub mod discovery;
 pub mod error;
+pub mod exec_gate;
 pub mod frame;
 pub mod gamecopy;
 pub mod hex;

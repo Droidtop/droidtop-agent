@@ -70,7 +70,8 @@ impl System for Local {
 
     fn open(&self, url: &str) -> Result<(), String> {
         let mut command = opener(url);
-        let status = command.status().map_err(|e| format!("could not run the system's URL handler ({e})"))?;
+        let status =
+            droidtop_agent_core::exec_gate::status(&mut command).map_err(|e| format!("could not run the system's URL handler ({e})"))?;
         if status.success() {
             Ok(())
         } else {
@@ -104,16 +105,15 @@ fn opener(url: &str) -> std::process::Command {
 #[cfg(windows)]
 fn steam_running() -> bool {
     use std::os::windows::process::CommandExt;
-    std::process::Command::new("tasklist")
-        .args(["/FI", "IMAGENAME eq steam.exe", "/NH", "/FO", "CSV"])
-        .creation_flags(0x0800_0000)
-        .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains("\"steam.exe\""))
+    droidtop_agent_core::exec_gate::output(
+        std::process::Command::new("tasklist").args(["/FI", "IMAGENAME eq steam.exe", "/NH", "/FO", "CSV"]).creation_flags(0x0800_0000),
+    )
+    .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains("\"steam.exe\""))
 }
 
 #[cfg(target_os = "macos")]
 fn steam_running() -> bool {
-    std::process::Command::new("pgrep").args(["-x", "steam_osx"]).status().is_ok_and(|s| s.success())
+    droidtop_agent_core::exec_gate::status(std::process::Command::new("pgrep").args(["-x", "steam_osx"])).is_ok_and(|s| s.success())
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]

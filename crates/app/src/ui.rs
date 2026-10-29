@@ -262,7 +262,7 @@ fn open_folder(path: &Path) {
     } else {
         "xdg-open"
     };
-    let _ = std::process::Command::new(program).arg(path).spawn();
+    let _ = droidtop_agent_core::exec_gate::spawn(std::process::Command::new(program).arg(path));
 }
 
 fn games_count(n: usize) -> String {

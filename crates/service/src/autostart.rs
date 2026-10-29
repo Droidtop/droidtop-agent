@@ -116,7 +116,7 @@ mod system {
         std::env::var_os("XDG_RUNTIME_DIR").is_some_and(|d| Path::new(&d).join("systemd").is_dir())
     }
     fn systemctl(args: &[&str]) {
-        let _ = std::process::Command::new("systemctl").arg("--user").args(args).status();
+        let _ = droidtop_agent_core::exec_gate::status(std::process::Command::new("systemctl").arg("--user").args(args));
     }
 
     pub fn enabled() -> bool {
