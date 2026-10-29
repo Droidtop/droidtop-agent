@@ -187,7 +187,7 @@ pub fn pair(store: &Store, input: &str) -> Result<String, String> {
     };
     let mut stream =
         TcpStream::connect_timeout(&address, Duration::from_secs(10)).map_err(|e| format!("Could not reach {address}: {e}"))?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+    stream.set_read_timeout(Some(Duration::from_secs(60))).map_err(|e| format!("Could not set up the connection to {address}: {e}"))?;
     let paired = pair_client(&mut stream, &store.key, &store.name(), Kind::Computer, &invite.code)
         .map_err(|e| format!("Pairing did not finish: {e}. Check the code and try again."))?;
     if invite.peer.is_some_and(|p| p != paired.peer) {
@@ -305,7 +305,7 @@ pub fn computers(store: &Store, timeout: Duration) -> Result<Vec<(discovery::Off
 pub fn pick(store: &Store, offer: &discovery::Offer, at: SocketAddr) -> Result<Comparison, String> {
     let mut stream =
         TcpStream::connect_timeout(&at, Duration::from_secs(10)).map_err(|e| format!("Could not reach {} at {at}: {e}", offer.name))?;
-    let _ = stream.set_read_timeout(Some(ANSWER_FOR));
+    stream.set_read_timeout(Some(ANSWER_FOR)).map_err(|e| format!("Could not set up the connection to {at}: {e}"))?;
     let comparing = confirm::client_start(&mut stream, &store.key).map_err(|e| format!("Pairing did not start: {e}"))?;
     if comparing.other.to_hex() != offer.id {
         return Err(format!("The device at {at} is not {}; nothing was paired.", offer.name));

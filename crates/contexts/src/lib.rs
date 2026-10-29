@@ -69,15 +69,15 @@ fn run(program: &Path, verb: &str, input: Option<Value>) -> Result<Value, String
             .stderr(Stdio::piped()),
     )
     .map_err(|e| format!("the context adapter {name} could not start ({e})"))?;
-    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+    let writer = if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
         let mut bytes = serde_json::to_vec(&input).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
         // Written on its own thread, so an adapter that prints before it has
         // read everything cannot leave both sides waiting on a full pipe.
-        thread::spawn(move || {
-            let _ = stdin.write_all(&bytes);
-        });
-    }
+        Some(thread::spawn(move || stdin.write_all(&bytes)))
+    } else {
+        None
+    };
     let mut stdout = child.stdout.take().expect("piped");
     let mut stderr = child.stderr.take().expect("piped");
     let out = thread::spawn(move || {
@@ -105,6 +105,13 @@ fn run(program: &Path, verb: &str, input: Option<Value>) -> Result<Value, String
     };
     let out = out.join().unwrap_or_default();
     let err = err.join().unwrap_or_default();
+    // An adapter that exits without reading its input closes the pipe (a broken pipe is that, not a fault); any other
+    // failure to hand it the input is one, since the adapter then ran on input it never saw.
+    if let Some(Ok(Err(e))) = writer.map(|w| w.join()) {
+        if e.kind() != std::io::ErrorKind::BrokenPipe {
+            return Err(format!("the context adapter {name} could not be given its input ({e})"));
+        }
+    }
     let reply: Option<Value> = serde_json::from_slice(&out).ok();
     if let Some(message) = reply.as_ref().and_then(|r| r["error"].as_str()) {
         return Err(message.to_string());

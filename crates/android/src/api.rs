@@ -230,7 +230,9 @@ fn pair_connect(args: &Value) -> Outcome {
         .map_err(|_| Failure::Error(format!("{at} is not an address such as 192.168.1.20 or 192.168.1.20:{PAIR_PORT}")))?;
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
         .map_err(|e| Failure::Unreachable(format!("the computer did not answer at {address} ({e})")))?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+    stream
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .map_err(|e| Failure::Error(format!("could not set up the connection to {address} ({e})")))?;
     let paired = pairing::pair_client(&mut stream, &key, &name, kind, &invite.code)?;
     if invite.peer.is_some_and(|p| p != paired.peer) {
         return Err(Failure::Error("the device that answered is not the one in the invitation; nothing was paired".into()));
@@ -260,7 +262,9 @@ fn compare_start(args: &Value) -> Outcome {
         args["address"].as_str().and_then(|a| a.parse().ok()).ok_or_else(|| Failure::Error("no address for that computer".into()))?;
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
         .map_err(|e| Failure::Unreachable(format!("the computer did not answer at {address} ({e})")))?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
+    stream
+        .set_read_timeout(Some(Duration::from_secs(120)))
+        .map_err(|e| Failure::Error(format!("could not set up the connection to {address} ({e})")))?;
     let comparing = confirm::client_start(&mut stream, &key)?;
     if comparing.other != want {
         return Err(Failure::Error("the device that answered is not the computer picked; nothing was paired".into()));
@@ -833,9 +837,14 @@ fn serve_start(args: &Value) -> Outcome {
                     Ok((stream, _)) => {
                         let (host, peers) = (host.clone(), peers.clone());
                         thread::spawn(move || {
-                            let _ = stream.set_nonblocking(false);
-                            let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
-                            let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
+                            // Without its timeouts a stalled peer would hold this thread for ever: drop the connection.
+                            let timed = stream
+                                .set_nonblocking(false)
+                                .and_then(|()| stream.set_read_timeout(Some(Duration::from_secs(120))))
+                                .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(120))));
+                            if timed.is_err() {
+                                return;
+                            }
                             let Ok(key) = DeviceKey::from_seed(&seed) else { return };
                             if let Ok(mut ch) = Channel::accept(stream, &key, |p| peers.contains(p)) {
                                 let _ = droidtop_agent_core::server::serve(&mut ch, &*host);

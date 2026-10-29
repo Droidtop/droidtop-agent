@@ -130,8 +130,19 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
         let a = agent.clone();
         thread::spawn(move || {
             let address = stream.peer_addr().ok().map(|p| p.ip().to_string());
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
-            let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
+            // Without its timeouts a stalled peer would hold this thread for ever: refuse the connection.
+            if let Err(e) = stream
+                .set_read_timeout(Some(Duration::from_secs(120)))
+                .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(120))))
+            {
+                let address = address.unwrap_or_default();
+                a.events.warn(
+                    "session",
+                    format!("Refused a connection from {address}: its timeouts could not be set ({e})"),
+                    json!({ "address": address }),
+                );
+                return;
+            }
             // While this computer moves to the identity it shares with
             // windowcast, it answers to its previous one too and tells the
             // handheld (droidtop_agent_store::migrate).

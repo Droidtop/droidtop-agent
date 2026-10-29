@@ -182,8 +182,13 @@ pub fn connect(key: &DeviceKey, target: &Target) -> Result<Session, ConnectError
     loop {
         for addr in std::mem::take(&mut candidates) {
             let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(3)) else { continue };
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
-            let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
+            if let Err(e) = stream
+                .set_read_timeout(Some(Duration::from_secs(120)))
+                .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(120))))
+            {
+                last = format!("its connection could not be set up ({e})");
+                continue;
+            }
             match Channel::connect(Link::Tcp(stream), key, &peer) {
                 Ok(ch) => return hello(ch, addr.to_string(), Path::Lan, key, target.name),
                 Err(e) => last = e.to_string(),
