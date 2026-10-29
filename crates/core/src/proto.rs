@@ -154,10 +154,15 @@ pub enum Launch {
     /// a sign-in or an update before it runs, or by the program hosting the
     /// agent (a desktop manager such as Pythia) for a game of its own.
     /// `stream` says how the handheld shows it: `"windowcast"` for a window
-    /// windowcast can stream; absent, Steam Link as before.
+    /// windowcast can stream; absent, Steam Link as before. `address` is
+    /// where that host's windowcast listens (`HOST:PORT`), for a host that
+    /// knows; absent, the handheld assumes windowcast's default port on the
+    /// address it reached the computer at.
     Started {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stream: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
     },
     /// The person has not let this handheld start games on this computer.
     NotAllowed,
@@ -285,10 +290,14 @@ mod tests {
         let ask = Request::LaunchGame { game: GameRef { key: "steam:440".into(), title: "TF2".into() } };
         assert_eq!(serde_json::to_string(&ask).unwrap(), r#"{"t":"launch_game","game":{"key":"steam:440","title":"TF2"}}"#);
         for (launch, json) in [
-            (Launch::Started { stream: None }, r#"{"t":"launch","outcome":{"result":"started"}}"#),
+            (Launch::Started { stream: None, address: None }, r#"{"t":"launch","outcome":{"result":"started"}}"#),
             (
-                Launch::Started { stream: Some("windowcast".into()) },
+                Launch::Started { stream: Some("windowcast".into()), address: None },
                 r#"{"t":"launch","outcome":{"result":"started","stream":"windowcast"}}"#,
+            ),
+            (
+                Launch::Started { stream: Some("windowcast".into()), address: Some("192.168.1.20:47100".into()) },
+                r#"{"t":"launch","outcome":{"result":"started","stream":"windowcast","address":"192.168.1.20:47100"}}"#,
             ),
             (Launch::NotAllowed, r#"{"t":"launch","outcome":{"result":"not_allowed"}}"#),
             (Launch::UnknownGame, r#"{"t":"launch","outcome":{"result":"unknown_game"}}"#),

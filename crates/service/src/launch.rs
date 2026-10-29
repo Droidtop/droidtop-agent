@@ -55,7 +55,7 @@ pub fn launch(allowed: bool, installed: impl FnOnce() -> bool, game: &GameRef, o
         return Launch::SteamNotRunning;
     }
     match os.open(&url) {
-        Ok(()) => Launch::Started { stream: None },
+        Ok(()) => Launch::Started { stream: None, address: None },
         Err(message) => Launch::Failed { message },
     }
 }
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn an_allowed_installed_game_is_handed_to_the_url_handler_once() {
         let os = fake(true, None);
-        assert_eq!(launch(true, || true, &game("steam:440"), &os, None), Launch::Started { stream: None });
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, None), Launch::Started { stream: None, address: None });
         assert_eq!(*os.opened.borrow(), ["steam://rungameid/440"]);
     }
 
@@ -221,7 +221,7 @@ mod tests {
 
     impl Launcher for Host {
         fn launch(&self, game: &GameRef) -> Option<Launch> {
-            (game.key == "pythia:tracked").then(|| Launch::Started { stream: Some("windowcast".into()) })
+            (game.key == "pythia:tracked").then(|| Launch::Started { stream: Some("windowcast".into()), address: None })
         }
     }
 
@@ -231,10 +231,10 @@ mod tests {
         let host: &dyn Launcher = &Host;
         assert_eq!(
             launch(true, || panic!("the scan is not asked"), &game("pythia:tracked"), &os, Some(host)),
-            Launch::Started { stream: Some("windowcast".into()) }
+            Launch::Started { stream: Some("windowcast".into()), address: None }
         );
         assert_eq!(launch(true, || true, &game("title:doom"), &os, Some(host)), Launch::UnknownGame);
-        assert_eq!(launch(true, || true, &game("steam:440"), &os, Some(host)), Launch::Started { stream: None });
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, Some(host)), Launch::Started { stream: None, address: None });
         assert_eq!(*os.opened.borrow(), vec!["steam://rungameid/440".to_string()]);
     }
 

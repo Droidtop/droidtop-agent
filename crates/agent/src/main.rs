@@ -488,8 +488,8 @@ fn play_on(agent: &Agent, id: &str, key: &str) -> Result<(), String> {
     let peer = one_device(agent, id)?;
     let game = offered_game(agent, &peer, key)?;
     let said = match agent.play_on(&peer, &game)? {
-        Launch::Started { stream: Some(s) } => format!("Started; it streams through {s}."),
-        Launch::Started { stream: None } => "Started.".into(),
+        Launch::Started { stream: Some(s), .. } => format!("Started; it streams through {s}."),
+        Launch::Started { stream: None, .. } => "Started.".into(),
         Launch::NotAllowed => "That device does not let this computer start games there.".into(),
         Launch::UnknownGame => "That device does not have that game installed.".into(),
         Launch::SteamNotRunning => "Steam is not running on that device.".into(),

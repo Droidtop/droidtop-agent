@@ -964,7 +964,7 @@ mod tests {
         fn launch_game(&self, _peer: &PeerId, game: &GameRef) -> droidtop_agent_core::proto::Launch {
             use droidtop_agent_core::proto::Launch;
             match game.key.as_str() {
-                "steam:440" => Launch::Started { stream: None },
+                "steam:440" => Launch::Started { stream: None, address: None },
                 "steam:1" => Launch::NotAllowed,
                 _ => Launch::Failed { message: "unexpected game".into() },
             }

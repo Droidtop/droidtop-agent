@@ -1163,6 +1163,11 @@ library of its own (Pythia) can start those games for a handheld.
   `stream`: `"windowcast"` when the host started a game whose window
   windowcast streams; absent for Steam, whose reply is unchanged on the
   wire. A handheld that does not know the field reads `started` as before.
+  With `stream: "windowcast"` it may also carry `address` (`HOST:PORT`): where
+  that host's windowcast listens, for a host that knows (Pythia). The handheld
+  opens windowcast's viewer on it (droidtop docs/SPEC.md 7o); without it, the
+  handheld assumes windowcast's default port 47100 on the address it reached the
+  computer at. Absent for Steam.
 - The command-line agent and its window register no launcher: they state
   no `launch_host` and answer as before.
 
