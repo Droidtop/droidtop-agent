@@ -6,6 +6,7 @@
 //! (`droidtop_agent.service.events` for Pythia), so a host can log and show
 //! it (docs/DESIGN.md section 16).
 
+use droidtop_agent_core::sync::LockExt;
 use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -67,7 +68,7 @@ impl Events {
             Value::Object(map) => map,
             _ => Map::new(),
         };
-        let mut kept = self.kept.lock().unwrap();
+        let mut kept = self.kept.locked();
         kept.0 += 1;
         let seq = kept.0;
         kept.1.push_back(Event { seq, ms, level, kind, message, detail });
@@ -80,13 +81,13 @@ impl Events {
     /// The events after number [since] that are still kept, oldest first
     /// (0: all of them).
     pub fn since(&self, since: u64) -> Vec<Event> {
-        self.kept.lock().unwrap().1.iter().filter(|e| e.seq > since).cloned().collect()
+        self.kept.locked().1.iter().filter(|e| e.seq > since).cloned().collect()
     }
 
     /// [`since`](Events::since), waiting up to [wait] for one when there is none yet.
     pub fn wait_since(&self, since: u64, wait: Duration) -> Vec<Event> {
         let until = Instant::now() + wait;
-        let mut kept = self.kept.lock().unwrap();
+        let mut kept = self.kept.locked();
         while kept.0 <= since {
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {

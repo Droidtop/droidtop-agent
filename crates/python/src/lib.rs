@@ -19,6 +19,7 @@
 // clippy calls a useless conversion; the code is PyO3's, not ours.
 #![allow(clippy::useless_conversion)]
 
+use droidtop_agent_core::sync::LockExt;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use droidtop_agent_service::Agent;
@@ -53,7 +54,7 @@ pub(crate) fn agent() -> Result<Arc<Agent>, String> {
     if let Some(a) = AGENT.get() {
         return Ok(a.clone());
     }
-    let _one = OPENING.lock().unwrap();
+    let _one = OPENING.locked();
     if let Some(a) = AGENT.get() {
         return Ok(a.clone());
     }

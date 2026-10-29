@@ -3,6 +3,7 @@
 //! as `{"error": "..."}` in words the screens can show; a computer that
 //! could not be reached as `{"unreachable": "..."}`.
 
+use droidtop_agent_core::sync::LockExt;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
@@ -153,7 +154,7 @@ fn pair_start(args: &Value) -> Outcome {
     let key = key_of(args)?;
     let kind = kind_of(args)?;
     let name = args["name"].as_str().unwrap_or("droidtop").to_string();
-    if let Some(old) = SESSION.lock().unwrap().take() {
+    if let Some(old) = SESSION.locked().take() {
         old.stop.store(true, Ordering::Relaxed);
     }
     // A pairing screen that is still waiting is ended by opening a new one.
@@ -176,7 +177,7 @@ fn pair_start(args: &Value) -> Outcome {
     let at = args["address"].as_str().filter(|a| !a.is_empty()).map(|a| format!("{a}:{port}"));
     let invite = PairInvite { code: code.clone(), peer: Some(key.peer_id()), name: Some(name.clone()), at };
     let uri = invite.to_uri();
-    *SESSION.lock().unwrap() = Some(PairSession { listener, code: code.clone(), key, name, kind, stop });
+    *SESSION.locked() = Some(PairSession { listener, code: code.clone(), key, name, kind, stop });
     Ok(json!({ "code": code, "uri": uri, "port": port }))
 }
 
@@ -184,7 +185,7 @@ fn pair_start(args: &Value) -> Outcome {
 /// the code), up to `timeout_ms`, or until cancelled.
 fn pair_wait(args: &Value) -> Outcome {
     let timeout = Duration::from_millis(args["timeout_ms"].as_u64().unwrap_or(600_000));
-    let session = SESSION.lock().unwrap().take().ok_or_else(|| Failure::Error("pairing was not started".into()))?;
+    let session = SESSION.locked().take().ok_or_else(|| Failure::Error("pairing was not started".into()))?;
     let cancel =
         CANCEL.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| Failure::Error("pairing was not started".into()))?;
     let result = pairing::accept_pairing(
@@ -774,7 +775,7 @@ impl droidtop_agent_core::server::Host for HandheldHost {
         Err(Error::Protocol("a handheld does not sync plugin contexts with other handhelds".into()))
     }
     fn announce(&self, peer: &PeerId, theirs: Announcements) -> droidtop_agent_core::Result<Announcements> {
-        let _one = self.writing.lock().unwrap();
+        let _one = self.writing.locked();
         let mut all: serde_json::Map<String, Value> =
             std::fs::read(&self.state).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         all.insert(peer.to_hex(), json!({ "values": theirs, "ms": droidtop_agent_core::library::now_ms() }));
@@ -846,12 +847,12 @@ fn serve_start(args: &Value) -> Outcome {
             }
         })
     };
-    *SERVING.lock().unwrap() = Some(Serving { stop, listening });
+    *SERVING.locked() = Some(Serving { stop, listening });
     Ok(json!({ "port": port }))
 }
 
 fn serve_stop() -> Outcome {
-    let serving = SERVING.lock().unwrap().take();
+    let serving = SERVING.locked().take();
     if let Some(serving) = serving {
         serving.stop.store(true, Ordering::Relaxed);
         // The port is free again once the listener is gone.
@@ -1046,10 +1047,10 @@ mod tests {
             _peer: &PeerId,
             since: u64,
         ) -> droidtop_agent_core::Result<(Vec<droidtop_agent_core::library::Change>, u64)> {
-            Ok(self.library.lock().unwrap().changes_since(since))
+            Ok(self.library.locked().changes_since(since))
         }
         fn library_push(&self, _peer: &PeerId, changes: Vec<droidtop_agent_core::library::Change>) -> droidtop_agent_core::Result<()> {
-            let mut lib = self.library.lock().unwrap();
+            let mut lib = self.library.locked();
             changes.into_iter().for_each(|c| {
                 lib.apply(c);
             });
@@ -1134,7 +1135,7 @@ mod tests {
         assert_eq!(out["pulled"], 2);
         // The computer's favourite is for droidtop to write; nothing was sent back.
         assert_eq!(out["marks"], json!({ "steam:1": { "favourite": true } }));
-        assert_eq!(host.library.lock().unwrap().games["steam:1"].installs.len(), 2);
+        assert_eq!(host.library.locked().games["steam:1"].installs.len(), 2);
     }
 
     /// What droidtop sees of a launch: the computer's typed answer, in the

@@ -5,6 +5,7 @@
 //! minute the running agent opens what paired devices left for it and
 //! leaves them the library changes they have not had.
 
+use droidtop_agent_core::sync::LockExt;
 use std::fs;
 
 use droidtop_agent_core::keys::PeerId;
@@ -19,7 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::Agent;
 
 pub fn process(agent: &Agent) -> Result<(), String> {
-    let Some(share) = agent.store.settings.lock().unwrap().share.clone() else { return Ok(()) };
+    let Some(share) = agent.store.settings.locked().share.clone() else { return Ok(()) };
     if !share.is_dir() {
         return Err(format!("{} is not there", share.display()));
     }

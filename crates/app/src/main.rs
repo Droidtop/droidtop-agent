@@ -8,6 +8,7 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+use droidtop_agent_core::sync::LockExt;
 use std::sync::{Arc, Mutex};
 
 use droidtop_agent_service::Agent;
@@ -33,7 +34,7 @@ fn main() {
     {
         let (agent, service) = (agent.clone(), service.clone());
         std::thread::spawn(move || {
-            *service.lock().unwrap() = ui::Service::Running;
+            *service.locked() = ui::Service::Running;
             let result = droidtop_agent_service::serve::run(agent.clone());
             let stopped: String = match result {
                 Ok(()) => "The agent stopped.".into(),
@@ -41,13 +42,13 @@ fn main() {
                     // The running agent serves; this window shows its state from
                     // the files they share. It looks at the computer once itself,
                     // so the Library page has something to show.
-                    *service.lock().unwrap() = ui::Service::Attached;
+                    *service.locked() = ui::Service::Attached;
                     agent.rescan();
                     return;
                 }
                 Err(e) => format!("The agent could not listen: {e}"),
             };
-            *service.lock().unwrap() = ui::Service::Stopped(stopped);
+            *service.locked() = ui::Service::Stopped(stopped);
         });
     }
 

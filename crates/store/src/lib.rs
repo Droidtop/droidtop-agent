@@ -8,6 +8,7 @@
 //!
 //! It does no networking and knows nothing of scanning or saves.
 
+use droidtop_agent_core::sync::LockExt;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -384,7 +385,7 @@ impl Store {
     }
 
     pub fn name(&self) -> String {
-        self.settings.lock().unwrap().name.clone().unwrap_or_else(|| gethostname::gethostname().to_string_lossy().into_owned())
+        self.settings.locked().name.clone().unwrap_or_else(|| gethostname::gethostname().to_string_lossy().into_owned())
     }
 
     pub fn peer_id(&self) -> PeerId {
@@ -393,7 +394,7 @@ impl Store {
 
     /// Whether the person let [`peer`] start games on this computer.
     pub fn may_launch(&self, peer: &PeerId) -> bool {
-        self.settings.lock().unwrap().launch_devices.contains(&peer.to_hex())
+        self.settings.locked().launch_devices.contains(&peer.to_hex())
     }
 
     /// What this computer offers [`peer`]: what the person set, or else a
@@ -403,7 +404,7 @@ impl Store {
     pub fn offers_to(&self, peer: &PeerId) -> Offer {
         let id = peer.to_hex();
         match self.devices_now().iter().find(|d| d.id == id) {
-            Some(device) => offer_for(&self.settings.lock().unwrap(), device),
+            Some(device) => offer_for(&self.settings.locked(), device),
             None => Offer::NONE,
         }
     }
@@ -422,7 +423,7 @@ impl Store {
             offer.saves = on;
             offer.library |= on;
         }
-        self.settings.lock().unwrap().offers.insert(id.to_string(), offer);
+        self.settings.locked().offers.insert(id.to_string(), offer);
     }
 
     /// Whether [`peer`] paired as a computer.
@@ -475,14 +476,14 @@ impl Store {
     }
 
     pub fn save_settings(&self) -> io::Result<()> {
-        write_json(&self.dirs.settings(), &*self.settings.lock().unwrap())
+        write_json(&self.dirs.settings(), &*self.settings.locked())
     }
 
     /// Takes in settings another copy of the agent (the window, a command
     /// line) saved since this one read them.
     pub fn reload_settings(&self) {
         if let Ok(fresh) = read_json::<Settings>(&self.dirs.settings()) {
-            *self.settings.lock().unwrap() = fresh;
+            *self.settings.locked() = fresh;
         }
     }
 
@@ -490,8 +491,8 @@ impl Store {
     /// the window and a command line each have their own copy of this
     /// state, and a pairing made by one is seen by the others.
     pub fn devices_now(&self) -> Vec<Device> {
-        let mut devices = self.devices.lock().unwrap();
-        let mut seen = self.devices_stamp.lock().unwrap();
+        let mut devices = self.devices.locked();
+        let mut seen = self.devices_stamp.locked();
         let on_disk = stamp(&self.dirs.peers());
         if on_disk != *seen {
             if let Ok(fresh) = read_json::<Vec<Device>>(&self.dirs.peers()) {
@@ -507,10 +508,10 @@ impl Store {
     pub fn edit_devices<R>(&self, f: impl FnOnce(&mut Vec<Device>) -> (R, bool)) -> R {
         let _lock = FileLock::take(&self.dirs.peers()).ok();
         self.devices_now();
-        let mut devices = self.devices.lock().unwrap();
+        let mut devices = self.devices.locked();
         let (result, changed) = f(&mut devices);
         if changed && write_json(&self.dirs.peers(), &*devices).is_ok() {
-            *self.devices_stamp.lock().unwrap() = stamp(&self.dirs.peers());
+            *self.devices_stamp.locked() = stamp(&self.dirs.peers());
         }
         result
     }
@@ -518,8 +519,8 @@ impl Store {
     /// The library, as the file holds it now (see [`Store::devices_now`]).
     /// Do not hold it across a call that edits the library.
     pub fn library_now(&self) -> MutexGuard<'_, Library> {
-        let mut library = self.library.lock().unwrap();
-        let mut seen = self.library_stamp.lock().unwrap();
+        let mut library = self.library.locked();
+        let mut seen = self.library_stamp.locked();
         let on_disk = stamp(&self.dirs.library());
         if on_disk != *seen {
             if let Ok(fresh) = Library::load(&self.dirs.library()) {
@@ -539,7 +540,7 @@ impl Store {
         let mut library = self.library_now();
         let (result, changed) = f(&mut library);
         if changed && library.save(&self.dirs.library()).is_ok() {
-            *self.library_stamp.lock().unwrap() = stamp(&self.dirs.library());
+            *self.library_stamp.locked() = stamp(&self.dirs.library());
         }
         result
     }
@@ -583,13 +584,13 @@ impl Store {
     /// against the limits a paired device enforces.
     pub fn set_announce(&self, plugin: &str, value: Option<serde_json::Value>) -> Result<(), String> {
         self.reload_settings();
-        let mut next = self.settings.lock().unwrap().announce.clone();
+        let mut next = self.settings.locked().announce.clone();
         match value {
             Some(v) => next.insert(plugin.to_string(), v),
             None => next.remove(plugin),
         };
         check_announcements(&next)?;
-        self.settings.lock().unwrap().announce = next;
+        self.settings.locked().announce = next;
         self.save_settings().map_err(|e| e.to_string())
     }
 

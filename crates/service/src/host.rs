@@ -1,6 +1,7 @@
 //! What the agent answers a paired handheld with: the core's [`Host`] over
 //! the scan, the save catalog, the library and the context adapters.
 
+use droidtop_agent_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 
 use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
@@ -40,7 +41,7 @@ impl Host for Agent {
     }
 
     fn extra_features(&self) -> Vec<String> {
-        if self.launcher.lock().unwrap().is_some() {
+        if self.launcher.locked().is_some() {
             vec!["launch_host".into()]
         } else {
             Vec::new()
@@ -63,7 +64,7 @@ impl Host for Agent {
         // changed the switch since this process started.
         self.store.reload_settings();
         let installed = || self.fresh_scan(300).find(&game.key).is_some_and(|f| f.game.install.installed);
-        let host = self.launcher.lock().unwrap().clone();
+        let host = self.launcher.locked().clone();
         let outcome = crate::launch::launch(self.store.may_launch(peer), installed, game, &crate::launch::Local, host.as_deref());
         let device = self.store.device_name(peer);
         self.events.info(
@@ -83,7 +84,7 @@ impl Host for Agent {
     /// A version a handheld sends goes to the person's first game folder:
     /// never into a store's own install folders.
     fn game_inbox(&self) -> std::result::Result<PathBuf, String> {
-        self.store.settings.lock().unwrap().game_folders.iter().find(|f| f.is_dir()).cloned().ok_or_else(|| {
+        self.store.settings.locked().game_folders.iter().find(|f| f.is_dir()).cloned().ok_or_else(|| {
             "this computer has no game folder to put it in: add one in droidtop-agent's Settings (or droidtop-agent folders add <path>)"
                 .into()
         })
@@ -128,14 +129,14 @@ impl Host for Agent {
             );
         }
         self.store.reload_settings();
-        Ok(self.store.settings.lock().unwrap().announce.clone())
+        Ok(self.store.settings.locked().announce.clone())
     }
 
     fn endpoints(&self) -> Vec<String> {
-        let mut out = endpoints(self.store.settings.lock().unwrap().public_endpoint.as_deref());
+        let mut out = endpoints(self.store.settings.locked().public_endpoint.as_deref());
         // The address STUN found for the WireGuard socket: enough on its own
         // when this side's NAT lets a known peer's packets in.
-        if let Some(mapped) = self.rendezvous.lock().unwrap().mapped {
+        if let Some(mapped) = self.rendezvous.locked().mapped {
             out.push(format!("wg:{mapped}"));
         }
         out.dedup();
@@ -143,7 +144,7 @@ impl Host for Agent {
     }
 
     fn disco_id(&self) -> Option<String> {
-        if !self.store.settings.lock().unwrap().rendezvous {
+        if !self.store.settings.locked().rendezvous {
             return None;
         }
         droidtop_agent_core::rendezvous::certificate(&self.store.key).ok().map(|c| c.device_id())

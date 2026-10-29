@@ -4,6 +4,7 @@
 //! asks that device to play one. Nothing here is offered to anyone; it only
 //! asks, and the other device decides what it answers.
 
+use droidtop_agent_core::sync::LockExt;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -127,7 +128,7 @@ impl Agent {
                 addresses.push(listening);
             }
         }
-        let settings = self.store.settings.lock().unwrap().clone();
+        let settings = self.store.settings.locked().clone();
         let rendezvous = settings.rendezvous.then(|| RendezvousSettings {
             servers: settings.discovery_servers.clone(),
             stun: settings.stun_servers.clone(),

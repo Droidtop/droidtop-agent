@@ -3,6 +3,7 @@
 //! page shows how it went; nothing on the drawing thread touches the network,
 //! and files are read only when a page opens or the person asks.
 
+use droidtop_agent_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -337,7 +338,7 @@ impl App {
     fn status(&mut self, ui: &mut egui::Ui) {
         ui.heading("Status");
         ui.add_space(6.0);
-        let service = self.service.lock().unwrap().clone();
+        let service = self.service.locked().clone();
         match service {
             Service::Starting => ui.label("Starting…"),
             Service::Running => ui.label(format!(
@@ -407,7 +408,7 @@ impl App {
         });
         ui.add_space(12.0);
         ui.strong("Away from home");
-        let settings = self.agent.store.settings.lock().unwrap().clone();
+        let settings = self.agent.store.settings.locked().clone();
         if !settings.rendezvous {
             ui.label(
                 "Off: paired handhelds reach this computer only on this network, through a forwarded port, or through the cloud folder.",
@@ -442,7 +443,7 @@ impl App {
     fn pair(&mut self, ui: &mut egui::Ui) {
         ui.heading("Pair a handheld");
         ui.add_space(6.0);
-        let mut pairing = self.pairing.lock().unwrap();
+        let mut pairing = self.pairing.locked();
         match &*pairing {
             Pairing::Showing { code, places, qr, until, .. } => {
                 ui.label("On the handheld: Settings > Computers > Pair a computer > Use a code from the computer, and type:");
@@ -508,7 +509,7 @@ impl App {
             let (agent, state, text) = (self.agent.clone(), self.pairing.clone(), self.entered_code.trim().to_string());
             std::thread::spawn(move || {
                 let result = pair::pair(&agent.store, &text);
-                *state.lock().unwrap() = match result {
+                *state.locked() = match result {
                     Ok(name) => Pairing::Paired(name),
                     Err(e) => Pairing::Failed(e),
                 };
@@ -529,7 +530,7 @@ impl App {
                     let (agent, state) = (self.agent.clone(), self.pairing.clone());
                     std::thread::spawn(move || {
                         let result = pair::wait(&agent.store, showing, &cancel);
-                        *state.lock().unwrap() = match result {
+                        *state.locked() = match result {
                             Ok(name) => Pairing::Paired(name),
                             Err(_) if cancel.is_cancelled() => Pairing::Idle,
                             Err(e) => Pairing::Failed(e),
@@ -554,7 +555,7 @@ impl App {
 
     /// Saves a change to the settings and looks again at what the computer has.
     fn changed_settings(&self, change: impl FnOnce(&mut Settings)) {
-        change(&mut self.agent.store.settings.lock().unwrap());
+        change(&mut self.agent.store.settings.locked());
         let _ = self.agent.store.save_settings();
         self.rescan_in_background();
     }
@@ -569,8 +570,8 @@ impl App {
             }
             ui.label(RichText::new("The games on this computer, as droidtop on your handhelds sees them.").weak());
         });
-        let settings = self.agent.store.settings.lock().unwrap().clone();
-        let guard = self.agent.scan.lock().unwrap();
+        let settings = self.agent.store.settings.locked().clone();
+        let guard = self.agent.scan.locked();
         let Some((at, scan)) = guard.as_ref() else {
             ui.label("Looking for games…");
             return;
@@ -782,7 +783,7 @@ impl App {
             "Saves are kept in step between this computer and your handhelds. When both changed a game's saves, neither wins: your handheld asks you which to keep, and the other is kept here as a backup, so nothing is lost.",
         );
         ui.add_space(8.0);
-        let outcome = self.save_outcome.lock().unwrap().clone();
+        let outcome = self.save_outcome.locked().clone();
         if let Some(outcome) = &outcome {
             ui.add_space(6.0);
             outcome_label(ui, outcome);
@@ -801,9 +802,9 @@ impl App {
         let filter = self.saves_filter.to_lowercase();
         let mut picked: Option<(String, String)> = None;
         {
-            let guard = self.agent.scan.lock().unwrap();
+            let guard = self.agent.scan.locked();
             let kept: Vec<&String> = self.archive.iter().filter_map(|g| g.key.as_ref()).collect();
-            let custom: Vec<String> = self.agent.saves.user.lock().unwrap().keys().cloned().collect();
+            let custom: Vec<String> = self.agent.saves.user.locked().keys().cloned().collect();
             let mut shown = 0;
             ui.horizontal_wrapped(|ui| {
                 if let Some((_, scan)) = guard.as_ref() {
@@ -854,7 +855,7 @@ impl App {
         let agent = self.agent.clone();
         std::thread::spawn(move || {
             let game = GameRef { key: key.clone(), title };
-            let custom = agent.saves.user.lock().unwrap().get(&key).map(|u| u.patterns.clone()).unwrap_or_default();
+            let custom = agent.saves.user.locked().get(&key).map(|u| u.patterns.clone()).unwrap_or_default();
             let (patterns, files) = match agent.save_lookup(&game, false) {
                 Some((spec, roots, _)) => {
                     let files = saves::collect(&spec, &roots);
@@ -862,7 +863,7 @@ impl App {
                 }
                 None => (Vec::new(), Vec::new()),
             };
-            *info.lock().unwrap() = Some(SaveInfo { patterns, custom, files });
+            *info.locked() = Some(SaveInfo { patterns, custom, files });
         });
     }
 
@@ -870,7 +871,7 @@ impl App {
         ui.add_space(10.0);
         ui.group(|ui| {
             ui.strong(title);
-            let info = self.save_info.lock().unwrap().clone();
+            let info = self.save_info.locked().clone();
             ui.add_space(4.0);
             ui.label("Where its saves are");
             match &info {
@@ -910,14 +911,14 @@ impl App {
                     let result = if saves::split(&template).is_none() {
                         Err(format!("Start with one of: {}", saves::TOKENS.join(", ")))
                     } else {
-                        self.agent.saves.user.lock().unwrap().entry(key.to_string()).or_default().patterns.push(template);
+                        self.agent.saves.user.locked().entry(key.to_string()).or_default().patterns.push(template);
                         self.agent.saves.save_user().map(|()| "Added.".to_string()).map_err(|e| e.to_string())
                     };
                     if result.is_ok() {
                         self.template_draft.clear();
                         self.pick_saves_game(key.to_string(), title.to_string());
                     }
-                    *self.save_outcome.lock().unwrap() = Some(result);
+                    *self.save_outcome.locked() = Some(result);
                 }
             });
             ui.label(
@@ -926,7 +927,7 @@ impl App {
                     .small(),
             );
             if let Some(p) = remove {
-                if let Some(u) = self.agent.saves.user.lock().unwrap().get_mut(key) {
+                if let Some(u) = self.agent.saves.user.locked().get_mut(key) {
                     u.patterns.retain(|x| *x != p);
                 }
                 let _ = self.agent.saves.save_user();
@@ -973,7 +974,7 @@ impl App {
                             let result = agent
                                 .restore_saves(&game_ref, &copy)
                                 .map(|n| format!("Put {n} files back. What was here before is kept as a copy."));
-                            *outcome.lock().unwrap() = Some(result);
+                            *outcome.locked() = Some(result);
                         });
                     }
                 }
@@ -985,7 +986,7 @@ impl App {
         ui.heading("Plugin data");
         ui.add_space(6.0);
         ui.label("Some droidtop plugins keep their data in step with a program on this computer, through a small adapter program the plugin publishes.");
-        if let Some(outcome) = self.plugin_outcome.lock().unwrap().as_ref() {
+        if let Some(outcome) = self.plugin_outcome.locked().as_ref() {
             outcome_label(ui, outcome);
         }
         let offers = contexts::adapter_offers(&self.agent.store);
@@ -1003,16 +1004,16 @@ impl App {
                         ui.horizontal(|ui| {
                             if ui.button("Install").clicked() {
                                 let (agent, outcome, context) = (self.agent.clone(), self.plugin_outcome.clone(), context.clone());
-                                *outcome.lock().unwrap() = Some(Ok(format!("Fetching the {context} adapter…")));
+                                *outcome.locked() = Some(Ok(format!("Fetching the {context} adapter…")));
                                 std::thread::spawn(move || {
                                     let result = contexts::approve(&agent.store, &context);
-                                    *outcome.lock().unwrap() = Some(result);
+                                    *outcome.locked() = Some(result);
                                 });
                             }
                             if ui.button("Decline").clicked() {
                                 let result =
                                     contexts::decline(&self.agent.store, &context).map(|()| format!("Declined the {context} adapter."));
-                                *self.plugin_outcome.lock().unwrap() = Some(result);
+                                *self.plugin_outcome.locked() = Some(result);
                             }
                         });
                     }
@@ -1022,7 +1023,7 @@ impl App {
                 }
             });
         }
-        let adapters = self.agent.store.settings.lock().unwrap().adapters.clone();
+        let adapters = self.agent.store.settings.locked().adapters.clone();
         ui.add_space(8.0);
         ui.strong("Installed");
         if adapters.is_empty() {
@@ -1033,7 +1034,7 @@ impl App {
                 ui.label(&context);
                 ui.label(RichText::new(program.display().to_string()).weak().small());
                 if ui.button("Remove").clicked() {
-                    self.agent.store.settings.lock().unwrap().adapters.remove(&context);
+                    self.agent.store.settings.locked().adapters.remove(&context);
                     let _ = self.agent.store.save_settings();
                 }
             });
@@ -1048,7 +1049,7 @@ impl App {
             self.autostart = autostart::enabled();
         }
         let devices = self.agent.store.devices_now();
-        let draft = self.settings.get_or_insert_with(|| self.agent.store.settings.lock().unwrap().clone());
+        let draft = self.settings.get_or_insert_with(|| self.agent.store.settings.locked().clone());
         let mut name = draft.name.clone().unwrap_or_default();
         ui.add_space(8.0);
         egui::Grid::new("settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
@@ -1139,13 +1140,13 @@ impl App {
             }
         }
         ui.add_space(12.0);
-        let changed = *draft != *self.agent.store.settings.lock().unwrap();
+        let changed = *draft != *self.agent.store.settings.locked();
         if ui.add_enabled(changed, egui::Button::new("Save")).clicked() {
             let valid = draft.public_endpoint.as_deref().is_none_or(|e| e.parse::<std::net::SocketAddr>().is_ok());
             self.settings_outcome = Some(if !valid {
                 Err("The forwarded port is an address and port, such as 203.0.113.7:47611.".into())
             } else {
-                *self.agent.store.settings.lock().unwrap() = draft.clone();
+                *self.agent.store.settings.locked() = draft.clone();
                 self.agent
                     .store
                     .save_settings()
@@ -1203,14 +1204,14 @@ impl App {
         if let Some(action) = run {
             self.service_mode_confirm = false;
             let outcome = self.service_mode_outcome.clone();
-            *outcome.lock().unwrap() = Some(Ok("Waiting for Windows' administrator approval…".into()));
+            *outcome.locked() = Some(Ok("Waiting for Windows' administrator approval…".into()));
             std::thread::spawn(move || {
                 let result = agent_program().ok_or_else(|| "droidtop-agent is not beside this window.".to_string());
                 let result = result.and_then(|program| secure_screen::request(action, &program, &["service-mode"]));
-                *outcome.lock().unwrap() = Some(result);
+                *outcome.locked() = Some(result);
             });
         }
-        if let Some(outcome) = self.service_mode_outcome.lock().unwrap().as_ref() {
+        if let Some(outcome) = self.service_mode_outcome.locked().as_ref() {
             outcome_label(ui, outcome);
         }
     }

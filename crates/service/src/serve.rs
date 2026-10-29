@@ -4,6 +4,7 @@
 //! handheld connects only around a game's launch and exit or when the person
 //! starts a sync, so this stays idle almost all the time.
 
+use droidtop_agent_core::sync::LockExt;
 use std::net::{TcpListener, UdpSocket};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -54,7 +55,7 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
             if changes > 0 {
                 a.events.info("library", format!("Library: {changes} changes from the scan."), json!({ "changes": changes }));
             }
-            let minutes = a.store.settings.lock().unwrap().scan_minutes.max(5);
+            let minutes = a.store.settings.locked().scan_minutes.max(5);
             thread::sleep(Duration::from_secs(minutes * 60));
         });
     }

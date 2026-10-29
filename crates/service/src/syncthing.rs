@@ -18,6 +18,7 @@
 //!   removed again. Only devices this agent added are ever changed
 //!   (`syncthing.json`); devices the person added are never touched.
 
+use droidtop_agent_core::sync::LockExt;
 use std::collections::BTreeMap;
 use std::fs;
 use std::net::IpAddr;
@@ -419,7 +420,7 @@ static STARTED: Mutex<Option<Child>> = Mutex::new(None);
 /// pass starts it again if it stopped), and waits up to `wait` for
 /// its configuration and API. Syncthing makes `home` the first time.
 fn start(program: &Path, home: &Path, wait: Duration) -> Result<Rest, String> {
-    let mut started = STARTED.lock().unwrap();
+    let mut started = STARTED.locked();
     if let Some(child) = started.as_mut() {
         if child.try_wait().ok().flatten().is_some() {
             *started = None;
@@ -467,7 +468,7 @@ fn report(agent: &Agent, outcome: Result<Pass, String>) {
         Ok(_) => "ok".to_string(),
         Err(e) => e.clone(),
     };
-    let mut last = LAST.lock().unwrap();
+    let mut last = LAST.locked();
     match outcome {
         Ok(pass) => {
             for id in &pass.added {
@@ -491,9 +492,9 @@ fn report(agent: &Agent, outcome: Result<Pass, String>) {
 /// bring its devices to what the paired devices announced. With the setting
 /// off it withdraws the announcement and changes nothing in Syncthing.
 pub fn tick(agent: &Agent) {
-    let on = agent.store.settings.lock().unwrap().syncthing;
+    let on = agent.store.settings.locked().syncthing;
     if !on {
-        if agent.store.settings.lock().unwrap().announce.contains_key(PLUGIN) {
+        if agent.store.settings.locked().announce.contains_key(PLUGIN) {
             let _ = agent.store.set_announce(PLUGIN, None);
         }
         return;
@@ -512,7 +513,7 @@ fn pass(agent: &Agent) -> Result<Pass, String> {
         }
     };
     let value = announcement(&rest.config, &lan_ips());
-    if agent.store.settings.lock().unwrap().announce.get(PLUGIN) != Some(&value) {
+    if agent.store.settings.locked().announce.get(PLUGIN) != Some(&value) {
         agent.store.set_announce(PLUGIN, Some(value))?;
     }
     let path = agent.store.dirs.syncthing();
@@ -653,7 +654,7 @@ mod tests {
         assert_eq!(reconcile(&rest, &[], &mut added).unwrap().removed, vec![deck.clone()]);
         assert!(!rest.devices().unwrap().contains(&deck));
 
-        if let Some(mut child) = STARTED.lock().unwrap().take() {
+        if let Some(mut child) = STARTED.locked().take() {
             let _ = child.kill();
             let _ = child.wait();
         }

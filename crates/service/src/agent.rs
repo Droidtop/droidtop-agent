@@ -2,6 +2,7 @@
 //! agent keeps in memory: the last scan, the save catalog, the rendezvous's
 //! state.
 
+use droidtop_agent_core::sync::LockExt;
 use std::io;
 use std::path::Path;
 use std::sync::Mutex;
@@ -90,7 +91,7 @@ impl Agent {
     /// person set (here or on a handheld) are not touched by it.
     pub fn rescan(&self) -> usize {
         self.store.reload_settings();
-        let settings = self.store.settings.lock().unwrap().clone();
+        let settings = self.store.settings.locked().clone();
         let mut scan = droidtop_agent_scan::scan(&scan_options(&settings));
         scan.join(&ManagerGames::load(&self.store.dirs).usable(&self.store.dirs, &self.events));
         let launcher_marks = droidtop_agent_scan::lutris::marks();
@@ -99,7 +100,7 @@ impl Agent {
             let n = lib.update_device(&device, &name, scan.library()) + self.store.note_launcher_marks(lib, launcher_marks);
             (n, n > 0)
         });
-        *self.scan.lock().unwrap() = Some((Instant::now(), scan));
+        *self.scan.locked() = Some((Instant::now(), scan));
         changes
     }
 
@@ -113,14 +114,14 @@ impl Agent {
 
     /// The last scan, made now when there is none or it is older than [`max_age_s`].
     pub fn fresh_scan(&self, max_age_s: u64) -> Scan {
-        let stale = match &*self.scan.lock().unwrap() {
+        let stale = match &*self.scan.locked() {
             Some((at, _)) => at.elapsed().as_secs() > max_age_s,
             None => true,
         };
         if stale {
             self.rescan();
         }
-        self.scan.lock().unwrap().as_ref().map(|(_, s)| s.clone()).unwrap_or_default()
+        self.scan.locked().as_ref().map(|(_, s)| s.clone()).unwrap_or_default()
     }
 }
 

@@ -1,6 +1,7 @@
 //! `droidtop_agent.service`: serving paired handhelds from this process
 //! (droidtop-agent-service), the same service as `droidtop-agent run`.
 
+use droidtop_agent_core::sync::LockExt;
 use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -29,7 +30,7 @@ static SERVING: Mutex<Option<Result<(), String>>> = Mutex::new(None);
 fn serve(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
         let a = agent()?;
-        let mut serving = SERVING.lock().unwrap();
+        let mut serving = SERVING.locked();
         if let Some(Ok(())) = &*serving {
             return Ok(json!({ "state": "serving" }));
         }
@@ -43,7 +44,7 @@ fn serve(py: Python<'_>) -> PyResult<PyObject> {
                 Err(e) => format!("the agent could not listen: {e}"),
             };
             let _ = tx.send(stopped.clone());
-            *SERVING.lock().unwrap() = Some(Err(stopped));
+            *SERVING.locked() = Some(Err(stopped));
         });
         // A listener that cannot bind fails at once; one that binds serves until the process ends.
         match rx.recv_timeout(Duration::from_millis(1500)) {
@@ -64,7 +65,7 @@ fn serve(py: Python<'_>) -> PyResult<PyObject> {
 #[pyfunction]
 fn serving(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
-        Ok(match &*SERVING.lock().unwrap() {
+        Ok(match &*SERVING.locked() {
             None => json!({ "state": "off" }),
             Some(Ok(())) => json!({ "state": "serving" }),
             Some(Err(e)) => json!({ "state": "stopped", "reason": e }),

@@ -9,6 +9,7 @@
 //! sources added later (emulators) build on it. It takes the scan it looks
 //! games up in as an argument, so it needs no running agent.
 
+use droidtop_agent_core::sync::LockExt;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -55,14 +56,14 @@ impl Saves {
 
     /// Writes the person's entries.
     pub fn save_user(&self) -> io::Result<()> {
-        write_json(&self.file, &*self.user.lock().unwrap())
+        write_json(&self.file, &*self.user.locked())
     }
 
     /// The Ludusavi index, loaded once; fetched when there is none yet and
     /// [`fetch`] allows it. One fetch at a time: a second caller waits for
     /// the first one's index.
     pub fn ludusavi_index(&self, fetch: bool) -> Option<ludusavi::Index> {
-        let mut slot = self.ludusavi.lock().unwrap();
+        let mut slot = self.ludusavi.locked();
         if slot.is_none() {
             *slot = ludusavi::load(&self.data);
         }
@@ -83,7 +84,7 @@ impl Saves {
     pub fn lookup(&self, game: &GameRef, scan: &Scan, fetch: bool) -> Option<(SaveSpec, Roots, Option<Found>)> {
         let found = scan.find(&game.key).or_else(|| scan.find_title(&game.title)).cloned();
         let user = {
-            let saves = self.user.lock().unwrap();
+            let saves = self.user.locked();
             saves.get(&game.key).or_else(|| saves.get(&title_key(&game.title))).cloned()
         };
         let roots = roots_for(found.as_ref(), user.as_ref().and_then(|u| u.base.clone()));

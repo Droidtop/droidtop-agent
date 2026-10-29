@@ -1,6 +1,7 @@
 //! `droidtop_agent.pair`: pairing a handheld from this computer
 //! (droidtop-agent-pair), the way `droidtop-agent`'s window does.
 
+use droidtop_agent_core::sync::LockExt;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -46,7 +47,7 @@ fn pair(py: Python<'_>, code: String) -> PyResult<PyObject> {
 fn show(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
         let a = agent()?;
-        if let Some(s) = &*SHOWING.lock().unwrap() {
+        if let Some(s) = &*SHOWING.locked() {
             s.cancel.cancel();
         }
         let showing = droidtop_agent_pair::listen()?;
@@ -63,10 +64,10 @@ fn show(py: Python<'_>) -> PyResult<PyObject> {
             let (cancel, outcome) = (cancel.clone(), outcome.clone());
             thread::spawn(move || {
                 let result = droidtop_agent_pair::wait(&a.store, showing, &cancel);
-                *outcome.lock().unwrap() = Some(result);
+                *outcome.locked() = Some(result);
             });
         }
-        *SHOWING.lock().unwrap() = Some(Showing { cancel, outcome });
+        *SHOWING.locked() = Some(Showing { cancel, outcome });
         Ok(reply)
     })
 }
@@ -77,9 +78,9 @@ fn show(py: Python<'_>) -> PyResult<PyObject> {
 #[pyfunction]
 fn status(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
-        Ok(match &*SHOWING.lock().unwrap() {
+        Ok(match &*SHOWING.locked() {
             None => json!({ "state": "idle" }),
-            Some(s) => match &*s.outcome.lock().unwrap() {
+            Some(s) => match &*s.outcome.locked() {
                 None => json!({ "state": "waiting" }),
                 Some(Ok(name)) => json!({ "state": "paired", "paired": name }),
                 Some(Err(e)) => json!({ "state": "failed", "error": e }),
@@ -92,7 +93,7 @@ fn status(py: Python<'_>) -> PyResult<PyObject> {
 #[pyfunction]
 fn cancel(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
-        if let Some(s) = &*SHOWING.lock().unwrap() {
+        if let Some(s) = &*SHOWING.locked() {
             s.cancel.cancel();
         }
         Ok(json!(null))

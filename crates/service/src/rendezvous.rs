@@ -14,6 +14,7 @@
 //! Only addresses go to the discovery servers. Syncthing's relays are never
 //! used: every byte of a sync goes through the direct WireGuard tunnel.
 
+use droidtop_agent_core::sync::LockExt;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -58,14 +59,14 @@ impl Hooks for WgHooks {
             return false;
         }
         if let Some(mapped) = self.keeper.mapped {
-            self.shared.lock().unwrap().mapped = Some(mapped);
+            self.shared.locked().mapped = Some(mapped);
         }
         true
     }
 
     fn tick(&mut self, udp: &UdpSocket) {
         if self.keeper.servers.is_empty() {
-            let stun = self.shared.lock().unwrap().stun.clone();
+            let stun = self.shared.locked().stun.clone();
             if stun.is_empty() {
                 return;
             }
@@ -77,7 +78,7 @@ impl Hooks for WgHooks {
         }
         self.last_punch = Some(Instant::now());
         let v6 = udp.local_addr().map(|a| a.is_ipv6()).unwrap_or(false);
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.locked();
         shared.punch.retain(|(_, until)| *until > Instant::now());
         for (to, _) in &shared.punch {
             // One byte: opens this side's NAT towards the handheld, and
@@ -122,17 +123,17 @@ pub fn run(agent: Arc<Agent>) {
         loop {
             thread::sleep(Duration::from_secs(5));
             let (on, servers, stun) = {
-                let s = agent.store.settings.lock().unwrap();
+                let s = agent.store.settings.locked();
                 (s.rendezvous, Server::list(&s.discovery_servers), s.stun_servers.clone())
             };
             if !on {
-                agent.rendezvous.lock().unwrap().stun.clear();
+                agent.rendezvous.locked().stun.clear();
                 continue;
             }
             if stun_resolved.is_none_or(|t| t.elapsed() > Duration::from_secs(3600)) {
                 let resolved = rendezvous::resolve_stun(&stun);
                 stun_resolved = Some(Instant::now());
-                agent.rendezvous.lock().unwrap().stun = resolved;
+                agent.rendezvous.locked().stun = resolved;
             }
             // Announce what this computer can be reached at, when it changed
             // (after a 5 s settle, as Syncthing does) or when the server said.
@@ -171,7 +172,7 @@ pub fn run(agent: Arc<Agent>) {
                     Answer::Found(found) => {
                         lookup_at.insert(id.clone(), Instant::now() + rendezvous::FOUND_CACHE);
                         let until = Instant::now() + rendezvous::FOUND_CACHE;
-                        let mut shared = agent.rendezvous.lock().unwrap();
+                        let mut shared = agent.rendezvous.locked();
                         for to in rendezvous::wg_endpoints(&found).into_iter().filter(SocketAddr::is_ipv4) {
                             shared.punch.retain(|(a, _)| *a != to);
                             shared.punch.push((to, until));
@@ -184,7 +185,7 @@ pub fn run(agent: Arc<Agent>) {
                     }
                 }
             }
-            status.mapped = agent.rendezvous.lock().unwrap().mapped.map(|m| m.to_string());
+            status.mapped = agent.rendezvous.locked().mapped.map(|m| m.to_string());
             let _ = droidtop_agent_store::write_json(&agent.store.dirs.rendezvous(), &status);
         }
     });
@@ -195,10 +196,10 @@ pub fn run(agent: Arc<Agent>) {
 /// IPv6 addresses), as `wg://` addresses.
 fn addresses(agent: &Agent) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    if let Some(mapped) = agent.rendezvous.lock().unwrap().mapped {
+    if let Some(mapped) = agent.rendezvous.locked().mapped {
         out.push(format!("{}{mapped}", rendezvous::SCHEME));
     }
-    let public = agent.store.settings.lock().unwrap().public_endpoint.clone();
+    let public = agent.store.settings.locked().public_endpoint.clone();
     for e in crate::host::endpoints(public.as_deref()) {
         if let Some(a) = e.strip_prefix("wg:") {
             out.push(format!("{}{a}", rendezvous::SCHEME));

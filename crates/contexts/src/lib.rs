@@ -24,6 +24,7 @@
 //! store: the running agent runs adapters for handhelds, the window and
 //! the command line approve and remove them.
 
+use droidtop_agent_core::sync::LockExt;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -197,7 +198,7 @@ pub fn tell_received(store: &Store, id: &str, generation: u64) -> Result<Option<
 /// the app that owned the data has closed, with no timer. Returns how many
 /// adapters took their copy in.
 pub fn deliver_pending(store: &Store) -> usize {
-    let ids: Vec<String> = store.settings.lock().unwrap().adapters.keys().cloned().collect();
+    let ids: Vec<String> = store.settings.locked().adapters.keys().cloned().collect();
     ids.iter()
         .filter(|id| {
             let Some(generation) = std::fs::read_to_string(pending_path(store, id)).ok().and_then(|g| g.trim().parse::<u64>().ok()) else {
@@ -247,7 +248,7 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
 /// of the agent (`contexts add`, `contexts approve`) since this one
 /// started is read from the settings file.
 pub fn adapter(store: &Store, id: &str) -> Option<Adapter> {
-    let mut settings = store.settings.lock().unwrap();
+    let mut settings = store.settings.locked();
     if !settings.adapters.contains_key(id) {
         if let Ok(on_disk) = read_json::<Settings>(&store.dirs.settings()) {
             if let Some(program) = on_disk.adapters.get(id) {
@@ -278,7 +279,7 @@ pub fn consider_offer(store: &Store, context: &str, offer: &AdapterOffer) -> Res
         return Err(format!("{context} is not a context name"));
     }
     let installed = adapter(store, context).is_some();
-    let approval = store.settings.lock().unwrap().approved.get(context).cloned();
+    let approval = store.settings.locked().approved.get(context).cloned();
     match approval {
         Some(a) if a.plugin == offer.plugin => {
             if !a.sha256.eq_ignore_ascii_case(&program.sha256) {
@@ -289,7 +290,7 @@ pub fn consider_offer(store: &Store, context: &str, offer: &AdapterOffer) -> Res
         }
         Some(_) => Ok(()),
         None if installed => Ok(()),
-        None if store.settings.lock().unwrap().declined.get(context) == Some(&offer.plugin) => Ok(()),
+        None if store.settings.locked().declined.get(context) == Some(&offer.plugin) => Ok(()),
         None => {
             let mut offers = adapter_offers(store);
             if offers.get(context) != Some(offer) {
@@ -335,7 +336,7 @@ pub fn install(store: &Store, context: &str, offer: &AdapterOffer) -> Result<Pat
     }
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
     {
-        let mut settings = store.settings.lock().unwrap();
+        let mut settings = store.settings.locked();
         settings.adapters.insert(context.to_string(), path.clone());
         let approval = Approval { plugin: offer.plugin.clone(), sha256: program.sha256.to_lowercase() };
         settings.approved.insert(context.to_string(), approval);
@@ -367,7 +368,7 @@ pub fn decline(store: &Store, context: &str) -> Result<(), String> {
     let mut offers = adapter_offers(store);
     let Some(offer) = offers.remove(context) else { return Ok(()) };
     write_json(&store.dirs.adapter_offers(), &offers).map_err(|e| e.to_string())?;
-    store.settings.lock().unwrap().declined.insert(context.to_string(), offer.plugin);
+    store.settings.locked().declined.insert(context.to_string(), offer.plugin);
     store.save_settings().map_err(|e| e.to_string())
 }
 

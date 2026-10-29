@@ -3,6 +3,7 @@
 
 use droidtop_agent_core::cert;
 use droidtop_agent_core::keys::PeerId;
+use droidtop_agent_core::sync::LockExt;
 use droidtop_agent_store::{offer_for, Settings, Store};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -42,7 +43,7 @@ fn identity(py: Python<'_>) -> PyResult<PyObject> {
 /// The person's settings, as `droidtop-agent`'s window shows them.
 #[pyfunction]
 fn settings(py: Python<'_>) -> PyResult<PyObject> {
-    run(py, || serde_json::to_value(&*agent()?.store.settings.lock().unwrap()).map_err(|e| e.to_string()))
+    run(py, || serde_json::to_value(&*agent()?.store.settings.locked()).map_err(|e| e.to_string()))
 }
 
 /// Changes the settings named as keyword arguments (`name="DESKTOP"`,
@@ -56,12 +57,12 @@ fn set_settings(py: Python<'_>, changes: Option<&Bound<'_, PyDict>>) -> PyResult
     };
     run(py, move || {
         let a = agent()?;
-        let mut current = serde_json::to_value(&*a.store.settings.lock().unwrap()).map_err(|e| e.to_string())?;
+        let mut current = serde_json::to_value(&*a.store.settings.locked()).map_err(|e| e.to_string())?;
         for (k, v) in changes.as_object().into_iter().flatten() {
             current[k] = v.clone();
         }
         let settings: Settings = serde_json::from_value(current).map_err(|e| format!("those settings are not valid: {e}"))?;
-        *a.store.settings.lock().unwrap() = settings;
+        *a.store.settings.locked() = settings;
         a.store.save_settings().map_err(|e| e.to_string())?;
         Ok(json!(null))
     })
@@ -78,7 +79,7 @@ fn set_settings(py: Python<'_>, changes: Option<&Bound<'_, PyDict>>) -> PyResult
 fn devices(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
         let a = agent()?;
-        let settings = a.store.settings.lock().unwrap().clone();
+        let settings = a.store.settings.locked().clone();
         let launch = settings.launch_devices.clone();
         let devices: Vec<Value> = a
             .store
@@ -120,7 +121,7 @@ fn set_launch(py: Python<'_>, id: String, allowed: bool) -> PyResult<PyObject> {
         let a = agent()?;
         let id = one_device(&a.store, &id)?.to_hex();
         {
-            let mut s = a.store.settings.lock().unwrap();
+            let mut s = a.store.settings.locked();
             s.launch_devices.retain(|d| *d != id);
             if allowed {
                 s.launch_devices.push(id);
@@ -180,7 +181,7 @@ fn announcements(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
         let a = agent()?;
         a.store.reload_settings();
-        let values = a.store.settings.lock().unwrap().announce.clone();
+        let values = a.store.settings.locked().announce.clone();
         serde_json::to_value(values).map_err(|e| e.to_string())
     })
 }
