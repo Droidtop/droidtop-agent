@@ -127,7 +127,7 @@ mod imp {
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
             // ksni wants ARGB32 in network byte order.
             let (rgba, size) = crate::icon::rgba(32);
-            let data = rgba.chunks_exact(4).flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
+            let data = rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
             vec![ksni::Icon { width: size as i32, height: size as i32, data }]
         }
         fn activate(&mut self, _x: i32, _y: i32) {
