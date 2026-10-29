@@ -308,6 +308,16 @@ slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
     the `WinePrefixLocator` droidtop already has;
   - an engine game resolves `<base>` to its folder (Ren'Py and RPG Maker keep
     saves there, per the standing save policy).
+- **Rules are kept per build (decided 2026-10-29, #546 design v3 D5).** The
+  Ludusavi index holds a game's Windows rules and its Linux rules apart
+  (`ludusavi::Group`, `Index::spec_in`). They are different sets of files and
+  `<home>` means a different folder in each, so they are never merged. A Linux
+  rule keeps only the tokens a native Linux game resolves (`<base>`, `<home>`,
+  `<xdgData>`, `<xdgConfig>`), a Windows rule only the Windows ones. Nothing
+  asks for the Linux group yet: choosing it per game, and keying save sets by
+  group (`steam:440#linux`), are the next steps of the same slice. An index
+  written before this change still loads, with no Linux rules, until the next
+  `manifest update`.
 - **On a Linux or macOS computer** the Windows templates are resolved in the
   prefix the game runs in there: Steam's Proton prefix, Heroic's per-game
   `winePrefix`, a Lutris Wine game's `prefix`, a Bottles bottle, or a
