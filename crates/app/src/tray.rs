@@ -20,8 +20,8 @@ pub struct Tray {
     pub actions: Receiver<Action>,
     /// Whether a tray icon is showing.
     pub shown: bool,
-    #[allow(dead_code)]
-    handle: Option<imp::Handle>,
+    /// Never read: holding it keeps the icon alive, and dropping it removes the icon.
+    _handle: Option<imp::Handle>,
 }
 
 impl Tray {
@@ -31,10 +31,10 @@ impl Tray {
         let (tx, actions) = channel();
         let notify = Notify { ctx: ctx.clone(), tx };
         match imp::start(notify) {
-            Ok(handle) => Tray { actions, shown: true, handle: Some(handle) },
+            Ok(handle) => Tray { actions, shown: true, _handle: Some(handle) },
             Err(e) => {
                 eprintln!("No tray icon ({e}); closing the window quits droidtop-agent.");
-                Tray { actions, shown: false, handle: None }
+                Tray { actions, shown: false, _handle: None }
             }
         }
     }
