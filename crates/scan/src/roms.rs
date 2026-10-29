@@ -38,8 +38,8 @@ fn esde_rom_folder() -> Option<PathBuf> {
     (!value.is_empty()).then(|| PathBuf::from(value)).filter(|p| p.is_dir())
 }
 
-/// droidtop's platforms database (`data/platforms-database.json`, a copy of
-/// droidtop-platforms' file): each system's id and the file types it runs.
+/// droidtop's platforms database (`data/platforms-database.json`, droidtop-platforms' file at the commit
+/// `data/UPSTREAM` names; CI checks that): each system's id and the file types it runs.
 const PLATFORMS: &str = include_str!("../data/platforms-database.json");
 
 /// Folder names droidtop reads as another system's id

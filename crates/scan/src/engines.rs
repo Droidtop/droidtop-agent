@@ -1,6 +1,6 @@
 //! Which engine a game folder was made with, decided by droidtop's engines
-//! database (`data/engines-database.json`, a copy of droidtop-platforms'
-//! file): the same rules, in the same row order, that droidtop and
+//! database (`data/engines-database.json`, droidtop-platforms' file at the commit
+//! `data/UPSTREAM` names; CI checks that): the same rules, in the same row order, that droidtop and
 //! Enginehost classify with (droidtop SPEC 7e2b), so the computer and the
 //! handheld agree on what a folder is. Only the byte probes the database
 //! names as `builtin` (Godot's embedded pack, a Twine page, Unity's player)
