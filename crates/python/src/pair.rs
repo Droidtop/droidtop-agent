@@ -1,7 +1,6 @@
 //! `droidtop_agent.pair`: pairing a handheld from this computer
 //! (droidtop-agent-pair), the way `droidtop-agent`'s window does.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -21,7 +20,7 @@ pub fn fill(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 /// This computer showing a pairing code: the outcome once there is one.
 struct Showing {
-    cancel: Arc<AtomicBool>,
+    cancel: Arc<droidtop_agent_core::accept::Cancel>,
     outcome: Arc<Mutex<Option<Result<String, String>>>>,
 }
 
@@ -48,7 +47,7 @@ fn show(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
         let a = agent()?;
         if let Some(s) = &*SHOWING.lock().unwrap() {
-            s.cancel.store(true, Ordering::Relaxed);
+            s.cancel.cancel();
         }
         let showing = droidtop_agent_pair::listen()?;
         let reply = json!({
@@ -58,7 +57,7 @@ fn show(py: Python<'_>) -> PyResult<PyObject> {
             "invite": showing.invite(&a.store),
             "seconds": showing.until.saturating_duration_since(std::time::Instant::now()).as_secs(),
         });
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(droidtop_agent_core::accept::Cancel::new());
         let outcome = Arc::new(Mutex::new(None));
         {
             let (cancel, outcome) = (cancel.clone(), outcome.clone());
@@ -94,7 +93,7 @@ fn status(py: Python<'_>) -> PyResult<PyObject> {
 fn cancel(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
         if let Some(s) = &*SHOWING.lock().unwrap() {
-            s.cancel.store(true, Ordering::Relaxed);
+            s.cancel.cancel();
         }
         Ok(json!(null))
     })

@@ -7,6 +7,7 @@
 //! the agent serves each connection on its own thread, and droidtop calls in
 //! from a background coroutine. No async runtime to carry on the handheld.
 
+pub mod accept;
 pub mod cert;
 pub mod channel;
 pub mod client;

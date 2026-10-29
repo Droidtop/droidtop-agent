@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use droidtop_agent_core::accept::Cancel;
 use droidtop_agent_core::cert;
 use droidtop_agent_core::channel::Channel;
 use droidtop_agent_core::client::{self, ConnectError, RendezvousSettings, Session, Target};
@@ -21,7 +22,7 @@ use droidtop_agent_core::discovery::{self, Announce};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::{Change, Cursor, Library, Marks, ScannedGame};
 use droidtop_agent_core::mailbox::{self, Envelope};
-use droidtop_agent_core::pairing::{self, Kind, PairInvite, Paired};
+use droidtop_agent_core::pairing::{self, Kind, PairInvite, Paired, PairingEnded};
 use droidtop_agent_core::proto::{check_announcements, Announcements, GameRef, Request, Response};
 use droidtop_agent_core::saves::{prefix_roots, Roots};
 use droidtop_agent_core::savesync::{self, SaveSyncRequest, Side};
@@ -42,7 +43,9 @@ pub fn call(op: &str, args: &str) -> String {
         "pair_wait" => pair_wait(&args),
         "pair_connect" => pair_connect(&args),
         "pair_cancel" => {
-            CANCEL.store(true, Ordering::Relaxed);
+            if let Some(cancel) = CANCEL.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                cancel.cancel();
+            }
             Ok(json!({}))
         }
         "computers_find" => computers_find(&args),
@@ -141,10 +144,8 @@ struct PairSession {
 }
 
 static SESSION: Mutex<Option<PairSession>> = Mutex::new(None);
-static CANCEL: AtomicBool = AtomicBool::new(false);
-
-/// Wrong codes a pairing screen accepts before it ends its session.
-const MAX_ATTEMPTS: u32 = 3;
+/// The pairing screen's cancel, shared with `pair_cancel` while `pair_wait` is blocked on the listener.
+static CANCEL: Mutex<Option<Arc<Cancel>>> = Mutex::new(None);
 
 /// Opens the pairing listener for as long as the pairing screen is open,
 /// and answers the computer's pairing query on the LAN.
@@ -155,7 +156,10 @@ fn pair_start(args: &Value) -> Outcome {
     if let Some(old) = SESSION.lock().unwrap().take() {
         old.stop.store(true, Ordering::Relaxed);
     }
-    CANCEL.store(false, Ordering::Relaxed);
+    // A pairing screen that is still waiting is ended by opening a new one.
+    if let Some(old) = CANCEL.lock().unwrap_or_else(|e| e.into_inner()).replace(Arc::new(Cancel::new())) {
+        old.cancel();
+    }
     let listener = TcpListener::bind(("0.0.0.0", 0)).map_err(|e| Failure::Error(format!("could not open a pairing port ({e})")))?;
     let port = listener.local_addr().map_err(|e| Failure::Error(e.to_string()))?.port();
     let code = pairing::new_code();
@@ -181,38 +185,28 @@ fn pair_start(args: &Value) -> Outcome {
 fn pair_wait(args: &Value) -> Outcome {
     let timeout = Duration::from_millis(args["timeout_ms"].as_u64().unwrap_or(600_000));
     let session = SESSION.lock().unwrap().take().ok_or_else(|| Failure::Error("pairing was not started".into()))?;
-    let end = |s: &PairSession| s.stop.store(true, Ordering::Relaxed);
-    session.listener.set_nonblocking(true).map_err(|e| Failure::Error(e.to_string()))?;
-    let deadline = Instant::now() + timeout;
-    let mut attempts = 0;
-    while Instant::now() < deadline && !CANCEL.load(Ordering::Relaxed) {
-        match session.listener.accept() {
-            Ok((mut stream, from)) => {
-                let _ = stream.set_nonblocking(false);
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-                match pairing::pair_host(&mut stream, &session.key, &session.name, session.kind, &session.code) {
-                    Ok(paired) => {
-                        end(&session);
-                        return Ok(paired_json(&paired, format!("{}:{PORT}", from.ip())));
-                    }
-                    Err(e) => {
-                        attempts += 1;
-                        if attempts >= MAX_ATTEMPTS {
-                            end(&session);
-                            return Err(Failure::Error(format!("pairing stopped after {MAX_ATTEMPTS} wrong codes ({e})")));
-                        }
-                    }
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(100)),
-            Err(e) => {
-                end(&session);
-                return Err(Failure::Error(e.to_string()));
-            }
+    let cancel =
+        CANCEL.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| Failure::Error("pairing was not started".into()))?;
+    let result = pairing::accept_pairing(
+        &session.listener,
+        &session.key,
+        &session.name,
+        session.kind,
+        &session.code,
+        &cancel,
+        Instant::now() + timeout,
+        |_, _| {},
+    );
+    session.stop.store(true, Ordering::Relaxed);
+    match result {
+        Ok((paired, from)) => Ok(paired_json(&paired, format!("{}:{PORT}", from.ip()))),
+        Err(PairingEnded::Cancelled) => Err(Failure::Error("pairing was cancelled".into())),
+        Err(PairingEnded::TimedOut) => Err(Failure::Error("no computer paired in time".into())),
+        Err(PairingEnded::TooManyWrong(e)) => {
+            Err(Failure::Error(format!("pairing stopped after {} wrong codes ({e})", pairing::MAX_ATTEMPTS)))
         }
+        Err(PairingEnded::Io(e)) => Err(Failure::Error(e.to_string())),
     }
-    end(&session);
-    Err(Failure::Error(if CANCEL.load(Ordering::Relaxed) { "pairing was cancelled".into() } else { "no computer paired in time".into() }))
 }
 
 /// Pairing the other way round: the other device shows its address and a

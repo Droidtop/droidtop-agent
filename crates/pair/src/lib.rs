@@ -16,17 +16,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use droidtop_agent_core::accept::{Cancel, Ended, Waiting};
 use droidtop_agent_core::confirm::{self, Comparing};
-use droidtop_agent_core::pairing::{new_code, pair_client, pair_host, Kind, PairInvite, Paired};
+use droidtop_agent_core::pairing::{accept_pairing, new_code, pair_client, Kind, PairInvite, Paired, PairingEnded, MAX_ATTEMPTS};
 use droidtop_agent_core::{discovery, PAIR_PORT, PORT};
 
 use droidtop_agent_store::Store;
 
 /// How long the computer shows a code.
 const SHOW_FOR: Duration = Duration::from_secs(10 * 60);
-
-/// Wrong codes accepted before the code is dropped.
-const MAX_ATTEMPTS: u32 = 3;
 
 /// This computer showing a code: the port it listens on, its addresses and
 /// the code, until a handheld pairs or the time runs out.
@@ -124,7 +122,6 @@ pub fn listen() -> Result<Showing, String> {
         .or_else(|_| TcpListener::bind(("0.0.0.0", 0)))
         .map_err(|e| format!("Could not open a port for pairing: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let all = places(port);
     let addresses = all.iter().filter(|p| !p.address.starts_with('[')).map(|p| p.address.clone()).collect();
     Ok(Showing { listener, port, code: new_code(), addresses, places: all, until: Instant::now() + SHOW_FOR })
@@ -146,38 +143,24 @@ pub fn show(store: &Store) -> Result<String, String> {
         println!("On another computer: droidtop-agent pair '{}'", showing.invite(store));
     }
     println!("(An Android emulator reaches this computer at 10.0.2.2:{port}.) Waiting up to 10 minutes; Ctrl+C stops.");
-    wait(store, showing, &AtomicBool::new(false))
+    wait(store, showing, &Cancel::new())
 }
 
 /// Waits for a handheld or another computer to pair with the code [`showing`] shows, until it
-/// pairs, three codes were wrong, the time runs out or [`cancel`] is set.
-pub fn wait(store: &Store, showing: Showing, cancel: &AtomicBool) -> Result<String, String> {
+/// pairs, three codes were wrong, the time runs out or [`cancel`] is called.
+pub fn wait(store: &Store, showing: Showing, cancel: &Cancel) -> Result<String, String> {
     let Showing { listener, code, until: deadline, .. } = showing;
-    let mut attempts = 0;
-    while Instant::now() < deadline {
-        if cancel.load(Ordering::Relaxed) {
-            return Err("Pairing stopped.".into());
+    match accept_pairing(&listener, &store.key, &store.name(), Kind::Computer, &code, cancel, deadline, |from, e| {
+        eprintln!("A pairing attempt from {from} failed: {e}")
+    }) {
+        Ok((paired, _)) => keep(store, paired),
+        Err(PairingEnded::Cancelled) => Err("Pairing stopped.".into()),
+        Err(PairingEnded::TimedOut) => Err("Nothing paired in time. Run droidtop-agent pair again for a new code.".into()),
+        Err(PairingEnded::TooManyWrong(_)) => {
+            Err(format!("Stopped after {MAX_ATTEMPTS} wrong codes. Run droidtop-agent pair again for a new one."))
         }
-        match listener.accept() {
-            Ok((mut stream, from)) => {
-                let _ = stream.set_nonblocking(false);
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-                match pair_host(&mut stream, &store.key, &store.name(), Kind::Computer, &code) {
-                    Ok(paired) => return keep(store, paired),
-                    Err(e) => {
-                        attempts += 1;
-                        eprintln!("A pairing attempt from {} failed: {e}", from.ip());
-                        if attempts >= MAX_ATTEMPTS {
-                            return Err(format!("Stopped after {MAX_ATTEMPTS} wrong codes. Run droidtop-agent pair again for a new one."));
-                        }
-                    }
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
-            Err(e) => return Err(e.to_string()),
-        }
+        Err(PairingEnded::Io(e)) => Err(e.to_string()),
     }
-    Err("Nothing paired in time. Run droidtop-agent pair again for a new code.".into())
 }
 
 pub fn pair(store: &Store, input: &str) -> Result<String, String> {
@@ -242,7 +225,6 @@ pub fn offer(store: &Store, program: &str) -> Result<Offering, String> {
     let listener = TcpListener::bind(("0.0.0.0", PAIR_PORT))
         .or_else(|_| TcpListener::bind(("0.0.0.0", 0)))
         .map_err(|e| format!("Could not open a port for pairing: {e}"))?;
-    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let offer = discovery::Offer { id: store.peer_id().to_hex(), name: store.name(), port, program: program.into() };
     discovery::offer(Some(offer.clone()));
@@ -279,23 +261,19 @@ impl Offering {
     /// Waits for the one device that picks this computer, until [`cancel`]
     /// is set, and starts the comparison. The offer ends here: one attempt
     /// each time the screen opens.
-    pub fn accept(self, store: &Store, cancel: &AtomicBool) -> Result<Comparison, String> {
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                return Err("Pairing stopped.".into());
+    pub fn accept(self, store: &Store, cancel: &Cancel) -> Result<Comparison, String> {
+        let mut stream = {
+            let waiting = Waiting::new(&self.listener, cancel, None).map_err(|e| e.to_string())?;
+            match waiting.accept() {
+                Ok((stream, _)) => stream,
+                Err(Ended::Io(e)) => return Err(e.to_string()),
+                Err(Ended::Cancelled | Ended::TimedOut) => return Err("Pairing stopped.".into()),
             }
-            match self.listener.accept() {
-                Ok((mut stream, _)) => {
-                    let _ = stream.set_nonblocking(false);
-                    let _ = stream.set_read_timeout(Some(ANSWER_FOR));
-                    drop(self);
-                    let comparing = confirm::host_start(&mut stream, &store.key).map_err(|e| format!("Pairing did not start: {e}"))?;
-                    return Ok(Comparison::new(stream, comparing, String::new()));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
-                Err(e) => return Err(e.to_string()),
-            }
-        }
+        };
+        stream.set_read_timeout(Some(ANSWER_FOR)).map_err(|e| e.to_string())?;
+        drop(self);
+        let comparing = confirm::host_start(&mut stream, &store.key).map_err(|e| format!("Pairing did not start: {e}"))?;
+        Ok(Comparison::new(stream, comparing, String::new()))
     }
 }
 
@@ -355,7 +333,7 @@ fn confirm_on_console(c: Comparison, store: &Store) -> Result<String, String> {
 pub fn compare_offer(store: &Store) -> Result<String, String> {
     let offering = offer(store, "droidtop-agent")?;
     println!("{} can be paired: on the handheld or the other computer, pick it from the list. Ctrl+C stops.", offering.offer.name);
-    let c = offering.accept(store, &AtomicBool::new(false))?;
+    let c = offering.accept(store, &Cancel::new())?;
     confirm_on_console(c, store)
 }
 
@@ -408,7 +386,7 @@ mod tests {
         let offering = offer(&a, "pythia").unwrap();
         let (o, port) = (offering.offer.clone(), offering.offer.port);
         let waiting = std::thread::spawn(move || {
-            let c = offering.accept(&a, &AtomicBool::new(false)).unwrap();
+            let c = offering.accept(&a, &Cancel::new()).unwrap();
             let code = c.code.clone();
             (c.finish(&a, a_says), code, a)
         });
@@ -452,7 +430,7 @@ mod tests {
         .to_uri();
         let (a_peer, b_peer) = (a.peer_id(), b.peer_id());
         let waiting = std::thread::spawn(move || {
-            let r = wait(&a, showing, &AtomicBool::new(false));
+            let r = wait(&a, showing, &Cancel::new());
             (r, a)
         });
         pair(&b, &invite).unwrap();

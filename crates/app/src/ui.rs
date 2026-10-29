@@ -64,7 +64,7 @@ enum Pairing {
         places: Vec<pair::Place>,
         qr: Qr,
         until: Instant,
-        cancel: Arc<AtomicBool>,
+        cancel: Arc<droidtop_agent_core::accept::Cancel>,
     },
     /// This computer is connecting with a code the handheld showed.
     Connecting,
@@ -469,7 +469,7 @@ impl App {
                 ui.label(RichText::new("The same invitation as a QR code, for a device with a camera.").weak());
                 if ui.button("Stop").clicked() {
                     if let Pairing::Showing { cancel, .. } = &*pairing {
-                        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                        cancel.cancel();
                     }
                 }
                 return;
@@ -517,7 +517,7 @@ impl App {
         } else if show {
             match pair::listen() {
                 Ok(showing) => {
-                    let cancel = Arc::new(AtomicBool::new(false));
+                    let cancel = Arc::new(droidtop_agent_core::accept::Cancel::new());
                     let qr = Qr::of(&showing.invite(&self.agent.store)).unwrap_or(Qr { width: 0, dark: Vec::new() });
                     *pairing = Pairing::Showing {
                         code: showing.code.clone(),
@@ -531,7 +531,7 @@ impl App {
                         let result = pair::wait(&agent.store, showing, &cancel);
                         *state.lock().unwrap() = match result {
                             Ok(name) => Pairing::Paired(name),
-                            Err(_) if cancel.load(std::sync::atomic::Ordering::Relaxed) => Pairing::Idle,
+                            Err(_) if cancel.is_cancelled() => Pairing::Idle,
                             Err(e) => Pairing::Failed(e),
                         };
                     });

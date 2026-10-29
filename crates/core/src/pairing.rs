@@ -14,12 +14,15 @@
 //! for a handheld it cannot reach, such as one behind an emulator's NAT.
 
 use std::io::{Read, Write};
+use std::net::{IpAddr, SocketAddr, TcpListener};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use windowcast_identity::Identity;
 use windowcast_pairing::exchange::{self, Proof};
 use windowcast_pairing::{finish, start_client, start_host, SessionKey};
 
+use crate::accept::{Cancel, Ended, Waiting};
 use crate::frame::{read_frame, write_frame, MAX_PLAIN_FRAME};
 use crate::keys::{DeviceKey, PeerId};
 use crate::{cert, hex, Error, Result};
@@ -247,6 +250,60 @@ pub fn pair_host<S: Read + Write>(stream: &mut S, key: &DeviceKey, name: &str, k
     let paired = described(stream, &session, 0, (&client, &host))?;
     describe(stream, key, &session, 1, (&client, &host), name, kind)?;
     Ok(paired)
+}
+
+/// Wrong codes one pairing session accepts before it ends.
+pub const MAX_ATTEMPTS: u32 = 3;
+
+/// How long one device may take over the pairing exchange once it has connected: the host's side includes
+/// reading the other device's answer after its person has typed the code.
+const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How a [`accept_pairing`] ended without pairing.
+#[derive(Debug)]
+pub enum PairingEnded {
+    Cancelled,
+    TimedOut,
+    /// [`MAX_ATTEMPTS`] connections failed the exchange; the last one's error.
+    TooManyWrong(Error),
+    Io(std::io::Error),
+}
+
+/// The one place a device shows a code and waits for another to pair with it (the handheld's pairing screen, the
+/// computer's `pair` command and window): waits on [`listener`] until a device completes the exchange as the host,
+/// [`MAX_ATTEMPTS`] connections failed it, [`cancel`] is called or [`deadline`] passes. [`on_failure`] is told of each
+/// failed attempt. Returns who paired and where from.
+#[allow(clippy::too_many_arguments)]
+pub fn accept_pairing(
+    listener: &TcpListener,
+    key: &DeviceKey,
+    name: &str,
+    kind: Kind,
+    code: &str,
+    cancel: &Cancel,
+    deadline: Instant,
+    mut on_failure: impl FnMut(IpAddr, &Error),
+) -> std::result::Result<(Paired, SocketAddr), PairingEnded> {
+    let waiting = Waiting::new(listener, cancel, Some(deadline)).map_err(PairingEnded::Io)?;
+    let mut attempts = 0;
+    loop {
+        let (mut stream, from) = waiting.accept().map_err(|ended| match ended {
+            Ended::Cancelled => PairingEnded::Cancelled,
+            Ended::TimedOut => PairingEnded::TimedOut,
+            Ended::Io(e) => PairingEnded::Io(e),
+        })?;
+        stream.set_read_timeout(Some(EXCHANGE_TIMEOUT)).map_err(PairingEnded::Io)?;
+        match pair_host(&mut stream, key, name, kind, code) {
+            Ok(paired) => return Ok((paired, from)),
+            Err(e) => {
+                attempts += 1;
+                on_failure(from.ip(), &e);
+                if attempts >= MAX_ATTEMPTS {
+                    return Err(PairingEnded::TooManyWrong(e));
+                }
+            }
+        }
+    }
 }
 
 /// The side the person typed [`code`] on. [`kind`] is what this device is.
