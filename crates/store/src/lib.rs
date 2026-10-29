@@ -13,7 +13,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
 
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::Library;
@@ -307,40 +307,31 @@ fn stamp(path: &Path) -> Stamp {
     fs::metadata(path).ok().and_then(|m| Some((m.modified().ok()?, m.len())))
 }
 
-/// A lock file beside a state file, so the headless agent, the window and a
-/// command line run at the same time change it one after another and never
-/// write back a copy that is out of date (Droidtop/tracker#528, #531).
-struct FileLock(PathBuf);
+/// An operating system lock on a file beside a state file, so the headless
+/// agent, the window and a command line run at the same time change it one
+/// after another and never write back a copy that is out of date
+/// (Droidtop/tracker#528, #531). The system holds it: it is released when
+/// this is dropped and when the process dies, so a holder that is slow is
+/// waited for and one that died is not (the lock file used to be removed after
+/// ten seconds whoever held it, which let a second writer in beside a slow
+/// first one). The file itself stays, since removing it while others wait
+/// would let two of them hold "the" lock on different files.
+struct FileLock(fs::File);
 
 impl FileLock {
-    fn take(of: &Path) -> FileLock {
-        let lock = of.with_extension("lock");
-        let started = Instant::now();
-        loop {
-            match fs::OpenOptions::new().write(true).create_new(true).open(&lock) {
-                Ok(_) => break,
-                Err(_) => {
-                    // A lock left by a process that died is not waited for.
-                    let stale = fs::metadata(&lock)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.elapsed().ok())
-                        .is_some_and(|age| age > Duration::from_secs(30));
-                    if stale || started.elapsed() > Duration::from_secs(10) {
-                        let _ = fs::remove_file(&lock);
-                    } else {
-                        std::thread::sleep(Duration::from_millis(20));
-                    }
-                }
-            }
-        }
-        FileLock(lock)
+    /// Waits for the lock on [`of`]'s lock file. An error means the system would not lock the file (a read-only folder, a
+    /// file system without locks): the caller goes on without, as a write to a folder that refuses locks fails the same way.
+    fn take(of: &Path) -> io::Result<FileLock> {
+        let file = fs::OpenOptions::new().write(true).create(true).truncate(false).open(of.with_extension("lock"))?;
+        file.lock()?;
+        Ok(FileLock(file))
     }
 }
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        // Unlocking can only fail for a file already closed; closing the file releases the lock in any case.
+        let _ = self.0.unlock();
     }
 }
 
@@ -514,7 +505,7 @@ impl Store {
     /// Changes the paired devices from the file's current state and writes
     /// them back; [`f`] returns its result and whether it changed anything.
     pub fn edit_devices<R>(&self, f: impl FnOnce(&mut Vec<Device>) -> (R, bool)) -> R {
-        let _lock = FileLock::take(&self.dirs.peers());
+        let _lock = FileLock::take(&self.dirs.peers()).ok();
         self.devices_now();
         let mut devices = self.devices.lock().unwrap();
         let (result, changed) = f(&mut devices);
@@ -544,7 +535,7 @@ impl Store {
     /// anything. This is the only way the agent writes `library.json`, so a
     /// copy that is out of date is never written over newer marks or installs.
     pub fn edit_library<R>(&self, f: impl FnOnce(&mut Library) -> (R, bool)) -> R {
-        let _lock = FileLock::take(&self.dirs.library());
+        let _lock = FileLock::take(&self.dirs.library()).ok();
         let mut library = self.library_now();
         let (result, changed) = f(&mut library);
         if changed && library.save(&self.dirs.library()).is_ok() {
@@ -692,6 +683,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn dirs(name: &str) -> Dirs {
         let root = std::env::temp_dir().join(format!("dta-migrate-{}-{name}", std::process::id()));
@@ -731,6 +723,27 @@ mod tests {
         let again = Store::open_in(d).unwrap();
         assert_eq!(again.library_now().games["title:dt sync test"].marks["favourite"].value, serde_json::json!(true));
         assert_eq!(serving.library_now().games["title:dt sync test"].marks.len(), 1);
+    }
+
+    /// A second taker waits for the first, however long it holds the lock, and then gets it
+    /// (Droidtop/tracker#761: the old lock was broken after ten seconds, live holder or not).
+    #[test]
+    fn a_lock_is_waited_for_while_it_is_held() {
+        let d = dirs("lock");
+        let state = d.config.join("state.json");
+        let first = FileLock::take(&state).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn({
+            let state = state.clone();
+            move || {
+                let _second = FileLock::take(&state).unwrap();
+                tx.send(()).unwrap();
+            }
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "taken while the first still held it");
+        drop(first);
+        rx.recv_timeout(Duration::from_secs(5)).expect("not taken after the first let go");
+        waiter.join().unwrap();
     }
 
     /// A handheld the trusted list holds but the device list lost comes back,

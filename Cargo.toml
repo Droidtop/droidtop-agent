@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 repository = "https://github.com/Droidtop/droidtop-agent"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [workspace.dependencies]
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
