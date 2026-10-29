@@ -415,7 +415,7 @@ pub fn connect_on(
             // Until one endpoint answers, every candidate gets the handshake:
             // the same one each second, a new one every fourth.
             if !session.heard && last_probe.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
-                if probes % 4 == 0 {
+                if probes.is_multiple_of(4) {
                     if let TunnResult::WriteToNetwork(packet) = session.tunn.format_handshake_initiation(&mut out, true) {
                         init = packet.to_vec();
                     }
