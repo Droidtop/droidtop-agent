@@ -71,8 +71,6 @@ Usage:
   droidtop-agent syncthing [on | off]  Keep this computer's Syncthing in step with the paired devices' (on
                                        unless turned off): the one running here, or one started over
                                        Syncthing's standard folder; each device's Syncthing is added for it
-  droidtop-agent primary [<id> | none] The handheld whose saves win here when both changed (the start of its id
-                                       is enough); with none, the newest copy wins
   droidtop-agent offer                 What this computer offers each paired device: its library, its saves,
                                        and starting games here (a handheld starts with library and saves,
                                        a computer with nothing)
@@ -306,30 +304,6 @@ fn main() {
         ["rendezvous", "stun", list @ ..] if !list.is_empty() => {
             agent.store.settings.lock().unwrap().stun_servers = list.iter().map(|s| s.to_string()).collect();
             agent.store.save_settings().map_err(|e| e.to_string())
-        }
-        ["primary"] => {
-            let id = agent.store.settings.lock().unwrap().primary_device.clone();
-            match id.and_then(|id| PeerId::from_hex(&id).ok()) {
-                Some(peer) => println!("Primary handheld: {}", agent.store.device_name(&peer)),
-                None => println!("No primary handheld: the newest copy of a game's saves wins."),
-            }
-            Ok(())
-        }
-        ["primary", "none"] => {
-            agent.store.settings.lock().unwrap().primary_device = None;
-            agent.store.save_settings().map_err(|e| e.to_string())
-        }
-        ["primary", id] => {
-            let matches: Vec<String> =
-                agent.store.devices_now().iter().filter(|d| d.id.starts_with(&id.to_lowercase())).map(|d| d.id.clone()).collect();
-            match matches.as_slice() {
-                [one] => {
-                    agent.store.settings.lock().unwrap().primary_device = Some(one.clone());
-                    agent.store.save_settings().map_err(|e| e.to_string())
-                }
-                [] => Err("No paired handheld has that id.".into()),
-                _ => Err("More than one paired handheld starts with that; give more of the id.".into()),
-            }
         }
         ["launch"] => {
             let allowed = agent.store.settings.lock().unwrap().launch_devices.clone();

@@ -235,12 +235,8 @@ pub enum Response {
     SaveSpec {
         spec: Option<SaveSpec>,
     },
-    /// [`primary`]: the computer names this handheld its primary handheld,
-    /// whose saves it prefers when both changed.
     Manifest {
         files: Vec<FileEntry>,
-        #[serde(default)]
-        primary: bool,
     },
     File {
         file: FileEntry,

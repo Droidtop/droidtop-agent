@@ -101,11 +101,12 @@ Go was the other candidate: wireguard-go is the reference implementation, and
 droidtop's CI already cross-compiles Go (crane). It lost on point 1: windowcast
 cannot bake in a Go module.
 
-**Licence: GPL-3.0-only, because a dependency forces it.** windowcast and its
+**Licence: GPL-3.0-only, decided (owner, 2026-10-30, #814).** windowcast and its
 `identity` and `pairing` crates are GPL-3.0-only, and the agent links them.
-droidtop is GPL-3.0 too, so nothing downstream is affected. If the owner
-relicenses those two windowcast crates under MIT or Apache-2.0, the agent can
-follow (decision 1).
+droidtop is GPL-3.0 too, so nothing downstream is affected. Those two crates
+are not relicensed. The owner: "Other programs can embed it. They just have to
+obey the GPL. That's not really my problem, and I'm not an advocate for
+software licensing restrictions" (decision 1).
 
 ## 3. Identity and pairing
 
@@ -264,7 +265,7 @@ exactly one reply (`{"t":"error","message":...}` on failure).
 | `library_pull {since}` | `library_changes {changes, cursor}` | the computer's library changes since a cursor |
 | `library_push {changes}` | `ok {cursor}` | the handheld's library changes |
 | `save_spec {game}` | `save_spec {spec}` or `unknown` | where this game keeps its saves, as templates |
-| `save_manifest {game}` | `manifest {files, primary}` | the computer's save files: name, size, mtime, SHA-256; `primary` when this handheld is the computer's primary handheld |
+| `save_manifest {game}` | `manifest {files}` | the computer's save files: name, size, mtime, SHA-256 |
 | `file_get {game, name}` | `file {name, size, sha256}` + data | one save file, computer to handheld |
 | `file_put {game, name, size, sha256, mtime}` + data | `ok` | one save file, handheld to computer |
 | `save_apply {game, remove, archive}` | `ok` | removals, and keeping the computer's own changed set as its copy first (`archive`) |
@@ -313,21 +314,22 @@ slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
   saves elsewhere, often in another format. Those saves are not matched to
   the handheld's Windows copy, and only the person's own `saves add` entries
   cover such a game.
-- **The decision: the newest copy wins** (owner, 2026-10-10: "newest copy wins
-  isn't the worst idea. We keep the newest copy from EACH device, and an
-  archive if possible. We can also set a primary desktop and primary device to
-  prefer saves from. It's not like syncthing where we're handling lots of
-  arbitrary files"). The handheld keeps a baseline per paired computer and
-  game: the files as they were after the last sync (name, SHA-256, size,
-  mtime).
+- **The decision: when both changed, the person is asked and nobody wins**
+  (owner, 2026-10-30, #814: "for saves, nobody 'wins', because we don't want
+  the user to lose saves. We ask the user"; this replaces 2026-10-10's
+  newest-copy-wins and the primary device, which are gone). The handheld
+  keeps a baseline per paired computer and game: the files as they were after
+  the last sync (name, SHA-256, size, mtime).
   - If only one side changed since the baseline, that side wins: its changed
     files are copied over, and files it deleted are deleted on the other side.
-  - If both changed, or a first sync finds different files on each side, a
-    preferred side wins: the handheld's primary computer (droidtop, Settings
-    > Computers) or the computer's primary handheld (`droidtop-agent
-    primary`, the window's Settings). When neither side, or both, is
-    preferred, the set whose newest file is newer wins.
-  - The other side's changed set is kept, never lost (section 9).
+  - If both changed, or a first sync finds different files on each side, the
+    sync changes nothing and answers `conflict`, naming each side's device
+    and the date of its newest file and how many files it has. The person
+    picks a side and the sync runs again with that `choice`. No setting, no
+    date and no device decides it; a side with no files at all has nothing to
+    lose, so the other side's set simply comes.
+  - The side that is overwritten keeps its set as its own copy first, never
+    lost (section 9).
   - A save set is a game's whole set, not files picked one by one: a game's
     files belong together (an index and its slots), so mixing files from two
     devices could break a save. There are no version vectors: a game's saves
@@ -336,8 +338,9 @@ slashes (`<winAppData>/Game/save1.dat`), compared case-insensitively.
 - **When it runs:** before a game starts and after it ends, on the same seam
   as `StoreSaves` (one launch path, two save sources). A computer that cannot
   be reached is skipped once and said once. A game whose store already syncs
-  its saves (Steam Cloud) is left to the store by default, so two syncs never
-  fight over the same files (decision 5).
+  its saves (Steam Cloud) is not left to the store silently: when the store's
+  cloud copy and the computer's differ, the person is asked the same way,
+  and the side not kept stays as a backup (decision 5).
 - **Writes are safe:** each file is written beside its target as
   `.<name>.dtpart` and renamed over the target only when its SHA-256 matches.
   A failure keeps the baseline entry as it was, so the next sync retries the
@@ -542,22 +545,23 @@ droidtop's `docs/plugin-api.md` (F8). The shape:
 
 ## 9. Both sides changed, and many devices
 
-**Saves: nothing is lost.** When both sides changed, the newest (or the
-preferred) copy wins without asking (section 6). Before a device's own
-changed set is overwritten, it keeps it as its own copy (`savesync::keep_copy`):
+**Saves: nothing is lost.** When both sides changed, nobody wins: the
+person is asked which to keep (section 6). Before a device's own changed set
+is overwritten, it keeps it as its own copy (`savesync::keep_copy`):
 - the newest copy from each device, in `archive/<game>/copies/<device name>/`;
 - the copy that replaces moves to the dated archive,
   `archive/<game>/<UTC time>/` (with `device.txt`), which keeps the 5 most
   recent per game (decision 8).
 
 That is `<agent data>/archive/` on the computer, and the archive folder
-droidtop names for each computer on the handheld. The person can still pick
-the other side (`choice`), to bring back a copy: the side that pick
-overwrites keeps its own the same way. droidtop says which side's saves were
+droidtop names for each computer on the handheld. The person's pick
+(`choice`) is the answer to a conflict, and also brings back the other side's
+copy later: the side that pick overwrites keeps its own the same way. droidtop says which side's saves were
 kept (`kept` in the outcome). Steam Cloud games keep the store's own rule and
 its dialog. Save letters in the cloud folder follow the same rule on the
-computer: when its saves changed too, the newest or preferred set wins, the
-other is kept, and a refusal tells the handheld where its copy is.
+computer: when its saves changed too, nobody wins: nothing on the computer
+changes, the handheld's set is kept as its device's copy, and a refusal tells
+the handheld where it is; its next live sync asks the person.
 
 **Devices that are not paired directly** reach each other through the
 devices they share. The pairing graph is any set of handhelds and computers.
@@ -566,7 +570,7 @@ pairings:
 - **Saves:** a second handheld paired with the same computer gets the first
   one's saves at its next sync with it. Each pair keeps its own baseline, so
   a set that arrives through a third device is a change on one side and moves
-  without a question. Two devices that both changed meet the newest-copy
+  without a question. Two devices that both changed meet the question
   rule wherever they meet.
 - **Library:** each device's facts are written only by that device and travel
   through any device in between: the change log is relayed, and a change
@@ -583,9 +587,8 @@ CI covers this with three handhelds and three computers in one process,
 paired in a partial mesh (`crates/android/tests/mesh.rs`):
 - the library relaying across the mesh, with one entry per game and two
   locations;
-- saves edited on two devices at once (the newest wins, and the other
-  device's copy is kept);
-- a preferred computer beating a newer copy;
+- saves edited on two devices at once (the sync answers `conflict` and moves
+  nothing; the person's pick wins, and the other device's copy is kept);
 - saves reaching a handheld through a computer it shares;
 - an identity move.
 
@@ -891,9 +894,11 @@ on Droidtop/tracker#461.
 
 ## 14. Decisions for the owner
 
-1. **Licence.** The agent is GPL-3.0-only because it links windowcast's
-   GPL-3.0-only `identity` and `pairing` crates. Relicense those two crates as
-   MIT/Apache-2.0 so the agent can be Apache-2.0? Default: stay GPL-3.0-only.
+1. **Licence.** Decided (owner, 2026-10-30, #814): the agent stays
+   GPL-3.0-only and windowcast's `identity` and `pairing` crates are not
+   relicensed. "Other programs can embed it. They just have to obey the GPL.
+   That's not really my problem, and I'm not an advocate for software
+   licensing restrictions" (section 2).
 2. **Pairing input.** The code is typed on the computer, and the QR code
    serves cameras (laptop webcam, phone). Decided (coordinator, 2026-10-09):
    the computer can also show the code and the handheld connect (section 3).
@@ -906,14 +911,19 @@ on Droidtop/tracker#461.
    #364? Decided (owner, 2026-10-09): Syncthing's global discovery and STUN
    servers by default, addresses only, at Syncthing's own client's pace;
    droidtop's own server (#364) can replace them in the settings (section 10).
-5. **Store cloud and agent on the same game.** Default: the store's cloud wins
-   and the agent skips that game's saves.
+5. **Store cloud and agent on the same game.** Decided (owner, 2026-10-30,
+   #814): "for saves, nobody 'wins', because we don't want the user to lose
+   saves. We ask the user." A store-cloud copy and the agent's that differ ask
+   the person, showing the date and the device for each side, and the side not
+   kept stays as a backup, never deleted (section 6). The same answer settles
+   both sides changed between the handheld and a computer.
 6. **The computer's games in droidtop's library.** Default: listed under the
-   computer in Settings > Computers and on its own Places row. Should they
-   also merge into the main library as "on <computer>" entries next to local
-   copies?
+   computer in Settings > Computers and on its own Places row, not merged
+   into the main library. Decided (owner, 2026-10-30, #814): the default
+   stands.
 7. **Writing F95Checker's database.** Default: only while F95Checker is
-   closed; changes wait until then.
+   closed; changes wait until then. Decided (owner, 2026-10-30, #814): the
+   default stands.
 8. **Archive depth.** Decided (owner, 2026-10-10): the newest copy from each
    device, plus the 5 most recent older copies per game (section 9).
 9. **Autostart on the computer.** Default: off. `droidtop-agent autostart
@@ -968,8 +978,7 @@ macOS, so nobody needs the command line.
     like marks made on a handheld, section 7; `droidtop-agent mark` does the
     same from a command line). Then the programs droidtop can sync with and
     the sources that could not be read.
-  - **Saves:** which device's saves win when both changed (the newest, or a
-    named handheld's); a search for a game; and for the picked game where its
+  - **Saves:** a search for a game; and for the picked game where its
     saves are (detected or stated by the person, with the files found now),
     adding or removing a location, and the copies kept on this computer
     (the newest from each device with its date, then the dated older ones,
@@ -1018,7 +1027,7 @@ identity, pairing, channel, transports, library, saves and scanner.
     save lookup that may rescan).
     - `store`: `identity` (with its certificate's `fingerprint`), `settings`,
       `set_settings(**changes)`, `devices` (each with its `fingerprint`,
-      `kind` and what it `announced`), `unpair(id)`, `set_primary(id=None)`,
+      `kind` and what it `announced`), `unpair(id)`,
       `set_launch(id, allowed)`, `library`, `set_mark(game, field, value)`,
       `announcements`, `set_announce(plugin, value=None)` (section 5)
     - `pair`: `pair(code)` (the handheld shows the code), `show` / `status`

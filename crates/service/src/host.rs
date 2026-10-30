@@ -46,10 +46,6 @@ impl Host for Agent {
         }
     }
 
-    fn primary(&self, peer: &PeerId) -> bool {
-        self.store.is_primary(peer)
-    }
-
     fn offers(&self, peer: &PeerId) -> Offer {
         // Read again, as for starting a game: the window or a command line
         // may have changed it since this process started.

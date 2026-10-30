@@ -210,13 +210,17 @@ impl Handheld {
         assert!(out.get("error").is_none() && out.get("unreachable").is_none(), "{} with {}: {out}", self.name, pc.0.name());
         out
     }
-    fn saves<C: Host + ?Sized>(&self, pc: &(&'static C, PeerId, SocketAddr), primary: bool) -> Value {
+    /// One saves sync; `choice` is the person's answer to a conflict (`here` or `there`).
+    fn saves<C: Host + ?Sized>(&self, pc: &(&'static C, PeerId, SocketAddr), choice: Option<&str>) -> Value {
         let mut args = self.args(pc);
         args["game"] = json!({ "key": "steam:1", "title": "Game" });
         args["roots"] = json!({ "<winAppData>": self.appdata() });
         args["baseline"] = json!(self.dir.join(format!("{}/saves/steam_1.json", pc.1.to_hex())));
         args["archive"] = json!(self.dir.join("archive"));
-        args["primary"] = json!(primary);
+        args["name"] = json!(self.name);
+        if let Some(choice) = choice {
+            args["choice"] = json!(choice);
+        }
         let out: Value = serde_json::from_str(&call("sync_saves", &args.to_string())).unwrap();
         assert!(out.get("error").is_none() && out.get("unreachable").is_none(), "{} with {}: {out}", self.name, pc.0.name());
         out
@@ -332,34 +336,41 @@ fn three_handhelds_and_three_computers_in_a_partial_mesh() {
 
     // Saves: PC-1's reach H1, then PC-2, then H2.
     write_at(&c1.0.save(), "pc-1 v1", 1_000);
-    assert_eq!(h1.saves(&c1, false)["from"], "there");
-    assert_eq!(h1.saves(&c2, false)["from"], "here");
-    assert_eq!(h2.saves(&c2, false)["from"], "there");
+    assert_eq!(h1.saves(&c1, None)["from"], "there");
+    assert_eq!(h1.saves(&c2, None)["from"], "here");
+    assert_eq!(h2.saves(&c2, None)["from"], "there");
     assert_eq!(read(&h2.save()), "pc-1 v1");
 
-    // H1 and H2 both play: H1's reaches PC-2 first; H2's is newer, so it wins
-    // there and PC-2 keeps H1's set as its own copy.
+    // H1 and H2 both play: H1's reaches PC-2 first. H2's meets it there, and
+    // nobody wins: the sync says whose saves are whose, and moves nothing.
     write_at(&h1.save(), "h1 v2", 2_000);
     write_at(&h2.save(), "h2 v2", 3_000);
-    assert_eq!(h1.saves(&c2, false)["from"], "here");
-    let newer = h2.saves(&c2, false);
+    assert_eq!(h1.saves(&c2, None)["from"], "here");
+    let asked = h2.saves(&c2, None);
+    assert_eq!(asked["outcome"], "conflict", "{asked}");
+    assert_eq!((asked["here"]["device"].as_str(), asked["there"]["device"].as_str()), (Some("H2"), Some("PC-2")), "{asked}");
+    assert_eq!(read(&c2.0.save()), "h1 v2");
+    assert_eq!(read(&h2.save()), "h2 v2");
+    // The person keeps H2's: PC-2 keeps H1's set as its own copy first.
+    let newer = h2.saves(&c2, Some("here"));
     assert_eq!((newer["from"].as_str(), newer["kept"].as_bool()), (Some("here"), Some(true)), "{newer}");
     assert_eq!(read(&c2.0.save()), "h2 v2");
     assert_eq!(read(&copy_dir(&c2.0.dir.join("archive"), "PC-2").join("winAppData/Game/slot.sav")), "h1 v2");
     // H1 then takes the newest from PC-2.
-    assert_eq!(h1.saves(&c2, false)["from"], "there");
+    assert_eq!(h1.saves(&c2, None)["from"], "there");
     assert_eq!(read(&h1.save()), "h2 v2");
 
     // H3 gets H2's saves through the computer they share.
-    assert_eq!(h2.saves(&c3, false)["from"], "here");
-    assert_eq!(h3.saves(&c3, false)["from"], "there");
+    assert_eq!(h2.saves(&c3, None)["from"], "here");
+    assert_eq!(h3.saves(&c3, None)["from"], "there");
     assert_eq!(read(&h3.save()), "h2 v2");
 
-    // Both changed, and H1 prefers PC-1: its older copy wins, and H1 keeps its own.
+    // Both changed: it asks, and the person keeps PC-1's older copy; H1 keeps its own.
     write_at(&c1.0.save(), "pc-1 v3", 4_000);
     write_at(&h1.save(), "h1 v3", 5_000);
-    let preferred = h1.saves(&c1, true);
-    assert_eq!((preferred["from"].as_str(), preferred["kept"].as_bool()), (Some("there"), Some(true)), "{preferred}");
+    assert_eq!(h1.saves(&c1, None)["outcome"], "conflict");
+    let picked = h1.saves(&c1, Some("there"));
+    assert_eq!((picked["from"].as_str(), picked["kept"].as_bool()), (Some("there"), Some(true)), "{picked}");
     assert_eq!(read(&h1.save()), "pc-1 v3");
     assert_eq!(read(&copy_dir(&h1.dir.join("archive"), "H1").join("winAppData/Game/slot.sav")), "h1 v3");
 }

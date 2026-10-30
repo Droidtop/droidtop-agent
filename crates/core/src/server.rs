@@ -66,11 +66,6 @@ pub trait Host: Send + Sync {
     fn announce(&self, _peer: &PeerId, _theirs: Announcements) -> Result<Announcements> {
         Err(Error::Protocol("this device keeps no announcements".into()))
     }
-    /// Whether [`peer`] is this computer's primary handheld, whose saves it
-    /// prefers when both sides changed.
-    fn primary(&self, _peer: &PeerId) -> bool {
-        false
-    }
     /// Starts [`game`] for [`peer`] (hello feature `launch`). A computer that
     /// cannot start games says so; the agent starts Steam games only, and
     /// only for a handheld the person allowed (docs/DESIGN.md section 17).
@@ -163,9 +158,9 @@ fn session<S: Read + Write>(
                     let m = manifest::build(saves::collect(&spec, &roots), known.get(&game).unwrap_or(&Manifest::new()));
                     let files = m.values().cloned().collect();
                     known.insert(game, m);
-                    Ok(Response::Manifest { files, primary: host.primary(&peer) })
+                    Ok(Response::Manifest { files })
                 }
-                None => Ok(Response::Manifest { files: Vec::new(), primary: host.primary(&peer) }),
+                None => Ok(Response::Manifest { files: Vec::new() }),
             },
             Request::FileGet { game, name } => match spec_of(&game) {
                 Some((spec, roots)) if spec.matches(&name) => match saves::local_path(&name, &roots).filter(|p| p.is_file()) {

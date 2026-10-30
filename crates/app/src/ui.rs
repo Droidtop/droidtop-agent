@@ -779,30 +779,9 @@ impl App {
         ui.heading("Saves");
         ui.add_space(6.0);
         ui.label(
-            "Saves are kept in step between this computer and your handhelds. When both changed a game's saves, the newest copy wins and the other is kept here, so nothing is lost.",
+            "Saves are kept in step between this computer and your handhelds. When both changed a game's saves, neither wins: your handheld asks you which to keep, and the other is kept here as a backup, so nothing is lost.",
         );
         ui.add_space(8.0);
-        let devices = self.agent.store.devices_now();
-        let mut preferred = self.agent.store.settings.lock().unwrap().primary_device.clone();
-        let before = preferred.clone();
-        ui.horizontal(|ui| {
-            ui.label("When both changed, prefer");
-            let chosen = preferred
-                .as_ref()
-                .and_then(|id| devices.iter().find(|d| &d.id == id))
-                .map(|d| format!("{}'s saves", d.name))
-                .unwrap_or_else(|| "the newest saves".into());
-            egui::ComboBox::from_id_salt("prefer").selected_text(chosen).show_ui(ui, |ui| {
-                ui.selectable_value(&mut preferred, None, "the newest saves");
-                for d in &devices {
-                    ui.selectable_value(&mut preferred, Some(d.id.clone()), format!("{}'s saves", d.name));
-                }
-            });
-        });
-        if preferred != before {
-            self.agent.store.settings.lock().unwrap().primary_device = preferred;
-            let _ = self.agent.store.save_settings();
-        }
         let outcome = self.save_outcome.lock().unwrap().clone();
         if let Some(outcome) = &outcome {
             ui.add_space(6.0);
@@ -1078,20 +1057,6 @@ impl App {
             ui.end_row();
             ui.label("Rescan every");
             ui.add(egui::DragValue::new(&mut draft.scan_minutes).range(5..=1440).suffix(" min"));
-            ui.end_row();
-            ui.label("Primary handheld");
-            let chosen = draft
-                .primary_device
-                .as_ref()
-                .and_then(|id| devices.iter().find(|d| &d.id == id))
-                .map(|d| d.name.clone())
-                .unwrap_or_else(|| "none: the newest saves win".into());
-            egui::ComboBox::from_id_salt("primary").selected_text(chosen).show_ui(ui, |ui| {
-                ui.selectable_value(&mut draft.primary_device, None, "none: the newest saves win");
-                for d in &devices {
-                    ui.selectable_value(&mut draft.primary_device, Some(d.id.clone()), format!("{}: its saves win", d.name));
-                }
-            });
             ui.end_row();
             ui.label("Offered");
             ui.vertical(|ui| {

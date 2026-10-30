@@ -121,7 +121,7 @@ fn sync(host: &'static TestHost, hh_roots: &Roots, state: &Path, choice: Option<
             baseline_path: &baseline,
             archive_dir: &archive,
             name: "Handheld",
-            primary_computer: false,
+            computer: "Test PC",
             choice,
         };
         savesync::sync(ch, &req).unwrap()
@@ -135,7 +135,7 @@ fn write_at(path: &Path, contents: &[u8], secs: u64) {
 }
 
 #[test]
-fn saves_sync_both_ways_and_the_newest_copy_wins() {
+fn saves_sync_both_ways_and_a_conflict_asks_the_person() {
     let pc_dir = temp("pc");
     let hh_dir = temp("hh");
     let state = temp("state");
@@ -174,19 +174,34 @@ fn saves_sync_both_ways_and_the_newest_copy_wins() {
     assert!(!pc_game.join("settings.ini").exists());
     assert_eq!(host.synced.lock().unwrap().drain(..).collect::<Vec<_>>(), [("steam:1".into(), 0, 1, 1)]);
 
-    // Played on both: the newest copy wins, and the computer keeps its own.
+    // Played on both: nobody wins, nothing moves, and each side's device and date are said.
     write_at(&hh_game.join("slots/one.sav"), b"handheld save 3", 2_000_000_000);
     write_at(&pc_game.join("slots/one.sav"), b"pc save 3", 1_900_000_000);
-    let newest = sync(host, &hh_roots, &state, None);
+    let asked = sync(host, &hh_roots, &state, None);
+    match &asked {
+        Outcome::Conflict { here, there } => {
+            assert_eq!((here.device.as_str(), here.files, here.newest_ms), ("Handheld", 1, 2_000_000_000_000));
+            assert_eq!((there.device.as_str(), there.files, there.newest_ms), ("Test PC", 1, 1_900_000_000_000));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(fs::read(hh_game.join("slots/one.sav")).unwrap(), b"handheld save 3");
+    assert_eq!(fs::read(pc_game.join("slots/one.sav")).unwrap(), b"pc save 3");
+    // Asking again changes nothing either.
+    assert!(matches!(sync(host, &hh_roots, &state, None), Outcome::Conflict { .. }));
+
+    // The person keeps the handheld's: the computer's is kept as its own copy first.
+    let newest = sync(host, &hh_roots, &state, Some(Side::Here));
     assert!(matches!(newest, Outcome::Copied { from: Side::Here, kept: true, .. }), "{newest:?}");
     assert_eq!(fs::read(pc_game.join("slots/one.sav")).unwrap(), b"handheld save 3");
     let kept = savesync::copy_dir(&pc_dir.join("archive"), "Test PC").join("winAppData/Game/slots/one.sav");
     assert_eq!(fs::read(&kept).unwrap(), b"pc save 3");
 
-    // Played on both again, and the person picks the computer's older copy:
+    // Played on both again, and the person keeps the computer's older copy:
     // the handheld keeps its own as a copy.
     write_at(&hh_game.join("slots/one.sav"), b"handheld save 4", 2_100_000_000);
     write_at(&pc_game.join("slots/one.sav"), b"pc save 4", 2_050_000_000);
+    assert!(matches!(sync(host, &hh_roots, &state, None), Outcome::Conflict { .. }));
     let picked = sync(host, &hh_roots, &state, Some(Side::There));
     assert!(matches!(picked, Outcome::Copied { from: Side::There, kept: true, .. }), "{picked:?}");
     assert_eq!(fs::read(hh_game.join("slots/one.sav")).unwrap(), b"pc save 4");
@@ -201,7 +216,7 @@ fn saves_sync_both_ways_and_the_newest_copy_wins() {
             baseline_path: &state.join("other.json"),
             archive_dir: &state.join("archive"),
             name: "Handheld",
-            primary_computer: false,
+            computer: "Test PC",
             choice: None,
         };
         savesync::sync(ch, &req).unwrap()
@@ -239,7 +254,7 @@ fn saves_left_in_the_share_state_what_they_were_made_against() {
     let baseline = state.join("baseline.json");
     let handheld = DeviceKey::generate();
     let pc = DeviceKey::generate();
-    let post = || post_to_share(&share, &handheld, &pc.peer_id(), &game, &hh_roots, &baseline, false).unwrap();
+    let post = || post_to_share(&share, &handheld, &pc.peer_id(), &game, &hh_roots, &baseline).unwrap();
 
     // Before any live sync the handheld does not know where the saves are.
     assert_eq!(post(), Posted::NotYet);

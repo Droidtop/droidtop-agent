@@ -157,10 +157,6 @@ pub struct Settings {
     /// The contexts whose offered adapter the person declined, and the plugin.
     #[serde(default)]
     pub declined: BTreeMap<String, String>,
-    /// The handheld whose saves this computer prefers when both sides
-    /// changed (`primary`), by id; otherwise the newest copy wins.
-    #[serde(default)]
-    pub primary_device: Option<String>,
     /// Rendezvous away from the LAN through global discovery and STUN
     /// (`rendezvous on|off`; on unless the person turned it off).
     #[serde(default = "yes")]
@@ -402,11 +398,6 @@ impl Store {
 
     pub fn peer_id(&self) -> PeerId {
         self.key.peer_id()
-    }
-
-    /// Whether [`peer`] is the handheld whose saves this computer prefers.
-    pub fn is_primary(&self, peer: &PeerId) -> bool {
-        self.settings.lock().unwrap().primary_device.as_deref() == Some(peer.to_hex().as_str())
     }
 
     /// Whether the person let [`peer`] start games on this computer.

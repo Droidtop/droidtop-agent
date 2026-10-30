@@ -362,10 +362,6 @@ struct SavesArgs {
     /// This device's name, for the copy it keeps of its own saves.
     #[serde(default)]
     name: Option<String>,
-    /// The computer is this device's primary computer: its saves win when
-    /// both sides changed.
-    #[serde(default)]
-    primary: bool,
     #[serde(default)]
     choice: Option<Side>,
 }
@@ -397,7 +393,7 @@ fn sync_saves(args: &Value) -> Outcome {
         baseline_path: &a.baseline,
         archive_dir: &a.archive,
         name: &name,
-        primary_computer: a.primary,
+        computer: &s.name,
         choice: a.choice,
     };
     let outcome = savesync::sync(&mut s.ch, &request);
@@ -554,7 +550,7 @@ fn share_post_saves(args: &Value) -> Outcome {
     let peer = peer_of(args["peer"].as_str().unwrap_or_default())?;
     let outbox = path_arg(args, "outbox")?;
     let a: SavesArgs = serde_json::from_value(args.clone())?;
-    let posted = savesync::post_to_share(&outbox, &key, &peer, &a.game, &a.roots(), &a.baseline, a.primary)?;
+    let posted = savesync::post_to_share(&outbox, &key, &peer, &a.game, &a.roots(), &a.baseline)?;
     Ok(serde_json::to_value(posted)?)
 }
 

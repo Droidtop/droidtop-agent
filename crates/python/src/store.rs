@@ -16,7 +16,6 @@ pub fn fill(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_settings, m)?)?;
     m.add_function(wrap_pyfunction!(devices, m)?)?;
     m.add_function(wrap_pyfunction!(unpair, m)?)?;
-    m.add_function(wrap_pyfunction!(set_primary, m)?)?;
     m.add_function(wrap_pyfunction!(set_launch, m)?)?;
     m.add_function(wrap_pyfunction!(set_offer, m)?)?;
     m.add_function(wrap_pyfunction!(library, m)?)?;
@@ -71,7 +70,7 @@ fn set_settings(py: Python<'_>, changes: Option<&Bound<'_, PyDict>>) -> PyResult
 /// The paired handhelds: each with `id`, its certificate's `fingerprint`,
 /// `name`, `kind` (`handheld`; None for one paired before pairing said),
 /// `paired_ms`, `last_seen_ms`, `last_address`, whether it is still
-/// `trusted`, whether its saves win here (`primary`), whether it may start
+/// `trusted`, whether it may start
 /// games here (`launch`), what this computer offers it (`offered`:
 /// `library`, `saves`; docs/DESIGN.md section 20), and what it `announced`
 /// per plugin (and when, `announced_ms`).
@@ -80,18 +79,17 @@ fn devices(py: Python<'_>) -> PyResult<PyObject> {
     run(py, || {
         let a = agent()?;
         let settings = a.store.settings.lock().unwrap().clone();
-        let (primary, launch) = (settings.primary_device.clone(), settings.launch_devices.clone());
+        let launch = settings.launch_devices.clone();
         let devices: Vec<Value> = a
             .store
             .devices_now()
             .into_iter()
             .map(|d| {
                 let trusted = PeerId::from_hex(&d.id).is_ok_and(|p| a.store.is_trusted(&p));
-                let (is_primary, may_launch) = (primary.as_deref() == Some(d.id.as_str()), launch.contains(&d.id));
+                let may_launch = launch.contains(&d.id);
                 let mut v = serde_json::to_value(&d).unwrap_or(Value::Null);
                 v["trusted"] = json!(trusted);
                 v["fingerprint"] = json!(PeerId::from_hex(&d.id).ok().map(|p| cert::fingerprint_hex(&p)));
-                v["primary"] = json!(is_primary);
                 v["launch"] = json!(may_launch);
                 v["offered"] = json!(offer_for(&settings, &d));
                 v
@@ -109,23 +107,6 @@ fn unpair(py: Python<'_>, id: String) -> PyResult<PyObject> {
         let a = agent()?;
         let peer = one_device(&a.store, &id)?;
         a.store.remove_device(&peer).map_err(|e| e.to_string())?;
-        Ok(json!(null))
-    })
-}
-
-/// The handheld whose saves win here when both sides changed; with no id,
-/// the newest copy wins.
-#[pyfunction]
-#[pyo3(signature = (id = None))]
-fn set_primary(py: Python<'_>, id: Option<String>) -> PyResult<PyObject> {
-    run(py, move || {
-        let a = agent()?;
-        let id = match id {
-            Some(id) => Some(one_device(&a.store, &id)?.to_hex()),
-            None => None,
-        };
-        a.store.settings.lock().unwrap().primary_device = id;
-        a.store.save_settings().map_err(|e| e.to_string())?;
         Ok(json!(null))
     })
 }
