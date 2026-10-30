@@ -54,6 +54,10 @@ Usage:
   droidtop-agent contexts add <program>
                                        Add a plugin's context adapter (a program its plugin
                                        publishes, e.g. droidtop-agent-f95-adapter)
+  droidtop-agent contexts publish <context> <file>
+                                       Make the copy in <file> (JSON with a records object) the current copy of
+                                       <context> in one step: what a plugin's program here runs after it
+                                       wrote the data to share; your handhelds read it at their next sync
   droidtop-agent contexts remove <context>
   droidtop-agent contexts approve <context>
                                        Install the adapter a plugin on the handheld offers for
@@ -232,6 +236,10 @@ fn main() {
                 Ok(())
             })
         }
+        ["contexts", "publish", id, file] => std::fs::read(file)
+            .map_err(|e| format!("{file}: {e}"))
+            .and_then(|bytes| contexts::publish(&agent.store, id, &bytes))
+            .map(|generation| println!("Published the {id} copy (generation {generation}); your handhelds read it at their next sync.")),
         ["contexts", "approve", id] => contexts::approve(&agent.store, id).map(|line| println!("{line}")),
         ["contexts", "remove", id] => {
             let removed = agent.store.settings.lock().unwrap().adapters.remove(*id).is_some();

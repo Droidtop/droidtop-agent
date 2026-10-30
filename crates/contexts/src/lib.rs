@@ -37,8 +37,12 @@ use sha2::{Digest, Sha256};
 
 use droidtop_agent_store::{read_json, write_json, Approval, Settings, Store};
 
-/// The adapter protocol this agent speaks.
-pub const PROTOCOL: u64 = 1;
+/// The adapter protocols this agent speaks. Protocol 1 (`pull` and `push`
+/// against the app's live data) stays readable until every published adapter
+/// has moved to protocol 2, where the adapter publishes a copy and is told
+/// when one arrived (`received`; docs/DESIGN.md section 8).
+pub const PROTOCOL: u64 = 2;
+const OLDEST_PROTOCOL: u64 = 1;
 
 /// How long one adapter run may take before it is stopped.
 const LIMIT: Duration = Duration::from_secs(120);
@@ -127,8 +131,8 @@ fn run(program: &Path, verb: &str, input: Option<Value>) -> Result<Value, String
 pub fn describe(program: &Path) -> Result<(String, String), String> {
     let reply = run(program, "describe", None)?;
     let protocol = reply["protocol"].as_u64().unwrap_or(0);
-    if protocol != PROTOCOL {
-        return Err(format!("{} speaks adapter protocol {protocol}; this agent speaks {PROTOCOL}", program.display()));
+    if !(OLDEST_PROTOCOL..=PROTOCOL).contains(&protocol) {
+        return Err(format!("{} speaks adapter protocol {protocol}; this agent speaks {OLDEST_PROTOCOL} to {PROTOCOL}", program.display()));
     }
     let id = reply["id"].as_str().filter(|id| !id.is_empty() && id.len() <= 64).ok_or("the adapter named no context")?;
     if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
@@ -138,6 +142,25 @@ pub fn describe(program: &Path) -> Result<(String, String), String> {
 }
 
 impl Adapter {
+    /// The protocol the program speaks now (it is asked each time, so an
+    /// adapter replaced by a newer one is spoken to as the newer one).
+    pub fn protocol(&self) -> Result<u64, String> {
+        Ok(run(&self.program, "describe", None)?["protocol"].as_u64().unwrap_or(1))
+    }
+
+    /// Tells a protocol 2 adapter that a new copy of its context is current
+    /// (`received`, with the copy's generation); it brings the copy into its
+    /// own data when that is safe. Ok(Some(reason)) when it must wait (the
+    /// app that owns the data is open). A protocol 1 adapter has nothing to
+    /// be told.
+    pub fn received(&self, generation: u64) -> Result<Option<String>, String> {
+        if self.protocol()? < 2 {
+            return Ok(None);
+        }
+        let reply = run(&self.program, "received", Some(json!({ "generation": generation })))?;
+        Ok(reply["deferred"].as_str().map(str::to_string))
+    }
+
     pub fn pull(&self) -> Result<Records, String> {
         let reply = run(&self.program, "pull", None)?;
         serde_json::from_value(reply["records"].clone()).map_err(|e| format!("the {} adapter's records could not be read ({e})", self.id))
@@ -154,6 +177,66 @@ impl Adapter {
 }
 
 pub use droidtop_agent_core::copy::valid_context as valid_id;
+
+/// A copy that arrived and that its adapter has not taken in yet: the
+/// generation, kept beside the copy until the adapter says it has.
+fn pending_path(store: &Store, id: &str) -> PathBuf {
+    store.dirs.adapters().join(id).join("copy").join("pending")
+}
+
+/// Tells [`id`]'s adapter that the copy of [`generation`] is current, and
+/// remembers it when the adapter must wait. Returns why it waits, if it does.
+/// Without an adapter (or a protocol 1 one) there is nobody to tell.
+pub fn tell_received(store: &Store, id: &str, generation: u64) -> Result<Option<String>, String> {
+    let Some(adapter) = adapter(store, id) else { return Ok(None) };
+    let pending = pending_path(store, id);
+    match adapter.received(generation)? {
+        Some(why) => {
+            std::fs::write(&pending, generation.to_string()).map_err(|e| e.to_string())?;
+            Ok(Some(why))
+        }
+        None => {
+            let _ = std::fs::remove_file(&pending);
+            Ok(None)
+        }
+    }
+}
+
+/// Tells every adapter that was told to wait that its copy is current, again:
+/// called when something else happens in that context (a copy is read or
+/// replaced, or `droidtop-agent contexts publish` runs), so a wait ends when
+/// the app that owned the data has closed, with no timer. Returns how many
+/// adapters took their copy in.
+pub fn deliver_pending(store: &Store) -> usize {
+    let ids: Vec<String> = store.settings.lock().unwrap().adapters.keys().cloned().collect();
+    ids.iter()
+        .filter(|id| {
+            let Some(generation) = std::fs::read_to_string(pending_path(store, id)).ok().and_then(|g| g.trim().parse::<u64>().ok()) else {
+                return false;
+            };
+            matches!(tell_received(store, id, generation), Ok(None))
+        })
+        .count()
+}
+
+/// The plugin's computer side publishes a new copy of [`id`] (`updated`;
+/// `droidtop-agent contexts publish`): `{"records": {...}, "files": [...]}`.
+/// It becomes current in one step, and the paired handhelds read it at their
+/// next sync. Returns its generation.
+pub fn publish(store: &Store, id: &str, document: &[u8]) -> Result<u64, String> {
+    let document: Value = serde_json::from_slice(document).map_err(|e| format!("the copy could not be read ({e})"))?;
+    let records: Records =
+        serde_json::from_value(document["records"].clone()).map_err(|e| format!("the copy's records could not be read ({e})"))?;
+    let files: Vec<droidtop_agent_core::copy::CopyFile> = match document.get("files") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(files) => serde_json::from_value(files.clone()).map_err(|e| format!("the copy's files could not be read ({e})"))?,
+    };
+    let generation = droidtop_agent_core::copy::CopyStore::open(&store.dirs.adapters(), id)
+        .and_then(|copies| copies.publish(records, files))
+        .map_err(|e| e.to_string())?;
+    deliver_pending(store);
+    Ok(generation)
+}
 
 /// The largest adapter program fetched.
 const MAX_PROGRAM: u64 = 64 * 1024 * 1024;
@@ -348,5 +431,75 @@ esac"#,
         for p in [failing, newer] {
             let _ = std::fs::remove_dir_all(p.parent().unwrap());
         }
+    }
+
+    fn store(name: &str) -> Store {
+        let root = std::env::temp_dir().join(format!("dta-ctx-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dirs = droidtop_agent_store::Dirs { config: root.join("config"), data: root.join("data"), computer: root.join("host") };
+        for d in [&dirs.config, &dirs.data, &dirs.computer] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        Store::open_in(dirs).unwrap()
+    }
+
+    /// A protocol 2 adapter that takes a copy in unless the file `open` is beside it.
+    fn demo_two(name: &str) -> PathBuf {
+        stand_in(
+            name,
+            r#"case "$1" in
+  describe) echo '{"protocol":2,"id":"demo","description":"a copy adapter"}' ;;
+  received) read line; if [ -e "$(dirname "$0")/open" ]; then echo '{"deferred":"Demo is open"}'; else echo "$line" > "$(dirname "$0")/took"; echo '{}'; fi ;;
+esac"#,
+        )
+    }
+
+    #[test]
+    fn a_protocol_2_adapter_is_told_a_copy_arrived_and_may_ask_to_wait() {
+        let program = demo_two("two-told");
+        let adapter = Adapter { id: "demo".into(), program: program.clone() };
+        assert_eq!(adapter.protocol().unwrap(), 2);
+        let dir = program.parent().unwrap().to_path_buf();
+        assert_eq!(adapter.received(3).unwrap(), None);
+        assert_eq!(std::fs::read_to_string(dir.join("took")).unwrap().trim(), r#"{"generation":3}"#);
+        std::fs::write(dir.join("open"), b"").unwrap();
+        assert_eq!(adapter.received(4).unwrap(), Some("Demo is open".to_string()));
+        // A protocol 1 adapter has nothing to be told and is not run for it.
+        let old = stand_in("one", r#"case "$1" in describe) echo '{"protocol":1,"id":"old"}' ;; *) echo '{"error":"not asked"}' ;; esac"#);
+        assert_eq!(Adapter { id: "old".into(), program: old.clone() }.received(1).unwrap(), None);
+        for p in [program, old] {
+            let _ = std::fs::remove_dir_all(p.parent().unwrap());
+        }
+    }
+
+    #[test]
+    fn a_wait_ends_when_something_next_happens_and_the_app_is_closed() {
+        let store = store("wait");
+        let program = demo_two("two-wait");
+        let dir = program.parent().unwrap().to_path_buf();
+        store.settings.lock().unwrap().adapters.insert("demo".into(), program.clone());
+        std::fs::create_dir_all(store.dirs.adapters().join("demo/copy")).unwrap();
+        std::fs::write(dir.join("open"), b"").unwrap();
+        assert_eq!(tell_received(&store, "demo", 5).unwrap(), Some("Demo is open".to_string()));
+        assert_eq!(deliver_pending(&store), 0);
+        assert!(pending_path(&store, "demo").exists());
+        // The app closes; the next thing in that context delivers it.
+        std::fs::remove_file(dir.join("open")).unwrap();
+        assert_eq!(deliver_pending(&store), 1);
+        assert!(!pending_path(&store, "demo").exists());
+        assert_eq!(std::fs::read_to_string(dir.join("took")).unwrap().trim(), r#"{"generation":5}"#);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_published_copy_becomes_current_and_a_damaged_one_changes_nothing() {
+        let store = store("publish");
+        let first = publish(&store, "demo", br#"{"records":{"100":{"installed":"0.1"}}}"#).unwrap();
+        let second = publish(&store, "demo", br#"{"records":{"100":{"installed":"0.2"}}}"#).unwrap();
+        assert_eq!((first, second), (1, 2));
+        assert!(publish(&store, "demo", b"{\"records\": {").is_err());
+        assert!(publish(&store, "../x", br#"{"records":{}}"#).is_err());
+        let now = droidtop_agent_core::copy::CopyStore::open(&store.dirs.adapters(), "demo").unwrap().current().unwrap();
+        assert_eq!((now.generation, now.records["100"]["installed"].clone()), (2, json!("0.2")));
     }
 }

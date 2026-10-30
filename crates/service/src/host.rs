@@ -230,7 +230,10 @@ impl Host for Agent {
     }
 
     fn context_copy(&self, context: &str) -> Result<Copy> {
-        CopyStore::open(&self.store.dirs.adapters(), context)?.current()
+        let copy = CopyStore::open(&self.store.dirs.adapters(), context)?.current()?;
+        // A wait that is over ends here, with no timer.
+        droidtop_agent_contexts::deliver_pending(&self.store);
+        Ok(copy)
     }
 
     fn context_copy_put(
@@ -241,7 +244,8 @@ impl Host for Agent {
         files: Vec<CopyFile>,
     ) -> Result<(u64, Option<String>)> {
         let generation = CopyStore::open(&self.store.dirs.adapters(), context)?.replace(base_generation, records, files)?;
-        Ok((generation, None))
+        let deferred = droidtop_agent_contexts::tell_received(&self.store, context, generation).map_err(Error::Protocol)?;
+        Ok((generation, deferred))
     }
 
     fn context_push(&self, context: &str, changes: Vec<RecordChange>) -> Result<Option<String>> {
