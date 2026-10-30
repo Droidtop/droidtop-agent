@@ -102,6 +102,21 @@ pub enum Request {
         context: String,
         changes: Vec<RecordChange>,
     },
+    /// A context's current copy on the computer (docs/DESIGN.md section 8,
+    /// protocol 2).
+    ContextCopyGet {
+        context: String,
+    },
+    /// A merged copy, built on [`base_generation`] of the computer's: made
+    /// current there in one step, or refused as `stale` when the computer's
+    /// copy moved on.
+    ContextCopyPut {
+        context: String,
+        base_generation: u64,
+        records: Records,
+        #[serde(default)]
+        files: Vec<crate::copy::CopyFile>,
+    },
     /// A game's folder on the computer: its files, to copy it here
     /// (crate::gamecopy).
     GameFiles {
@@ -247,6 +262,20 @@ pub enum Response {
     ContextApplied {
         deferred: bool,
         message: Option<String>,
+    },
+    ContextCopy {
+        generation: u64,
+        records: Records,
+        #[serde(default)]
+        files: Vec<crate::copy::CopyFile>,
+    },
+    /// The copy is current; [`generation`] is its new one. [`deferred`]: the
+    /// plugin on the computer has not taken it in yet (the app that owns the
+    /// data is running) and will be told again.
+    ContextCopyStored {
+        generation: u64,
+        #[serde(default)]
+        deferred: Option<String>,
     },
     GameFiles {
         folder: crate::gamecopy::GameFolder,

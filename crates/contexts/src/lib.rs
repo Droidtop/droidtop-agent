@@ -153,13 +153,7 @@ impl Adapter {
     }
 }
 
-/// Whether [`id`] can name a context (and its folder under `adapters/`).
-pub fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && !id.starts_with('.')
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-}
+pub use droidtop_agent_core::copy::valid_context as valid_id;
 
 /// The largest adapter program fetched.
 const MAX_PROGRAM: u64 = 64 * 1024 * 1024;

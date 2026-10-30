@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
+use droidtop_agent_core::copy::{Copy, CopyFile, CopyStore};
 use droidtop_agent_core::keys::PeerId;
 use droidtop_agent_core::library::Change;
 use droidtop_agent_core::proto::{Announcements, GameRef, Launch, Offer};
@@ -226,6 +227,21 @@ impl Host for Agent {
             .ok_or_else(|| no_adapter(context, offer.is_some_and(|o| o.for_this_system().is_some())))?
             .pull()
             .map_err(Error::Protocol)
+    }
+
+    fn context_copy(&self, context: &str) -> Result<Copy> {
+        CopyStore::open(&self.store.dirs.adapters(), context)?.current()
+    }
+
+    fn context_copy_put(
+        &self,
+        context: &str,
+        base_generation: u64,
+        records: Records,
+        files: Vec<CopyFile>,
+    ) -> Result<(u64, Option<String>)> {
+        let generation = CopyStore::open(&self.store.dirs.adapters(), context)?.replace(base_generation, records, files)?;
+        Ok((generation, None))
     }
 
     fn context_push(&self, context: &str, changes: Vec<RecordChange>) -> Result<Option<String>> {

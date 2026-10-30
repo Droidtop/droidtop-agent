@@ -26,6 +26,8 @@ struct TestHost {
     app_running: bool,
     /// What each session reported through `saves_synced`: game key, sent, received, removed.
     synced: Mutex<Vec<(String, usize, usize, usize)>>,
+    /// Where the contexts keep their copies (protocol 2).
+    adapters: PathBuf,
 }
 
 impl Host for TestHost {
@@ -59,6 +61,18 @@ impl Host for TestHost {
     }
     fn context_pull(&self, _context: &str, _offer: Option<&droidtop_agent_core::context::AdapterOffer>) -> Result<Records> {
         Ok(self.records.lock().unwrap().clone())
+    }
+    fn context_copy(&self, context: &str) -> Result<droidtop_agent_core::copy::Copy> {
+        droidtop_agent_core::copy::CopyStore::open(&self.adapters, context)?.current()
+    }
+    fn context_copy_put(
+        &self,
+        context: &str,
+        base: u64,
+        records: Records,
+        files: Vec<droidtop_agent_core::copy::CopyFile>,
+    ) -> Result<(u64, Option<String>)> {
+        Ok((droidtop_agent_core::copy::CopyStore::open(&self.adapters, context)?.replace(base, records, files)?, None))
     }
     fn context_push(&self, _context: &str, changes: Vec<RecordChange>) -> Result<Option<String>> {
         if self.app_running {
@@ -153,6 +167,7 @@ fn saves_sync_both_ways_and_a_conflict_asks_the_person() {
         records: Mutex::new(Records::new()),
         app_running: false,
         synced: Mutex::new(Vec::new()),
+        adapters: temp("adapters"),
     }));
 
     // First sync: the handheld has nothing, so the computer's saves come down.
@@ -249,6 +264,7 @@ fn saves_left_in_the_share_state_what_they_were_made_against() {
         records: Mutex::new(Records::new()),
         app_running: false,
         synced: Mutex::new(Vec::new()),
+        adapters: temp("adapters"),
     }));
     let game = GameRef { key: "steam:1".into(), title: "Game".into() };
     let baseline = state.join("baseline.json");
@@ -324,6 +340,7 @@ fn library_and_context_travel_over_the_channel() {
         records: Mutex::new(records),
         app_running: false,
         synced: Mutex::new(Vec::new()),
+        adapters: temp("adapters"),
     }));
     let pulled = session(host, |ch| {
         ch.send_json(&Request::LibraryPull { since: 0 }).unwrap();
@@ -348,4 +365,50 @@ fn library_and_context_travel_over_the_channel() {
     }
     assert!(matches!(pulled.1, Response::ContextApplied { deferred: false, .. }));
     assert_eq!(host.records.lock().unwrap()["100"]["installed"], json!("0.2"));
+}
+
+/// Docs/DESIGN.md section 8, protocol 2: a context's copy is read whole, replaced
+/// whole when built on the computer's current generation, and refused as
+/// `stale` when it was not, with the computer's copy as it was.
+#[test]
+fn a_contexts_copy_is_replaced_whole_or_refused_as_stale() {
+    use droidtop_agent_core::proto::{Request, Response};
+    use serde_json::json;
+
+    let host: &'static TestHost = Box::leak(Box::new(TestHost {
+        roots: Roots::new(),
+        archive: std::env::temp_dir(),
+        library: Mutex::new(Library::default()),
+        records: Mutex::new(Records::new()),
+        app_running: false,
+        synced: Mutex::new(Vec::new()),
+        adapters: temp("copy-adapters"),
+    }));
+    let one =
+        |v: &str| -> Records { [("100".to_string(), [("installed".to_string(), json!(v))].into_iter().collect())].into_iter().collect() };
+    let replies = session(host, |ch| {
+        let mut ask = |request: Request| -> Response {
+            ch.send_json(&request).unwrap();
+            ch.recv_json().unwrap()
+        };
+        let put = |base_generation, v: &str| Request::ContextCopyPut {
+            context: "f95checker".into(),
+            base_generation,
+            records: one(v),
+            files: Vec::new(),
+        };
+        let empty = ask(Request::ContextCopyGet { context: "f95checker".into() });
+        let first = ask(put(0, "0.1"));
+        let second = ask(put(1, "0.2"));
+        let stale = ask(put(1, "0.9"));
+        let now = ask(Request::ContextCopyGet { context: "f95checker".into() });
+        let bad = ask(Request::ContextCopyGet { context: "../escape".into() });
+        (empty, first, second, stale, now, bad)
+    });
+    assert!(matches!(&replies.0, Response::ContextCopy { generation: 0, records, .. } if records.is_empty()), "{:?}", replies.0);
+    assert!(matches!(&replies.1, Response::ContextCopyStored { generation: 1, .. }), "{:?}", replies.1);
+    assert!(matches!(&replies.2, Response::ContextCopyStored { generation: 2, .. }), "{:?}", replies.2);
+    assert!(matches!(&replies.3, Response::Error { message, .. } if message.contains("stale")), "{:?}", replies.3);
+    assert!(matches!(&replies.4, Response::ContextCopy { generation: 2, records, .. } if *records == one("0.2")), "{:?}", replies.4);
+    assert!(matches!(&replies.5, Response::Error { .. }), "{:?}", replies.5);
 }

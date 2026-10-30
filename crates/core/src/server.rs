@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::channel::Channel;
 use crate::context::{AdapterOffer, RecordChange, Records};
+use crate::copy::{Copy, CopyFile};
 use crate::keys::PeerId;
 use crate::library::Change;
 use crate::manifest::{self, Manifest};
@@ -80,6 +81,22 @@ pub trait Host: Send + Sync {
     /// Applies the changes; Ok(Some(reason)) when they must wait (the app that
     /// owns the data is running).
     fn context_push(&self, context: &str, changes: Vec<RecordChange>) -> Result<Option<String>>;
+    /// A context's current copy (protocol 2; generation 0 when none yet).
+    fn context_copy(&self, context: &str) -> Result<Copy> {
+        Err(Error::Protocol(format!("this device keeps no copy of {context}")))
+    }
+    /// Makes a merged copy current when it was built on [`base_generation`],
+    /// and tells the plugin. Returns the new generation and, when the plugin
+    /// could not take it in yet, why.
+    fn context_copy_put(
+        &self,
+        context: &str,
+        _base_generation: u64,
+        _records: Records,
+        _files: Vec<CopyFile>,
+    ) -> Result<(u64, Option<String>)> {
+        Err(Error::Protocol(format!("this device keeps no copy of {context}")))
+    }
 }
 
 /// Answers requests until the handheld says goodbye or hangs up.
@@ -245,6 +262,12 @@ fn session<S: Read + Write>(
             Request::ContextPull { context, adapter } => {
                 host.context_pull(&context, adapter.as_ref()).map(|records| Response::Context { records })
             }
+            Request::ContextCopyGet { context } => {
+                host.context_copy(&context).map(|c| Response::ContextCopy { generation: c.generation, records: c.records, files: c.files })
+            }
+            Request::ContextCopyPut { context, base_generation, records, files } => host
+                .context_copy_put(&context, base_generation, records, files)
+                .map(|(generation, deferred)| Response::ContextCopyStored { generation, deferred }),
             Request::ContextPush { context, changes } => host
                 .context_push(&context, changes)
                 .map(|deferred| Response::ContextApplied { deferred: deferred.is_some(), message: deferred }),
@@ -281,7 +304,9 @@ fn refusal(host: &dyn Host, peer: &PeerId, request: &Request) -> Option<Response
         | Request::FileGet { .. }
         | Request::FilePut { .. }
         | Request::SaveApply { .. } => (!host.offers(peer).saves).then_some("its saves"),
-        Request::ContextPull { .. } | Request::ContextPush { .. } => (!host.syncs_contexts(peer)).then_some("plugin data"),
+        Request::ContextPull { .. } | Request::ContextPush { .. } | Request::ContextCopyGet { .. } | Request::ContextCopyPut { .. } => {
+            (!host.syncs_contexts(peer)).then_some("plugin data")
+        }
         _ => None,
     }?;
     Some(Response::Error { message: format!("{} does not offer {what} to this device.", host.name()), code: Some(NOT_OFFERED.into()) })
