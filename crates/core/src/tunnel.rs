@@ -11,7 +11,7 @@
 //! tries every endpoint it knows for the computer at once and keeps the one
 //! that answers. A tunnel exists only while a sync runs.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -477,7 +477,12 @@ pub fn serve(
     hooks: &mut dyn Hooks,
 ) -> io::Result<()> {
     udp.set_read_timeout(Some(Duration::from_millis(5)))?;
-    let mut sessions: HashMap<PeerId, Session> = HashMap::new();
+    // One session per call, found by the endpoint it talks from: every
+    // droidtop call opens a socket of its own, so one device can have a call
+    // ending while the next starts (a library sync, then copying a game), or
+    // two at once, and neither takes the other's session
+    // (Droidtop/tracker#529).
+    let mut sessions: Vec<(PeerId, Session)> = Vec::new();
     let mut buf = vec![0u8; WIRE];
     let mut out = vec![0u8; WIRE];
     while !stop.load(Ordering::Relaxed) {
@@ -485,37 +490,29 @@ pub fn serve(
             Ok((n, from)) if hooks.datagram(&udp, from, &buf[..n]) => {}
             Ok((n, from)) => {
                 let data = &buf[..n];
-                let known = sessions.iter_mut().find(|(_, s)| s.endpoint == from).map(|(p, _)| *p);
-                // A new handshake on a link with no stream is a device that
-                // started over (a new sync): it gets a fresh session. A live
-                // link's handshakes are rekeys and stay with it.
                 let initiation = data.first() == Some(&1);
-                if let Some(peer) = known {
-                    if initiation && sessions.get(&peer).is_some_and(|s| s.app.is_none()) {
-                        sessions.remove(&peer);
-                    }
-                }
-                let known = known.filter(|p| sessions.contains_key(p));
-                let handled = match known {
-                    Some(peer) => sessions.get_mut(&peer).is_some_and(|s| s.datagram(&udp, from, data, &mut out)),
+                // A new handshake on a link with no stream is a device that
+                // started over: it gets a fresh session. A live link's
+                // handshakes are rekeys and stay with it.
+                sessions.retain(|(_, s)| !(s.endpoint == from && initiation && s.app.is_none()));
+                let handled = match sessions.iter_mut().find(|(_, s)| s.endpoint == from) {
+                    Some((_, s)) => s.datagram(&udp, from, data, &mut out),
                     None => false,
                 };
-                if !handled {
-                    // A new endpoint: a session that moved, or a new handshake from a paired device.
-                    let roamed = sessions.iter_mut().find_map(|(p, s)| s.datagram(&udp, from, data, &mut out).then_some(*p));
-                    if roamed.is_none() {
-                        for peer in peers() {
-                            if sessions.contains_key(&peer) {
-                                continue;
-                            }
-                            let Ok(tunn) = tunn_for(key, &peer) else { continue };
-                            let mut session = Session::new(tunn, from, false);
-                            if session.datagram(&udp, from, data, &mut out) {
-                                sessions.insert(peer, session);
-                                break;
-                            }
+                if !handled && initiation {
+                    // A new call: a fresh session for the paired device whose handshake it is.
+                    for peer in peers() {
+                        let Ok(tunn) = tunn_for(key, &peer) else { continue };
+                        let mut session = Session::new(tunn, from, false);
+                        if session.datagram(&udp, from, data, &mut out) {
+                            sessions.push((peer, session));
+                            break;
                         }
                     }
+                } else if !handled {
+                    // Data from a new endpoint: a live session whose device moved
+                    // (WireGuard's own roaming); only its session can open it.
+                    let _ = sessions.iter_mut().any(|(_, s)| s.datagram(&udp, from, data, &mut out));
                 }
             }
             Err(e) if quiet(&e) => {}
@@ -527,7 +524,7 @@ pub fn serve(
                 on_stream(*peer, stream);
             }
         }
-        sessions.retain(|_, s| s.last_use.elapsed() <= IDLE);
+        sessions.retain(|(_, s)| s.last_use.elapsed() <= IDLE);
     }
     Ok(())
 }
@@ -579,6 +576,50 @@ mod tests {
         ch.send(&big).unwrap();
         assert_eq!(ch.recv().unwrap(), big);
         drop(ch);
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+    }
+
+    /// Two calls in a row from the same device, each on a socket of its own
+    /// (a library sync, then copying a game): the second is answered too
+    /// (Droidtop/tracker#529).
+    #[test]
+    fn a_second_call_right_after_the_first_is_answered() {
+        let pc = DeviceKey::generate();
+        let pc_id = pc.peer_id();
+        let handheld = DeviceKey::generate();
+        let hh_id = handheld.peer_id();
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let target = SocketAddr::from(([127, 0, 0, 1], udp.local_addr().unwrap().port()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_server = stop.clone();
+        let pc_seed = pc.seed();
+        let server = thread::spawn(move || {
+            serve(
+                &pc,
+                udp,
+                move || vec![hh_id],
+                move |_, mut stream| {
+                    thread::spawn(move || {
+                        let key = DeviceKey::from_seed(&pc_seed).unwrap();
+                        stream.set_read_timeout(Some(Duration::from_secs(20)));
+                        let mut ch = Channel::accept(stream, &key, |p| *p == hh_id).unwrap();
+                        let got = ch.recv().unwrap();
+                        ch.send(&got).unwrap();
+                    });
+                },
+                &stop_server,
+                &mut NoHooks,
+            )
+            .unwrap();
+        });
+        for call in [b"sync".as_slice(), b"copy".as_slice()] {
+            let mut stream = connect(&handheld, &pc_id, &[target], Duration::from_secs(10)).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(10)));
+            let mut ch = Channel::connect(stream, &handheld, &pc_id).unwrap();
+            ch.send(call).unwrap();
+            assert_eq!(ch.recv().unwrap(), call);
+        }
         stop.store(true, Ordering::Relaxed);
         server.join().unwrap();
     }

@@ -605,6 +605,14 @@ share only ever sees ciphertext.
    userspace TCP stack (smoltcp) carries the TLS channel, so nothing on
    either device needs a TUN interface, root or a VPN slot. The tunnel exists
    only while a sync runs.
+   - **One tunnel session per call.** Each of droidtop's calls opens its own
+     UDP socket and handshake, so the computer keeps a session per endpoint,
+     not per device: a library sync and the game copy the person starts from
+     it right after (or two calls at once) each get their own session, and a
+     call never lands on the last one's inner connection while it closes
+     (Droidtop/tracker#529). A handshake from a new endpoint is a new call;
+     data from a new endpoint is a live session whose device moved
+     (WireGuard's own roaming).
    - **Finding each other's public endpoint:** endpoints are learned
      - from the last direct connection;
      - from small signed announcements (endpoint and key, a few hundred bytes)

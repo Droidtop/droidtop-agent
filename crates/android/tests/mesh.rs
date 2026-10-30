@@ -21,8 +21,9 @@
 //! shares with another.
 
 use std::fs;
-use std::net::{SocketAddr, TcpListener};
+use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
@@ -37,6 +38,7 @@ use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves::{Roots, SaveSpec};
 use droidtop_agent_core::savesync::copy_dir;
 use droidtop_agent_core::server::{serve, serve_moved, Host};
+use droidtop_agent_core::tunnel;
 use droidtop_agent_service::Agent;
 use droidtop_agent_store::Dirs;
 use serde_json::{json, Value};
@@ -389,77 +391,95 @@ fn a_computer_that_moved_to_windowcasts_identity_tells_its_handhelds() {
     assert!(again.get("moved_to").is_none(), "{again}");
 }
 
+/// Droidtop/tracker#529 and #469 part 3, the console check in one test: the
+/// real agent, reached only through its WireGuard endpoint, has a newer
+/// version of a game the handheld has. The library sync tells the handheld
+/// about it (what the Versions tab shows), and droidtop's `game_pull` (what
+/// its Downloads job calls) copies that version beside the one it had.
 #[test]
-fn a_newer_version_comes_from_a_computer_through_droidtops_call() {
-    use droidtop_agent_core::proto::GameRef as G;
-    struct GamePc {
-        game: PathBuf,
-    }
-    impl Host for GamePc {
-        fn name(&self) -> String {
-            "PC".into()
-        }
-        fn offers(&self, _peer: &PeerId) -> droidtop_agent_core::proto::Offer {
-            droidtop_agent_core::proto::Offer::LIBRARY_AND_SAVES
-        }
-        fn syncs_contexts(&self, _peer: &PeerId) -> bool {
-            true
-        }
-        fn saves(&self, _game: &G) -> Option<(SaveSpec, Roots)> {
-            None
-        }
-        fn archive_dir(&self, _game: &G) -> PathBuf {
-            std::env::temp_dir()
-        }
-        fn library_pull(&self, _peer: &PeerId, since: u64) -> droidtop_agent_core::Result<(Vec<Change>, u64)> {
-            Ok((Vec::new(), since))
-        }
-        fn library_push(&self, _peer: &PeerId, _changes: Vec<Change>) -> droidtop_agent_core::Result<()> {
-            Ok(())
-        }
-        fn context_pull(&self, _context: &str, _offer: Option<&AdapterOffer>) -> droidtop_agent_core::Result<Records> {
-            Ok(Records::new())
-        }
-        fn context_push(&self, _context: &str, _changes: Vec<RecordChange>) -> droidtop_agent_core::Result<Option<String>> {
-            Ok(None)
-        }
-        fn game_folder(&self, _game: &G) -> Option<(PathBuf, Option<String>)> {
-            Some((self.game.clone(), Some("1.1".into())))
-        }
-    }
+fn a_newer_version_on_the_computer_is_seen_and_copied_through_the_tunnel() {
     let h = Handheld::new("Copier");
-    let source = temp("pull-pc").join("Testgame v1.1");
-    fs::create_dir_all(source.join("game")).unwrap();
-    fs::write(source.join("Testgame.exe"), b"MZ v1.1").unwrap();
-    fs::write(source.join("game/data.bin"), vec![7u8; 300_000]).unwrap();
-    let pc: &'static GamePc = Box::leak(Box::new(GamePc { game: source }));
-    let key = DeviceKey::generate();
-    let id = key.peer_id();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let at = listener.local_addr().unwrap();
+    let games = temp("tunnel-pc-games");
+    let newer = games.join("DtSyncTest v1.1");
+    fs::create_dir_all(newer.join("game")).unwrap();
+    fs::write(newer.join("DtSyncTest.exe"), b"MZ v1.1").unwrap();
+    fs::write(newer.join("game/data.bin"), vec![7u8; 300_000]).unwrap();
+    let ((agent, id, _lan), _dirs) = start_agent("PC-T", &games, vec![h.id]);
+
+    // Its WireGuard endpoint, as `droidtop-agent run` serves it.
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let seed = agent.store.key.seed();
     let paired = h.id;
-    thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            if let Ok(mut ch) = Channel::accept(stream, &key, |p| *p == paired) {
-                let _ = serve(&mut ch, pc);
-            }
-        }
+    let server = thread::spawn(move || {
+        let key = DeviceKey::from_seed(&seed).unwrap();
+        tunnel::serve(
+            &key,
+            udp,
+            move || vec![paired],
+            move |peer, mut stream| {
+                thread::spawn(move || {
+                    stream.set_read_timeout(Some(Duration::from_secs(20)));
+                    let key = DeviceKey::from_seed(&seed).unwrap();
+                    if let Ok(mut ch) = Channel::accept(stream, &key, |p| *p == peer) {
+                        let _ = serve(&mut ch, agent);
+                    }
+                });
+            },
+            stop,
+            &mut tunnel::NoHooks,
+        )
+        .unwrap();
     });
-    let shelf = h.dir.join("games");
-    fs::create_dir_all(&shelf).unwrap();
-    let progress = h.dir.join("progress.json");
-    let out: Value = serde_json::from_str(&call(
-        "game_pull",
-        &json!({
-            "seed": h.seed, "peer": id.to_hex(), "addresses": [at.to_string()], "name": "Copier",
-            "game": { "key": "title:testgame", "title": "Testgame" },
-            "parent": shelf, "folder_name": "Testgame v1.1", "progress": progress,
-        })
-        .to_string(),
+    // No LAN address answers: only the endpoint the computer gave last time.
+    let through_tunnel = |extra: Value| {
+        let mut args =
+            json!({ "seed": h.seed, "peer": id.to_hex(), "name": h.name, "addresses": ["127.0.0.1:1", format!("wg:127.0.0.1:{port}")] });
+        for (k, v) in extra.as_object().unwrap() {
+            args[k] = v.clone();
+        }
+        args.to_string()
+    };
+
+    // The handheld has v1.0 from its own folder, titled the way droidtop titles it.
+    let shelf = h.dir.join("dt-games");
+    let older = shelf.join("DtSyncTest v1.0");
+    fs::create_dir_all(&older).unwrap();
+    fs::write(older.join("DtSyncTest.exe"), b"MZ v1.0").unwrap();
+    let key = "title:dt sync test";
+    let synced: Value = serde_json::from_str(&call(
+        "sync_library",
+        &through_tunnel(json!({
+            "state": h.dir.join("library.json"),
+            "scan": [{ "key": key, "title": "Dt Sync Test", "platform": "pc",
+                "install": { "installed": true, "version": "1.0", "path": older, "launcher": "droidtop" } }],
+        })),
     ))
     .unwrap();
-    assert_eq!(out["files"], 2, "{out}");
-    assert_eq!(fs::read(shelf.join("Testgame v1.1/Testgame.exe")).unwrap(), b"MZ v1.1");
+    assert!(synced.get("error").is_none() && synced.get("unreachable").is_none(), "{synced}");
+    assert_eq!(synced["path"], "wireguard", "{synced}");
+    let lib = Library::load(&h.dir.join("library.json")).unwrap();
+    let versions: Vec<(&str, &str)> = lib.games[key].versions.iter().map(|v| (v.device_name.as_str(), v.version.as_str())).collect();
+    assert!(versions.contains(&("PC-T", "1.1")) && versions.contains(&("Copier", "1.0")), "{versions:?}");
+
+    // Get v1.1 from the computer: a new folder beside v1.0, which stays.
+    let progress = h.dir.join("progress.json");
+    let copied: Value = serde_json::from_str(&call(
+        "game_pull",
+        &through_tunnel(json!({
+            "game": { "key": key, "title": "Dt Sync Test" },
+            "parent": shelf, "folder_name": "Dt Sync Test v1.1", "progress": progress,
+        })),
+    ))
+    .unwrap();
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    assert_eq!(copied["path"], "wireguard", "{copied}");
+    assert_eq!(copied["files"], 2, "{copied}");
+    assert_eq!(fs::read(shelf.join("Dt Sync Test v1.1/DtSyncTest.exe")).unwrap(), b"MZ v1.1");
+    assert_eq!(fs::read(shelf.join("Dt Sync Test v1.1/game/data.bin")).unwrap().len(), 300_000);
+    assert_eq!(fs::read(older.join("DtSyncTest.exe")).unwrap(), b"MZ v1.0");
     let p: Value = serde_json::from_str(&fs::read_to_string(progress).unwrap()).unwrap();
     assert_eq!(p["done"], p["total"]);
 }

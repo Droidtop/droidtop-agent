@@ -6,6 +6,10 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A handheld reaching the computer through WireGuard can make a second
+  call right after the first: copying a newer version of a game straight
+  after the library sync showed it no longer fails with "the computer did
+  not answer through WireGuard" (Droidtop/tracker#529, #469 part 3).
 - Service mode (docs/DESIGN.md section 19, windowcast#467): off unless the
   person turns it on, after it says what it does; `droidtop-agent
   service-mode [enable | disable | uninstall]` and Settings > Service mode
