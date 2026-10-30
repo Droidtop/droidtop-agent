@@ -260,6 +260,21 @@ fn merge_record(decl: &ContextDecl, key: &str, d: &Record, c: &Record, b: Option
     out.baseline.insert(key.to_string(), base);
 }
 
+/// [`records`] with [`changes`] applied: the copy the computer holds once
+/// what the device sends is in it.
+pub fn apply(records: &Records, changes: &[RecordChange]) -> Records {
+    let mut out = records.clone();
+    for change in changes {
+        match change {
+            RecordChange::Upsert { key, fields } => out.entry(key.clone()).or_default().extend(fields.clone()),
+            RecordChange::Remove { key } => {
+                out.remove(key);
+            }
+        }
+    }
+    out
+}
+
 /// The baseline to keep when the computer could not apply [`to_computer`]
 /// yet (the app that owns the data is running): those fields keep the
 /// computer's values, so the next sync sees them as the device's changes
@@ -296,6 +311,28 @@ pub fn baseline_when_deferred(merge: &Merge, computer: &Records) -> Records {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn changes_applied_to_a_copy_add_set_and_remove() {
+        let copy: Records = [
+            ("1".to_string(), [("a".to_string(), json!(1)), ("b".to_string(), json!(2))].into_iter().collect()),
+            ("2".to_string(), Record::new()),
+        ]
+        .into_iter()
+        .collect();
+        let changes = vec![
+            RecordChange::Upsert { key: "1".into(), fields: [("b".to_string(), json!(9))].into_iter().collect() },
+            RecordChange::Upsert { key: "3".into(), fields: [("a".to_string(), json!(3))].into_iter().collect() },
+            RecordChange::Remove { key: "2".into() },
+        ];
+        let out = apply(&copy, &changes);
+        assert_eq!(out["1"]["a"], json!(1));
+        assert_eq!(out["1"]["b"], json!(9));
+        assert_eq!(out["3"]["a"], json!(3));
+        assert!(!out.contains_key("2"));
+        // The copy it came from is untouched.
+        assert_eq!(copy["1"]["b"], json!(2));
+    }
 
     fn decl() -> ContextDecl {
         ContextDecl {

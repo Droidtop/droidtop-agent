@@ -55,6 +55,9 @@ struct Computer {
     name: String,
     dir: PathBuf,
     library: Mutex<Library>,
+    /// The next read of a context's copy is followed by a publish from the
+    /// plugin here, so the handheld's put is built on an old generation.
+    publish_after_read: Mutex<Option<Records>>,
 }
 
 impl Computer {
@@ -93,6 +96,23 @@ impl Host for Computer {
         });
         Ok(())
     }
+    fn context_copy(&self, context: &str) -> droidtop_agent_core::Result<droidtop_agent_core::copy::Copy> {
+        let store = droidtop_agent_core::copy::CopyStore::open(&self.dir.join("adapters"), context)?;
+        let read = store.current()?;
+        if let Some(records) = self.publish_after_read.lock().unwrap().take() {
+            store.publish(records, Vec::new())?;
+        }
+        Ok(read)
+    }
+    fn context_copy_put(
+        &self,
+        context: &str,
+        base: u64,
+        records: Records,
+        files: Vec<droidtop_agent_core::copy::CopyFile>,
+    ) -> droidtop_agent_core::Result<(u64, Option<String>)> {
+        Ok((droidtop_agent_core::copy::CopyStore::open(&self.dir.join("adapters"), context)?.replace(base, records, files)?, None))
+    }
     fn context_pull(&self, _context: &str, _offer: Option<&AdapterOffer>) -> droidtop_agent_core::Result<Records> {
         Ok(Records::new())
     }
@@ -116,7 +136,12 @@ fn start(name: &str, games: &[&str], paired: Vec<PeerId>) -> (&'static Computer,
         })
         .collect();
     library.update_device(&id, name, scanned);
-    let computer: &'static Computer = Box::leak(Box::new(Computer { name: name.into(), dir: temp(name), library: Mutex::new(library) }));
+    let computer: &'static Computer = Box::leak(Box::new(Computer {
+        name: name.into(),
+        dir: temp(name),
+        library: Mutex::new(library),
+        publish_after_read: Mutex::new(None),
+    }));
     fs::create_dir_all(computer.appdata().join("Game")).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let at = listener.local_addr().unwrap();
@@ -211,6 +236,23 @@ impl Handheld {
         out
     }
     /// One saves sync; `choice` is the person's answer to a conflict (`here` or `there`).
+    /// A context synced by copies (adapter protocol 2).
+    fn context_copy<C: Host + ?Sized>(&self, pc: &(&'static C, PeerId, SocketAddr), device: Value, baseline: Value) -> Value {
+        let mut args = self.args(pc);
+        args["decl"] = json!({
+            "id": "f95checker",
+            "presence": "both",
+            "fields": [
+                { "name": "installed", "direction": "both", "rule": "device" },
+                { "name": "version", "direction": "to_device", "rule": "computer" },
+            ],
+        });
+        args["device"] = device;
+        args["baseline"] = baseline;
+        let out: Value = serde_json::from_str(&call("sync_context_copy", &args.to_string())).unwrap();
+        assert!(out.get("error").is_none() && out.get("unreachable").is_none(), "{} with {}: {out}", self.name, pc.0.name());
+        out
+    }
     fn saves<C: Host + ?Sized>(&self, pc: &(&'static C, PeerId, SocketAddr), choice: Option<&str>) -> Value {
         let mut args = self.args(pc);
         args["game"] = json!({ "key": "steam:1", "title": "Game" });
@@ -380,8 +422,12 @@ fn a_computer_that_moved_to_windowcasts_identity_tells_its_handhelds() {
     let h = Handheld::new("Mover");
     let (old, new) = (DeviceKey::generate(), DeviceKey::generate());
     let (old_id, new_id) = (old.peer_id(), new.peer_id());
-    let computer: &'static Computer =
-        Box::leak(Box::new(Computer { name: "PC".into(), dir: temp("moved"), library: Mutex::new(Library::default()) }));
+    let computer: &'static Computer = Box::leak(Box::new(Computer {
+        name: "PC".into(),
+        dir: temp("moved"),
+        library: Mutex::new(Library::default()),
+        publish_after_read: Mutex::new(None),
+    }));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let at = listener.local_addr().unwrap();
     let paired = h.id;
@@ -493,4 +539,43 @@ fn a_newer_version_on_the_computer_is_seen_and_copied_through_the_tunnel() {
     assert_eq!(fs::read(older.join("DtSyncTest.exe")).unwrap(), b"MZ v1.0");
     let p: Value = serde_json::from_str(&fs::read_to_string(progress).unwrap()).unwrap();
     assert_eq!(p["done"], p["total"]);
+}
+
+/// Docs/DESIGN.md section 8, protocol 2, from the handheld: a context is read
+/// as the computer's current copy, merged per field, and put back whole. A
+/// computer whose copy moved between the read and the put refuses the put as
+/// stale; the handheld reads, merges and puts again.
+#[test]
+fn a_context_syncs_by_copies_and_a_copy_that_moved_is_merged_again() {
+    let h = Handheld::new("H1");
+    let pc = start("PC-copy", &[], vec![h.id]);
+    let cur = |pc: &(&'static Computer, PeerId, SocketAddr)| {
+        droidtop_agent_core::copy::CopyStore::open(&pc.0.dir.join("adapters"), "f95checker").unwrap().current().unwrap()
+    };
+    let rec = |k: &str, installed: &str, version: &str| -> Value { json!({ k: { "installed": installed, "version": version } }) };
+
+    // The computer's plugin publishes what F95Checker holds; the handheld brings it down.
+    droidtop_agent_core::copy::CopyStore::open(&pc.0.dir.join("adapters"), "f95checker")
+        .unwrap()
+        .publish(serde_json::from_value(rec("100", "0.1", "v1")).unwrap(), Vec::new())
+        .unwrap();
+    let first = h.context_copy(&pc, json!({}), json!({}));
+    assert_eq!(first["device"]["100"]["version"], "v1", "{first}");
+    assert_eq!(first["generation"], 1, "{first}");
+    assert_eq!(first["sent"], 0, "{first}");
+
+    // The handheld changes a field: one put, one new generation on the computer.
+    let played = h.context_copy(&pc, rec("100", "0.2", "v1"), first["baseline"].clone());
+    assert_eq!((played["sent"].as_u64(), played["generation"].as_u64()), (Some(1), Some(2)), "{played}");
+    assert_eq!(cur(&pc).records["100"]["installed"], "0.2");
+
+    // The computer's plugin publishes between the read and the put: the put is
+    // refused as stale, and the next try merges both changes.
+    *pc.0.publish_after_read.lock().unwrap() = Some(serde_json::from_value(rec("100", "0.2", "v2")).unwrap());
+    let both = h.context_copy(&pc, rec("100", "0.3", "v1"), played["baseline"].clone());
+    assert_eq!(both["sent"], 1, "{both}");
+    let now = cur(&pc);
+    assert_eq!((now.records["100"]["installed"].clone(), now.records["100"]["version"].clone()), (json!("0.3"), json!("v2")), "{both}");
+    assert_eq!(both["device"]["100"]["version"], "v2", "{both}");
+    assert_eq!(both["generation"].as_u64(), Some(now.generation));
 }

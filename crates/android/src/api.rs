@@ -15,7 +15,8 @@ use droidtop_agent_core::cert;
 use droidtop_agent_core::channel::Channel;
 use droidtop_agent_core::client::{self, ConnectError, RendezvousSettings, Session, Target};
 use droidtop_agent_core::confirm;
-use droidtop_agent_core::context::{baseline_when_deferred, merge, AdapterOffer, ContextDecl, Records};
+use droidtop_agent_core::context::{apply, baseline_when_deferred, merge, AdapterOffer, ContextDecl, Records};
+use droidtop_agent_core::copy;
 use droidtop_agent_core::discovery::{self, Announce};
 use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::{Change, Cursor, Library, Marks, ScannedGame};
@@ -55,6 +56,7 @@ pub fn call(op: &str, args: &str) -> String {
         "sync_saves" => sync_saves(&args),
         "sync_library" => sync_library(&args),
         "sync_context" => sync_context(&args),
+        "sync_context_copy" => sync_context_copy(&args),
         "game_pull" => game_pull(&args),
         "game_push" => game_push(&args),
         "launch_game" => launch_game(&args),
@@ -400,6 +402,83 @@ fn sync_saves(args: &Value) -> Outcome {
     let v = located(serde_json::to_value(outcome?)?, &s);
     bye(s);
     Ok(v)
+}
+
+/// Syncs a context by copies (docs/DESIGN.md section 8; adapter protocol 2):
+/// reads the computer's current copy, merges it three-way per field with the
+/// device's published copy against the baseline, and puts the merged copy
+/// back in one step. Arguments: `decl`, `device` (the records of the copy the
+/// plugin published here), `baseline` (the records as they were after the
+/// last sync with this computer), and the connection's. The reply:
+/// `device` (the records to make this device's copy, after the merge),
+/// `baseline`, `conflicts` (fields both sides changed whose rule is `ask`),
+/// `generation` (the computer's copy after this sync), `sent` (the changes
+/// the computer received), `changed` (the computer's copy differed from the
+/// baseline or the device's), and `deferred` (the plugin there has not taken
+/// the copy in yet, and says why in `message`; the copy is current anyway,
+/// so the baseline moves).
+///
+/// A computer whose copy changed between the read and the put refuses the
+/// put as `stale`; the copy is then read, merged and put again, three times
+/// at most, and the context is left for the next sync after that.
+fn sync_context_copy(args: &Value) -> Outcome {
+    const TRIES: usize = 3;
+    let key = key_of(args)?;
+    let decl: ContextDecl = serde_json::from_value(args["decl"].clone())?;
+    let device: Records = serde_json::from_value(args["device"].clone()).unwrap_or_default();
+    let baseline: Records = serde_json::from_value(args["baseline"].clone()).unwrap_or_default();
+    let mut s = connect(&key, args)?;
+    let ch = &mut s.ch;
+    let mut last = None;
+    for _ in 0..TRIES {
+        ch.send_json(&Request::ContextCopyGet { context: decl.id.clone() })?;
+        let (generation, theirs) = match ch.recv_json::<Response>()? {
+            Response::ContextCopy { generation, records, .. } => (generation, records),
+            Response::Error { message, .. } => return Err(Failure::Error(message)),
+            other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
+        };
+        let m = merge(&decl, &device, &theirs, &baseline);
+        if m.to_computer.is_empty() {
+            let v = located(
+                json!({
+                    "device": m.device, "baseline": m.baseline, "conflicts": m.conflicts, "generation": generation,
+                    "sent": 0, "deferred": false, "message": null,
+                }),
+                &s,
+            );
+            bye(s);
+            return Ok(v);
+        }
+        let merged = apply(&theirs, &m.to_computer);
+        ch.send_json(&Request::ContextCopyPut {
+            context: decl.id.clone(),
+            base_generation: generation,
+            records: merged,
+            files: Vec::new(),
+        })?;
+        match ch.recv_json::<Response>()? {
+            Response::ContextCopyStored { generation, deferred } => {
+                let v = located(
+                    json!({
+                        "device": m.device, "baseline": m.baseline, "conflicts": m.conflicts, "generation": generation,
+                        "sent": m.to_computer.len(), "deferred": deferred.is_some(), "message": deferred,
+                    }),
+                    &s,
+                );
+                bye(s);
+                return Ok(v);
+            }
+            Response::Error { message, .. } if message.contains(copy::STALE) => last = Some(message),
+            Response::Error { message, .. } => return Err(Failure::Error(message)),
+            other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
+        }
+    }
+    // Left for the next sync: nothing was changed on either side.
+    Err(Failure::Error(format!(
+        "the computer's copy of {} kept changing ({}); it is left for the next sync",
+        decl.id,
+        last.unwrap_or_default()
+    )))
 }
 
 // Library --------------------------------------------------------------------

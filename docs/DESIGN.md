@@ -270,7 +270,9 @@ exactly one reply (`{"t":"error","message":...}` on failure).
 | `file_put {game, name, size, sha256, mtime}` + data | `ok` | one save file, handheld to computer |
 | `save_apply {game, remove, archive}` | `ok` | removals, and keeping the computer's own changed set as its copy first (`archive`) |
 | `context_pull {context}` | `context {records}` | a plugin context's records on the computer |
-| `context_push {context, changes}` | `ok` or `deferred` | record changes to apply on the computer |
+| `context_push {context, changes}` | `ok` or `deferred` | record changes to apply on the computer (adapter protocol 1) |
+| `context_copy_get {context}` | `context_copy {generation, records, files}` | a context's current copy on the computer (adapter protocol 2, section 8) |
+| `context_copy_put {context, base_generation, records, files}` | `context_copy_stored {generation, deferred}` or the error `stale` | a merged copy, made current in one step when it was built on the computer's current generation |
 | `launch_game {game}` | `launch {outcome}` | start a Steam game on the computer (section 17) |
 | `announce {values}` | `announced {values}` | each side's per-plugin values for the devices paired with it (below) |
 
@@ -513,12 +515,53 @@ droidtop's `docs/plugin-api.md` (F8). The shape:
   plugin's own repository on the plugin's own schedule, a fault ends only
   that program, and it is a plain process boundary between two separately
   licensed works.
-- **Today (adapter protocol 1) is the old shape**: the agent runs the adapter
-  once per pull or push (`describe`, `pull`, `push` over standard input and
-  output), and the F95 adapter reads and writes F95Checker's live
-  `db.sqlite3`, replying `deferred` while F95Checker runs. Protocol 2 replaces
-  it with the copy and the two notifications; protocol 1 adapters stay
-  readable until every published one moves.
+- **Built (Droidtop/tracker#794): adapter protocol 2.** The agent speaks
+  protocols 1 and 2; an adapter says which in `describe`.
+  - **The copy** is `{generation, records, files}`, kept on the computer at
+    `adapters/<context>/copy/current.json` (`droidtop_agent_core::copy`). A
+    new copy is written beside it as `incoming-<n>.json`, flushed and renamed
+    over it, so a reader sees the old copy or the new one and a write that
+    stops changes nothing (the next open removes its leftover). The
+    generation goes up by one with each copy made current. `files` is in the
+    type and empty today: a context of more than records (Syncthing's index,
+    Droidtop/tracker#793) sends its files through the piece transfer, checked
+    by digest, and they are never merged; a file both sides changed since the
+    baseline is a conflict for the person.
+  - **On the channel** (never part of an offer, gated like the other context
+    requests): `context_copy_get {context}` returns the copy;
+    `context_copy_put {context, base_generation, records, files}` makes a
+    merged copy current when it was built on the computer's current
+    generation, and is refused as `stale` when it was not. The context id
+    names a folder, so a peer's id is checked as a plain name.
+  - **The handheld's sync** (`sync_context_copy` in the library's JNI API)
+    reads the computer's copy, merges it three-way per field with the copy the
+    plugin published on the handheld against the baseline it keeps, puts the
+    merged computer copy back in one request, and returns the merged device
+    copy, the new baseline, the computer's new generation and the conflicts
+    (`ask` fields stay on the handheld). A stale refusal reads, merges and
+    puts again, three times at most; after that the context is left for the
+    next sync and nothing changed on either side.
+  - **`updated`** on the computer is `droidtop-agent contexts publish
+    <context> <file>`: the plugin's program writes what it chooses to share
+    to a file and runs it, and the agent makes it the current copy in one
+    step. The program never touches the copy folder, so the agent is the only
+    writer of the generation.
+  - **`received`** on the computer is the adapter verb `received
+    {"generation": n}`, run after a merged copy was made current. The adapter
+    brings the copy into its own data when that is safe, or answers
+    `{"deferred": "<why>"}`. A deferral is remembered (`copy/pending`) and
+    told again when anything next happens in that context (a copy read or
+    replaced, or a publish); there is no timer. A protocol 1 adapter is not
+    asked.
+  - **Not built yet:** the event that tells a connected handheld a computer's
+    copy changed (the channel only answers requests, so the handheld reads the
+    copy at its next sync, which starts with the read); the files of a copy
+    (#793); and the plugin host's own `updated` and `received` calls (#606,
+    #795), which replace the two commands above when that host runs on a
+    system.
+  - **Protocol 1** (`describe`, `pull`, `push` against the app's live
+    `db.sqlite3`, replying `deferred` while the app runs) stays readable
+    until every published adapter has moved.
 - **The F95 plugin's computer side** is gamegrab-sources/droidtop-agent-f95-adapter.
   It finds F95Checker's `db.sqlite3` (Windows `%APPDATA%\f95checker`, Linux
   `~/.config/f95checker`, macOS `~/Library/Application Support/f95checker`),
@@ -540,8 +583,9 @@ droidtop's `docs/plugin-api.md` (F8). The shape:
   host's broker as it does on the handheld: `updated` is a host call, and
   `received` reaches the plugin as an event. The host, its broker and its
   sandbox are Droidtop/tracker#606 and the computer plugin host's own
-  design. Until that host runs on a system, adapter protocol 1 stays the
-  way contexts sync there.
+  design. Until that host runs on a system, the two commands above
+  (`contexts publish` and the adapter's `received`) are how the two notices
+  reach a program there.
 
 ## 9. Both sides changed, and many devices
 
