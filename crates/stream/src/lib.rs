@@ -141,11 +141,11 @@ fn start(_data_dir: &Path, _state: Arc<Mutex<State>>) -> Result<Hosting, String>
     Err("this computer cannot stream a game yet: droidtop-agent streams from Windows only".into())
 }
 
-#[cfg(test)]
+// On Windows the host really starts, which a unit test cannot do here.
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
 
-    #[cfg(not(windows))]
     #[test]
     fn elsewhere_it_says_it_cannot_stream() {
         let s = Streamer::new();
