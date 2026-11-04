@@ -1185,7 +1185,15 @@ identity, pairing, channel, transports, library, saves and scanner.
      person's devices: every device resolves a game to the same key. Next:
      Pythia's `reconciliation.merge()` and its `platform_ids` write links,
      then its opaque id as a `pythia:<id>` key, then droidtop reading
-     `canonical`;
+     `canonical`. Where it lives (owner, 2026-11-04, Droidtop/tracker#867:
+     "We don't want a single \"droidtop core\", we want each program to have
+     its own scaffold, that can use as many shared libraries and stuff as
+     possible. The scaffold belongs to wach one. The libraries are shared,
+     and don't \"belong\" to either."): the link is part of the library
+     model in `crates/core`, which droidtop already builds as its library and
+     which moves out to a neutral library repo with the rest of the shared
+     crates; it is platform-neutral and names no app. Nothing of it is added
+     to the agent's own crates beyond the store setter and Pythia's binding;
   2. ownership of store games that are not installed (owner, 2026-10-14),
      another library fact, written by Pythia's account sync through `store`;
   3. reconciliation's duplicate search (Pythia's difflib pass over every
