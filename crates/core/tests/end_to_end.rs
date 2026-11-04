@@ -412,3 +412,42 @@ fn a_contexts_copy_is_replaced_whole_or_refused_as_stale() {
     assert!(matches!(&replies.4, Response::ContextCopy { generation: 2, records, .. } if *records == one("0.2")), "{:?}", replies.4);
     assert!(matches!(&replies.5, Response::Error { .. }), "{:?}", replies.5);
 }
+
+/// Cross-store identity (docs/DESIGN.md section 16, step 1): a link reaches a
+/// device whose hello states `identity`, and never one that does not, which
+/// could not read it.
+#[test]
+fn a_link_reaches_only_a_device_that_reads_links() {
+    use droidtop_agent_core::proto::{Request, Response};
+
+    let pc = DeviceKey::generate().peer_id();
+    let mut pc_lib = Library::default();
+    pc_lib.mark(&pc, "steam:1", "favourite", serde_json::Value::Bool(true));
+    pc_lib.link(&pc, "gog:9", Some("steam:1"));
+    let host: &'static TestHost = Box::leak(Box::new(TestHost {
+        roots: Roots::new(),
+        archive: std::env::temp_dir(),
+        library: Mutex::new(pc_lib),
+        records: Mutex::new(Records::new()),
+        app_running: false,
+        synced: Mutex::new(Vec::new()),
+        adapters: temp("adapters-links"),
+    }));
+    let pull = |features: Vec<String>| {
+        session(host, move |ch| {
+            ch.send_json(&Request::Hello { name: "Handheld".into(), version: 2, features, disco: None }).unwrap();
+            let _: Response = ch.recv_json().unwrap();
+            ch.send_json(&Request::LibraryPull { since: 0 }).unwrap();
+            match ch.recv_json::<Response>().unwrap() {
+                Response::LibraryChanges { changes, .. } => changes,
+                other => panic!("{other:?}"),
+            }
+        })
+    };
+    let old = pull(vec!["library".into()]);
+    assert_eq!(old.len(), 1, "{old:?}");
+    assert!(old.iter().all(Change::readable_without_links));
+    let new = pull(vec!["library".into(), "identity".into()]);
+    assert_eq!(new.len(), 2, "{new:?}");
+    assert!(new.iter().any(|c| matches!(c, Change::Link { game, into: Some(into), .. } if game == "gog:9" && into == "steam:1")));
+}

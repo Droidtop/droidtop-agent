@@ -6,6 +6,12 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Cross-store identity, first part (Droidtop/tracker#798, docs/DESIGN.md
+  section 16): the library can say that two keys are one game (a `link`
+  change, newest wins, undone with no target), and every device follows
+  links to the same key. Only devices that state hello feature `identity`
+  receive links; the cloud folder carries none. Pythia sets them with
+  `store.link` and reads `store.canonical`.
 - A device this computer no longer knows (it was unpaired here) is told so
   as the connection opens, with `code: not_paired`, so the handheld says to
   pair again instead of that the computer did not answer
