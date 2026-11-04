@@ -8,8 +8,9 @@ plugins (for example an F95Checker database). The aim, in the owner's words:
 functioned computer. If I already have a gaming computer or a game library, I
 should be able to sync to and from it."
 
-What it is not: it never streams a screen or remote-controls anything (that is
-windowcast's job), it never runs a Syncthing instance, and it never needs
+What it is not: it holds no streaming code of its own (that is windowcast's
+library, which it embeds to stream the window of a game it starts for a
+handheld, section 22), it never runs a Syncthing instance, and it never needs
 Tailscale or any other VPN. It is meant to be light: one process on the
 computer, no resident process on the handheld.
 
@@ -39,6 +40,7 @@ Tracked as Droidtop/tracker#373 (with #380 for plugin context sync, #284 and
 19. Service mode: Windows security screens
 20. Offers: what one device shares with another
 21. Plugins on the computer
+22. Streaming a game it starts (windowcast's host, embedded)
 
 ## 1. What droidtop already has
 
@@ -914,7 +916,8 @@ on Droidtop/tracker#461.
 | `crates/saves` | Where a game's saves are on this computer (the person's entries, Ludusavi custom games, the Ludusavi index, token roots natively or in a prefix), the kept-copies listing and restore (sections 6 and 9). Looks games up in a scan it is given. | core, scan, store |
 | `crates/pair` | Pairing from the computer: typing the handheld's code, or showing one (section 3). | core, store |
 | `crates/contexts` | Context adapters: offers, approval, install, runs (section 8). | core, store |
-| `crates/service` | The running agent, `Agent`: a `Store` plus the last scan, the save catalog, the rendezvous's state; its `Host` answers (with the launch rule, section 17); serving (LAN, discovery, WireGuard), the computer's rendezvous, the cloud share, a desktop manager's games, autostart. | all above |
+| `crates/stream` | windowcast's host and its Windows window source, started when a handheld first asks to watch a game (section 22). On other systems it only says it cannot stream. | windowcast's host |
+| `crates/service` | The running agent, `Agent`: a `Store` plus the last scan, the save catalog, the rendezvous's state; its `Host` answers (with the launch rule, section 17); serving (LAN, discovery, WireGuard), the computer's rendezvous, the cloud share, a desktop manager's games, autostart, the stream (section 22). | all above |
 | `crates/agent` | The `droidtop-agent` command line: a thin host over the crates. | service and below |
 | `crates/app` | `droidtop-agent-app`, the window and tray (section 15): what people run. | service and below |
 | `crates/android` | droidtop's `cdylib` (`libdroidtop_agent.so`) and its JNI surface. | core |
@@ -1210,7 +1213,8 @@ this request.
   for any sync, checks the `launch` feature (`agent_too_old` otherwise) and
   returns `{"result": ...}` with the usual `computer` and `path`.
 - No streaming code is here (windowcast is the streaming project); the
-  computer only starts the game that Steam Link, or windowcast, then streams.
+  computer starts the game that Steam Link, or windowcast's host embedded
+  in the agent (section 22), then streams.
 
 ### Games the host starts (`launch_host`)
 
@@ -1596,3 +1600,70 @@ python environment", bundled, because the sandbox must control it. And:
   `computers.context_adapter` programs are retired, and whatever they do that
   the host does not yet serve is ported to it first. Protocol 1 adapters keep
   working until then.
+
+## 22. Streaming a game it starts (windowcast's host, embedded)
+
+Owner (2026-10-31, Droidtop/tracker#860): "the droidtop agent has to
+implement the windowcast library. the windowcast host application is a
+reference application. Once the droidtop agent implements it, pythia
+inherits it." And (#373, 2026-10-23, section 20): "It launches the game,
+then streams JUST its windows using windowcast". The acceptance test is
+Sandustry from the owner's Windows desktop to a Retroid Pocket 5.
+
+- **Embedded, not a second program.** `crates/stream`
+  (`droidtop_agent_stream::Streamer`) runs windowcast's host
+  (`windowcast_host::serve`) with windowcast's Windows window source
+  (`windowcast_agent_windows::WindowsSource`: Windows.Graphics.Capture,
+  GPU or software encoding, the window's sound, input, and gamepads as
+  Xbox 360 pads through ViGEmBus) in the agent's own process, on a thread of
+  its own. Pythia hosts the agent's service in its process, so it streams
+  with no code of its own. No streaming code is written here: the crate
+  only starts windowcast's.
+- **Started when first asked, kept after.** Nothing listens until a
+  handheld first asks to watch a game; then the host serves on windowcast's
+  port 47100 (TCP, all interfaces) for the life of the process, at 60
+  frames a second, which windowcast steps down on a thin link. A host that
+  stops is started again at the next ask. When another program already
+  listens on 47100 (windowcast's own app) it is used as it is and the
+  agent says so in its events.
+- **One identity, one trusted list.** The host's data folder is the
+  agent's `Dirs::computer`, windowcast's host folder (section 3), so the
+  stream answers with the computer's own id, which droidtop checks against
+  the computer it asked.
+- **No PIN: the agent's pairing admits the viewer.** windowcast's PIN
+  pairing stays closed. `launch_game` takes an optional `stream {via:
+  "windowcast", viewer}`, `viewer` being the handheld's windowcast client
+  identity in hex. For a handheld allowed to start games here (section 17's
+  switch, checked first), the agent records it as that device's `viewer`
+  and pins it in the shared trusted list (`Store::set_viewer`), replacing
+  the device's earlier viewer; unpairing the device unpins its viewer too.
+  A viewer that is a paired device's own id, another device's viewer or the
+  computer's id is refused, so replacing it could never unpin something
+  else.
+- **The order.** Allowed, then the key (Steam's, or the host program's
+  launcher), installed and Steam running, as in section 17; then the
+  stream is made ready (viewer pinned, host serving); only then is the
+  game started. A computer that cannot stream starts nothing and answers
+  `failed` with why. The answer is `started` with `stream: "windowcast"`
+  and no `address`: the handheld uses port 47100 on the address it reached
+  the computer at.
+- **Advertised.** The hello states feature `stream` where the host can
+  run. droidtop's library sends `stream` only to an agent that states it,
+  and otherwise answers `cannot_stream` without asking the computer to start
+  anything.
+- **Windows only for now.** windowcast's Linux host needs a wlroots
+  compositor (sway) and PulseAudio, and would add libpulse to the agent's
+  Linux packages; there is no macOS host. Elsewhere the agent states no
+  `stream`.
+- **Not built:**
+  - showing *only* the game's windows. windowcast admits a trusted viewer
+    to every window (its policy has per-window rules only for accounts),
+    exactly as it already admits every handheld paired with the agent,
+    which shares its trusted list. Limiting a viewer to the windows of the
+    game it started needs a per-peer window rule in windowcast;
+  - streaming from away: the host listens on the LAN, and the agent's
+    WireGuard tunnel carries only the agent's own channel;
+  - the Linux host, and service mode (a host running as SYSTEM to reach the
+    secure desktop);
+  - a stream for a computer asking another computer to play (`play_on`),
+    which sends no viewer.

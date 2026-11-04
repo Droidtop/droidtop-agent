@@ -8,7 +8,7 @@ use droidtop_agent_core::context::{AdapterOffer, RecordChange, Records};
 use droidtop_agent_core::copy::{Copy, CopyFile, CopyStore};
 use droidtop_agent_core::keys::PeerId;
 use droidtop_agent_core::library::Change;
-use droidtop_agent_core::proto::{Announcements, GameRef, Launch, Offer};
+use droidtop_agent_core::proto::{Announcements, GameRef, Launch, Offer, StreamAsk};
 use droidtop_agent_core::saves::{Roots, SaveSpec};
 use droidtop_agent_core::server::Host;
 use droidtop_agent_core::{Error, Result};
@@ -35,17 +35,53 @@ pub fn endpoints(public: Option<&str>) -> Vec<String> {
     out
 }
 
+/// A handheld that asked to watch the game it starts (docs/DESIGN.md
+/// section 22): its viewer is trusted by windowcast's host, which this
+/// process starts the first time.
+struct Watching<'a> {
+    agent: &'a Agent,
+    peer: &'a PeerId,
+    ask: &'a StreamAsk,
+}
+
+impl crate::launch::Watch for Watching<'_> {
+    fn ready(&self) -> std::result::Result<Option<String>, String> {
+        if self.ask.via != "windowcast" {
+            return Err(format!("this computer streams through windowcast only, not {:?}", self.ask.via));
+        }
+        if !droidtop_agent_stream::supported() {
+            return Err("droidtop-agent streams from Windows only for now".into());
+        }
+        let viewer = PeerId::from_hex(&self.ask.viewer).map_err(|_| "the handheld named no viewer windowcast can trust".to_string())?;
+        self.agent.store.set_viewer(self.peer, &viewer).map_err(|e| format!("could not trust the handheld's viewer ({e})"))?;
+        let hosting = self.agent.streamer.ensure(&self.agent.store.dirs.computer)?;
+        if hosting == droidtop_agent_stream::Hosting::Elsewhere {
+            self.agent.events.info(
+                "stream",
+                format!("Another program already listens on windowcast's port {}: the stream is its.", droidtop_agent_stream::PORT),
+                json!({ "port": droidtop_agent_stream::PORT }),
+            );
+        }
+        // On windowcast's own port, which the handheld assumes.
+        Ok(None)
+    }
+}
+
 impl Host for Agent {
     fn name(&self) -> String {
         self.store.name()
     }
 
     fn extra_features(&self) -> Vec<String> {
+        let mut features = Vec::new();
         if self.launcher.locked().is_some() {
-            vec!["launch_host".into()]
-        } else {
-            Vec::new()
+            features.push("launch_host".into());
         }
+        // It can stream a game it starts (docs/DESIGN.md section 22).
+        if droidtop_agent_stream::supported() {
+            features.push("stream".into());
+        }
+        features
     }
 
     fn offers(&self, peer: &PeerId) -> Offer {
@@ -59,18 +95,27 @@ impl Host for Agent {
         self.store.syncs_contexts(peer)
     }
 
-    fn launch_game(&self, peer: &PeerId, game: &GameRef) -> Launch {
+    fn launch_game(&self, peer: &PeerId, game: &GameRef, stream: Option<&StreamAsk>) -> Launch {
         // The settings are read again: the window or a command line may have
         // changed the switch since this process started.
         self.store.reload_settings();
         let installed = || self.fresh_scan(300).find(&game.key).is_some_and(|f| f.game.install.installed);
         let host = self.launcher.locked().clone();
-        let outcome = crate::launch::launch(self.store.may_launch(peer), installed, game, &crate::launch::Local, host.as_deref());
+        let watch = stream.map(|ask| Watching { agent: self, peer, ask });
+        let outcome = crate::launch::launch(
+            self.store.may_launch(peer),
+            installed,
+            game,
+            &crate::launch::Local,
+            host.as_deref(),
+            watch.as_ref().map(|w| w as &dyn crate::launch::Watch),
+        );
         let device = self.store.device_name(peer);
+        let watched = if stream.is_some() { " to watch" } else { "" };
         self.events.info(
             "launch",
-            format!("{device} asked to start {:?} ({:?}): {outcome:?}", game.title, game.key),
-            json!({ "peer": peer.to_hex(), "device": device, "title": game.title, "key": game.key, "outcome": outcome }),
+            format!("{device} asked to start {:?} ({:?}){watched}: {outcome:?}", game.title, game.key),
+            json!({ "peer": peer.to_hex(), "device": device, "title": game.title, "key": game.key, "stream": stream.is_some(), "outcome": outcome }),
         );
         outcome
     }

@@ -27,6 +27,15 @@ pub trait Launcher: Send + Sync {
     fn launch(&self, game: &GameRef) -> Option<Launch>;
 }
 
+/// Getting a stream of the game ready for the handheld that asked to watch it
+/// (docs/DESIGN.md section 22): windowcast's host serving and the handheld's
+/// viewer trusted, before anything starts.
+pub trait Watch {
+    /// Ready to stream: where the host listens (`HOST:PORT`) when the
+    /// handheld cannot assume it, or why it cannot stream.
+    fn ready(&self) -> Result<Option<String>, String>;
+}
+
 /// The URL that starts a Steam game, from a `steam:<appid>` key: the app id
 /// must be one to ten ASCII digits. Anything else gives nothing.
 pub fn steam_url(key: &str) -> Option<String> {
@@ -38,24 +47,56 @@ pub fn steam_url(key: &str) -> Option<String> {
 /// here) and [`installed`] (the scan found it on this computer), through
 /// Steam or, for any other key, the [`host`]'s launcher. The order is the
 /// order of what a handheld may learn: one that is not allowed learns
-/// nothing about this computer's games.
-pub fn launch(allowed: bool, installed: impl FnOnce() -> bool, game: &GameRef, os: &dyn System, host: Option<&dyn Launcher>) -> Launch {
+/// nothing about this computer's games. With [`watch`] (the handheld asked
+/// to watch it), the stream is made ready before anything starts, so a
+/// computer that cannot stream starts nothing, and `started` says
+/// `stream: windowcast`.
+pub fn launch(
+    allowed: bool,
+    installed: impl FnOnce() -> bool,
+    game: &GameRef,
+    os: &dyn System,
+    host: Option<&dyn Launcher>,
+    watch: Option<&dyn Watch>,
+) -> Launch {
     if !allowed {
         return Launch::NotAllowed;
     }
+    let ready = || watch.map(|w| w.ready()).transpose();
     let Some(url) = steam_url(&game.key) else {
-        return host.and_then(|h| h.launch(game)).unwrap_or(Launch::UnknownGame);
+        let Some(host) = host else {
+            return Launch::UnknownGame;
+        };
+        let address = match ready() {
+            Ok(address) => address,
+            Err(message) => return Launch::Failed { message },
+        };
+        return match host.launch(game) {
+            Some(Launch::Started { stream, address: theirs }) if watch.is_some() => {
+                Launch::Started { stream: stream.or_else(|| Some("windowcast".into())), address: theirs.or(address.flatten()) }
+            }
+            Some(outcome) => outcome,
+            None => Launch::UnknownGame,
+        };
     };
     if !installed() {
         return Launch::UnknownGame;
     }
     // Steam Link streams from a running Steam; opening the URL with Steam
     // closed would only start the client, and a sign-in could wait behind it.
+    // A windowcast stream needs Steam's game window, so the same holds.
     if !os.steam_running() {
         return Launch::SteamNotRunning;
     }
+    let address = match ready() {
+        Ok(address) => address,
+        Err(message) => return Launch::Failed { message },
+    };
     match os.open(&url) {
-        Ok(()) => Launch::Started { stream: None, address: None },
+        Ok(()) => match address {
+            Some(address) => Launch::Started { stream: Some("windowcast".into()), address },
+            None => Launch::Started { stream: None, address: None },
+        },
         Err(message) => Launch::Failed { message },
     }
 }
@@ -183,7 +224,7 @@ mod tests {
     fn a_handheld_that_is_not_allowed_starts_nothing_and_learns_nothing() {
         let os = fake(true, None);
         for key in ["steam:440", "steam:abc", "title:x"] {
-            assert_eq!(launch(false, || panic!("the scan is not asked"), &game(key), &os, None), Launch::NotAllowed);
+            assert_eq!(launch(false, || panic!("the scan is not asked"), &game(key), &os, None, None), Launch::NotAllowed);
         }
         assert!(os.opened.borrow().is_empty());
     }
@@ -191,30 +232,30 @@ mod tests {
     #[test]
     fn a_key_it_cannot_map_or_a_game_not_installed_is_unknown() {
         let os = fake(true, None);
-        assert_eq!(launch(true, || true, &game("title:doom"), &os, None), Launch::UnknownGame);
-        assert_eq!(launch(true, || true, &game("steam:440; calc"), &os, None), Launch::UnknownGame);
-        assert_eq!(launch(true, || false, &game("steam:440"), &os, None), Launch::UnknownGame);
+        assert_eq!(launch(true, || true, &game("title:doom"), &os, None, None), Launch::UnknownGame);
+        assert_eq!(launch(true, || true, &game("steam:440; calc"), &os, None, None), Launch::UnknownGame);
+        assert_eq!(launch(true, || false, &game("steam:440"), &os, None, None), Launch::UnknownGame);
         assert!(os.opened.borrow().is_empty());
     }
 
     #[test]
     fn nothing_starts_while_steam_is_not_running() {
         let os = fake(false, None);
-        assert_eq!(launch(true, || true, &game("steam:440"), &os, None), Launch::SteamNotRunning);
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, None, None), Launch::SteamNotRunning);
         assert!(os.opened.borrow().is_empty());
     }
 
     #[test]
     fn an_allowed_installed_game_is_handed_to_the_url_handler_once() {
         let os = fake(true, None);
-        assert_eq!(launch(true, || true, &game("steam:440"), &os, None), Launch::Started { stream: None, address: None });
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, None, None), Launch::Started { stream: None, address: None });
         assert_eq!(*os.opened.borrow(), ["steam://rungameid/440"]);
     }
 
     #[test]
     fn a_url_handler_that_fails_is_reported() {
         let os = fake(true, Some("no handler"));
-        assert_eq!(launch(true, || true, &game("steam:440"), &os, None), Launch::Failed { message: "no handler".into() });
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, None, None), Launch::Failed { message: "no handler".into() });
     }
 
     struct Host;
@@ -230,11 +271,11 @@ mod tests {
         let os = fake(true, None);
         let host: &dyn Launcher = &Host;
         assert_eq!(
-            launch(true, || panic!("the scan is not asked"), &game("pythia:tracked"), &os, Some(host)),
+            launch(true, || panic!("the scan is not asked"), &game("pythia:tracked"), &os, Some(host), None),
             Launch::Started { stream: Some("windowcast".into()), address: None }
         );
-        assert_eq!(launch(true, || true, &game("title:doom"), &os, Some(host)), Launch::UnknownGame);
-        assert_eq!(launch(true, || true, &game("steam:440"), &os, Some(host)), Launch::Started { stream: None, address: None });
+        assert_eq!(launch(true, || true, &game("title:doom"), &os, Some(host), None), Launch::UnknownGame);
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, Some(host), None), Launch::Started { stream: None, address: None });
         assert_eq!(*os.opened.borrow(), vec!["steam://rungameid/440".to_string()]);
     }
 
@@ -247,6 +288,68 @@ mod tests {
             }
         }
         let os = fake(true, None);
-        assert_eq!(launch(false, || true, &game("pythia:tracked"), &os, Some(&Never)), Launch::NotAllowed);
+        assert_eq!(launch(false, || true, &game("pythia:tracked"), &os, Some(&Never), None), Launch::NotAllowed);
+    }
+
+    struct Ready(Result<Option<String>, String>);
+
+    impl Watch for Ready {
+        fn ready(&self) -> Result<Option<String>, String> {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn a_watched_steam_game_starts_once_the_stream_is_ready_and_says_windowcast() {
+        let os = fake(true, None);
+        let watch = Ready(Ok(None));
+        assert_eq!(
+            launch(true, || true, &game("steam:440"), &os, None, Some(&watch)),
+            Launch::Started { stream: Some("windowcast".into()), address: None }
+        );
+        assert_eq!(*os.opened.borrow(), ["steam://rungameid/440"]);
+        let named = Ready(Ok(Some("192.168.1.20:47101".into())));
+        assert_eq!(
+            launch(true, || true, &game("steam:440"), &os, None, Some(&named)),
+            Launch::Started { stream: Some("windowcast".into()), address: Some("192.168.1.20:47101".into()) }
+        );
+    }
+
+    #[test]
+    fn a_computer_that_cannot_stream_starts_nothing() {
+        let os = fake(true, None);
+        let cannot = Ready(Err("Windows only".into()));
+        assert_eq!(launch(true, || true, &game("steam:440"), &os, None, Some(&cannot)), Launch::Failed { message: "Windows only".into() });
+        assert!(os.opened.borrow().is_empty());
+        struct Never;
+        impl Launcher for Never {
+            fn launch(&self, _: &GameRef) -> Option<Launch> {
+                panic!("the host is not asked")
+            }
+        }
+        assert_eq!(
+            launch(true, || true, &game("pythia:tracked"), &os, Some(&Never), Some(&cannot)),
+            Launch::Failed { message: "Windows only".into() }
+        );
+    }
+
+    #[test]
+    fn a_watched_game_of_the_hosts_is_streamed_through_windowcast() {
+        struct Plain;
+        impl Launcher for Plain {
+            fn launch(&self, _: &GameRef) -> Option<Launch> {
+                Some(Launch::Started { stream: None, address: None })
+            }
+        }
+        let os = fake(true, None);
+        assert_eq!(
+            launch(true, || true, &game("pythia:tracked"), &os, Some(&Plain), Some(&Ready(Ok(None)))),
+            Launch::Started { stream: Some("windowcast".into()), address: None }
+        );
+        // Not asked to watch, the host's answer is passed on as it is.
+        assert_eq!(
+            launch(true, || true, &game("pythia:tracked"), &os, Some(&Plain), None),
+            Launch::Started { stream: None, address: None }
+        );
     }
 }

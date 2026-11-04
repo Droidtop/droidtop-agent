@@ -13,7 +13,7 @@ use crate::copy::{Copy, CopyFile};
 use crate::keys::PeerId;
 use crate::library::Change;
 use crate::manifest::{self, Manifest};
-use crate::proto::{check_announcements, Announcements, GameRef, Launch, Offer, Request, Response, NOT_OFFERED};
+use crate::proto::{check_announcements, Announcements, GameRef, Launch, Offer, Request, Response, StreamAsk, NOT_OFFERED};
 use crate::saves::{self, Roots, SaveSpec};
 use crate::savesync::{entry_for, keep_copy, receive_file, send_contents};
 use crate::{Error, Result, FEATURES, PROTOCOL_VERSION};
@@ -70,7 +70,8 @@ pub trait Host: Send + Sync {
     /// Starts [`game`] for [`peer`] (hello feature `launch`). A computer that
     /// cannot start games says so; the agent starts Steam games only, and
     /// only for a handheld the person allowed (docs/DESIGN.md section 17).
-    fn launch_game(&self, _peer: &PeerId, _game: &GameRef) -> Launch {
+    /// With [`stream`], the handheld also asks to watch it (section 22).
+    fn launch_game(&self, _peer: &PeerId, _game: &GameRef, _stream: Option<&StreamAsk>) -> Launch {
         Launch::Failed { message: "this computer cannot start games".into() }
     }
     fn library_pull(&self, peer: &PeerId, since: u64) -> Result<(Vec<Change>, u64)>;
@@ -254,7 +255,7 @@ fn session<S: Read + Write>(
                 }),
                 _ => Err(Error::Protocol("no game folder is being sent".into())),
             },
-            Request::LaunchGame { game } => Ok(Response::Launch { outcome: host.launch_game(&peer, &game) }),
+            Request::LaunchGame { game, stream } => Ok(Response::Launch { outcome: host.launch_game(&peer, &game, stream.as_ref()) }),
             Request::Announce { values } => match check_announcements(&values) {
                 Ok(()) => host.announce(&peer, values).map(|values| Response::Announced { values }),
                 Err(why) => Err(Error::Protocol(why)),

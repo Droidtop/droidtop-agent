@@ -23,8 +23,14 @@ step with [droidtop](https://github.com/Droidtop/droidtop) on a handheld:
   <context>` installs it, checked against the digest the plugin names.
   `droidtop-agent contexts add <program>` adds one by hand.
 
-It does not stream your screen or control the computer remotely: that is
-[windowcast](https://github.com/Droidtop/windowcast)'s job. It never needs
+- **Streaming a game.** On Windows, when the handheld asks to play a game
+  on this computer and watch it, the agent starts the game and streams
+  its window, with its sound and gamepads, through the
+  [windowcast](https://github.com/Droidtop/windowcast) library it embeds.
+  The handheld must be allowed to start games here (Settings, Offered,
+  Starting games here). Gamepads need the ViGEmBus driver.
+
+It holds no streaming code of its own: that is windowcast's job. It never needs
 Tailscale or any other VPN. On your own network the two devices talk
 directly. Away from it, they can use a direct WireGuard tunnel, or a folder
 that your own sync tool already carries to both devices.

@@ -6,6 +6,14 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Streaming a game to the handheld (Droidtop/tracker#860, docs/DESIGN.md
+  section 22): on Windows the agent embeds windowcast's host. When a
+  handheld that may start games here asks to play a game and watch it, the
+  agent trusts that handheld's windowcast viewer (no PIN: the pairing with
+  the agent is enough), starts windowcast's host on port 47100 if it is not
+  running yet, then starts the game; the handheld opens the game's window
+  with its sound, and its gamepads drive the game (ViGEmBus needed). The
+  hello states `stream`. Pythia streams the same way, through the agent.
 - A handheld reaching the computer through WireGuard can make a second
   call right after the first: copying a newer version of a game straight
   after the library sync showed it no longer fails with "the computer did

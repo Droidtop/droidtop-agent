@@ -24,7 +24,7 @@ use droidtop_agent_core::keys::{DeviceKey, PeerId};
 use droidtop_agent_core::library::{Change, Cursor, Library, Marks, ScannedGame};
 use droidtop_agent_core::mailbox::{self, Envelope};
 use droidtop_agent_core::pairing::{self, Kind, PairInvite, Paired, PairingEnded};
-use droidtop_agent_core::proto::{check_announcements, Announcements, GameRef, Request, Response};
+use droidtop_agent_core::proto::{check_announcements, Announcements, GameRef, Request, Response, StreamAsk};
 use droidtop_agent_core::saves::{prefix_roots, Roots};
 use droidtop_agent_core::savesync::{self, SaveSyncRequest, Side};
 use droidtop_agent_core::{hex, Error, PAIR_PORT, PORT};
@@ -689,19 +689,29 @@ fn game_push(args: &Value) -> Outcome {
 /// `failed` (and a `message`) or
 /// `agent_too_old`, for an agent that does not state the `launch` feature: it
 /// is not sent a request it cannot read.
+///
+/// With `stream` (`{"via": "windowcast", "viewer": <hex>}`) droidtop also
+/// asks to watch the game (section 22): `started` then carries `stream:
+/// windowcast`. An agent that does not state the `stream` feature (too old,
+/// or a computer whose agent hosts no stream, such as a Mac) is not asked to
+/// start anything and the reply is `cannot_stream`.
 fn launch_game(args: &Value) -> Outcome {
     let key = key_of(args)?;
     let game: GameRef = serde_json::from_value(args["game"].clone())?;
+    let stream: Option<StreamAsk> = if args["stream"].is_null() { None } else { Some(serde_json::from_value(args["stream"].clone())?) };
     let mut s = connect(&key, args)?;
-    let outcome = if s.features.iter().any(|f| f == "launch") {
-        s.ch.send_json(&Request::LaunchGame { game })?;
+    let has = |feature: &str| s.features.iter().any(|f| f == feature);
+    let outcome = if !has("launch") {
+        json!({ "result": "agent_too_old" })
+    } else if stream.is_some() && !has("stream") {
+        json!({ "result": "cannot_stream" })
+    } else {
+        s.ch.send_json(&Request::LaunchGame { game, stream })?;
         match s.ch.recv_json::<Response>()? {
             Response::Launch { outcome } => serde_json::to_value(outcome)?,
             Response::Error { message, .. } => return Err(Failure::Error(message)),
             other => return Err(Failure::Error(format!("the computer answered {other:?}"))),
         }
-    } else {
-        json!({ "result": "agent_too_old" })
     };
     let v = located(outcome, &s);
     bye(s);
@@ -1040,7 +1050,12 @@ mod tests {
         fn saves(&self, _game: &GameRef) -> Option<(droidtop_agent_core::saves::SaveSpec, Roots)> {
             None
         }
-        fn launch_game(&self, _peer: &PeerId, game: &GameRef) -> droidtop_agent_core::proto::Launch {
+        fn launch_game(
+            &self,
+            _peer: &PeerId,
+            game: &GameRef,
+            _stream: Option<&droidtop_agent_core::proto::StreamAsk>,
+        ) -> droidtop_agent_core::proto::Launch {
             use droidtop_agent_core::proto::Launch;
             match game.key.as_str() {
                 "steam:440" => Launch::Started { stream: None, address: None },
@@ -1159,13 +1174,13 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let at = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
-            for _ in 0..2 {
+            for _ in 0..3 {
                 let (s, _) = listener.accept().unwrap();
                 let mut ch = Channel::accept(s, &pc, |p| *p == hh_id).unwrap();
                 droidtop_agent_core::server::serve(&mut ch, host).unwrap();
             }
         });
-        let ask = |key: &str| -> Value {
+        let ask = |key: &str, stream: Value| -> Value {
             serde_json::from_str(&call(
                 "launch_game",
                 &json!({
@@ -1173,15 +1188,19 @@ mod tests {
                     "peer": pc_id.to_hex(),
                     "addresses": [at.to_string()],
                     "game": { "key": key, "title": "Game" },
+                    "stream": stream,
                 })
                 .to_string(),
             ))
             .unwrap()
         };
-        let started = ask("steam:440");
+        let started = ask("steam:440", Value::Null);
         assert_eq!(started["result"], "started", "{started}");
         assert_eq!(started["computer"], "Away PC");
-        assert_eq!(ask("steam:1")["result"], "not_allowed");
+        assert_eq!(ask("steam:1", Value::Null)["result"], "not_allowed");
+        // This computer states no `stream`: asked to watch, it is not asked to start anything.
+        let watch = json!({ "via": "windowcast", "viewer": "ab".repeat(32) });
+        assert_eq!(ask("steam:440", watch)["result"], "cannot_stream");
         server.join().unwrap();
     }
 

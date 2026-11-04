@@ -148,9 +148,14 @@ pub enum Request {
     },
     /// Start [`game`] on the computer (hello feature `launch`). The computer
     /// builds what it runs from the key itself and never executes text from
-    /// the handheld; it answers [`Response::Launch`].
+    /// the handheld; it answers [`Response::Launch`]. With [`stream`] (hello
+    /// feature `stream`) the handheld also asks to watch it: the computer
+    /// streams the game's window to it (docs/DESIGN.md section 22). An agent
+    /// that does not know the field starts the game and answers as before.
     LaunchGame {
         game: GameRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stream: Option<StreamAsk>,
     },
     /// This device's announcements, all of them, in place of those it sent
     /// before (hello feature `announce`); the other answers
@@ -159,6 +164,18 @@ pub enum Request {
         values: Announcements,
     },
     Bye,
+}
+
+/// How a handheld asks to watch the game it starts (docs/DESIGN.md section
+/// 22): through which library, and as which viewer.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct StreamAsk {
+    /// The streaming library: `"windowcast"`, the only one.
+    pub via: String,
+    /// The handheld's windowcast client identity, 64 hex digits. The
+    /// computer's windowcast host trusts it while the handheld stays paired,
+    /// so the agent's pairing is also the stream's and no PIN is asked.
+    pub viewer: String,
 }
 
 /// What the computer did with a [`Request::LaunchGame`].
@@ -312,8 +329,24 @@ mod tests {
     /// The shapes on the wire: a handheld and an agent built apart agree on them.
     #[test]
     fn a_launch_request_and_its_answers_have_a_fixed_shape() {
-        let ask = Request::LaunchGame { game: GameRef { key: "steam:440".into(), title: "TF2".into() } };
+        let ask = Request::LaunchGame { game: GameRef { key: "steam:440".into(), title: "TF2".into() }, stream: None };
         assert_eq!(serde_json::to_string(&ask).unwrap(), r#"{"t":"launch_game","game":{"key":"steam:440","title":"TF2"}}"#);
+        let watch = Request::LaunchGame {
+            game: GameRef { key: "steam:440".into(), title: "TF2".into() },
+            stream: Some(StreamAsk { via: "windowcast".into(), viewer: "ab".repeat(32) }),
+        };
+        let json = serde_json::to_string(&watch).unwrap();
+        assert_eq!(
+            json,
+            format!(
+                r#"{{"t":"launch_game","game":{{"key":"steam:440","title":"TF2"}},"stream":{{"via":"windowcast","viewer":"{}"}}}}"#,
+                "ab".repeat(32)
+            )
+        );
+        match serde_json::from_str::<Request>(&json).unwrap() {
+            Request::LaunchGame { stream: Some(s), .. } => assert_eq!(s.via, "windowcast"),
+            other => panic!("{other:?}"),
+        }
         for (launch, json) in [
             (Launch::Started { stream: None, address: None }, r#"{"t":"launch","outcome":{"result":"started"}}"#),
             (

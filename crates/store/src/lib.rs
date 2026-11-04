@@ -248,6 +248,11 @@ pub struct Device {
     pub announced: Announcements,
     #[serde(default)]
     pub announced_ms: i64,
+    /// Its windowcast viewer's identity (hex), pinned in the trusted list
+    /// windowcast's host reads when it asked to watch a game it started
+    /// here (docs/DESIGN.md section 22), and unpinned with the device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewer: Option<String>,
 }
 
 /// Moves the agent onto the identity and trusted list it shares with
@@ -568,6 +573,7 @@ impl Store {
                 kind: Some(kind),
                 announced: Announcements::new(),
                 announced_ms: 0,
+                viewer: None,
             });
             ((), true)
         });
@@ -601,9 +607,49 @@ impl Store {
         self.save_settings().map_err(|e| e.to_string())
     }
 
-    /// Forgets a device: unpinned, so it can no longer connect.
+    /// Pins [`viewer`], paired device [`peer`]'s windowcast viewer, in the
+    /// trusted list windowcast's host reads, so the handheld watches what it
+    /// started here without a PIN (docs/DESIGN.md section 22). A viewer it
+    /// had before is unpinned: one viewer per device. Only a device in the
+    /// device list gets one.
+    pub fn set_viewer(&self, peer: &PeerId, viewer: &PeerId) -> io::Result<()> {
+        let hex = viewer.to_hex();
+        let before = self.edit_devices(|devices| {
+            // Never a device's own id, another viewer's, or this computer's:
+            // replacing it later would unpin what it named.
+            let taken = *viewer == self.peer_id()
+                || devices.iter().any(|d| d.id == hex || (d.id != peer.to_hex() && d.viewer.as_deref() == Some(hex.as_str())));
+            if taken {
+                return (Err(io::Error::other("that viewer is another device's identity")), false);
+            }
+            match devices.iter_mut().find(|d| d.id == peer.to_hex()) {
+                Some(d) if d.viewer.as_deref() == Some(hex.as_str()) => (Ok(None), false),
+                Some(d) => (Ok(d.viewer.replace(hex.clone())), true),
+                None => (Err(io::Error::other("only a paired device can watch a game here")), false),
+            }
+        })?;
+        TrustStore::update(&self.dirs.trust(), |t| {
+            if let Some(old) = before.as_deref().and_then(|o| PeerId::from_hex(o).ok()) {
+                t.revoke(&old);
+            }
+            t.pin(*viewer);
+        })
+        .map_err(|e| io::Error::other(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Forgets a device: unpinned, so it can no longer connect, and its
+    /// windowcast viewer with it.
     pub fn remove_device(&self, peer: &PeerId) -> io::Result<()> {
-        TrustStore::update(&self.dirs.trust(), |t| t.revoke(peer)).map_err(|e| io::Error::other(e.to_string()))?;
+        let viewer =
+            self.devices_now().into_iter().find(|d| d.id == peer.to_hex()).and_then(|d| d.viewer).and_then(|v| PeerId::from_hex(&v).ok());
+        TrustStore::update(&self.dirs.trust(), |t| {
+            t.revoke(peer);
+            if let Some(v) = &viewer {
+                t.revoke(v);
+            }
+        })
+        .map_err(|e| io::Error::other(e.to_string()))?;
         self.edit_devices(|devices| {
             devices.retain(|d| d.id != peer.to_hex());
             ((), true)
@@ -756,6 +802,34 @@ mod tests {
 
     /// A handheld the trusted list holds but the device list lost comes back,
     /// named as the library knows it, when it next reaches the computer.
+    #[test]
+    fn a_handhelds_viewer_is_trusted_while_it_stays_paired() {
+        let d = dirs("viewer");
+        let agent = Store::open_in(d.clone()).unwrap();
+        let handheld = DeviceKey::generate().peer_id();
+        let (first, second) = (DeviceKey::generate().peer_id(), DeviceKey::generate().peer_id());
+        // Only a paired device names a viewer.
+        assert!(agent.set_viewer(&handheld, &first).is_err());
+        assert!(!TrustStore::load(&d.trust()).unwrap().is_pinned(&first));
+        agent.add_device(handheld, "Pocket", Kind::Handheld).unwrap();
+        agent.set_viewer(&handheld, &first).unwrap();
+        assert!(TrustStore::load(&d.trust()).unwrap().is_pinned(&first));
+        // Not another device's identity, nor this computer's.
+        let other = DeviceKey::generate().peer_id();
+        agent.add_device(other, "Other", Kind::Handheld).unwrap();
+        assert!(agent.set_viewer(&handheld, &other).is_err());
+        assert!(agent.set_viewer(&handheld, &handheld).is_err());
+        assert!(agent.set_viewer(&handheld, &agent.peer_id()).is_err());
+        // A new viewer takes the old one's place.
+        agent.set_viewer(&handheld, &second).unwrap();
+        let trust = TrustStore::load(&d.trust()).unwrap();
+        assert!(trust.is_pinned(&second) && !trust.is_pinned(&first) && trust.is_pinned(&handheld));
+        // Unpaired, both go.
+        agent.remove_device(&handheld).unwrap();
+        let trust = TrustStore::load(&d.trust()).unwrap();
+        assert!(!trust.is_pinned(&second) && !trust.is_pinned(&handheld));
+    }
+
     #[test]
     fn a_trusted_handheld_missing_from_the_device_list_is_put_back() {
         let d = dirs("lost");

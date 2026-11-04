@@ -233,7 +233,7 @@ impl Agent {
             s.bye();
             return Err("That device does not start games for others.".into());
         }
-        s.ch.send_json(&Request::LaunchGame { game: game.clone() }).map_err(|e| e.to_string())?;
+        s.ch.send_json(&Request::LaunchGame { game: game.clone(), stream: None }).map_err(|e| e.to_string())?;
         let outcome = match s.ch.recv_json::<Response>().map_err(|e| e.to_string())? {
             Response::Launch { outcome } => outcome,
             Response::Error { message, code } if code.as_deref() == Some(NOT_OFFERED) => return Err(message),

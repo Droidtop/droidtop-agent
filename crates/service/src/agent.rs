@@ -41,6 +41,9 @@ pub struct Agent {
     /// The program hosting the agent, when it starts games of its own
     /// (crate::launch::Launcher): Pythia, for the games it tracks.
     pub launcher: Mutex<Option<std::sync::Arc<dyn crate::launch::Launcher>>>,
+    /// windowcast's host, started the first time a handheld asks to watch a
+    /// game it starts here (docs/DESIGN.md section 22).
+    pub streamer: droidtop_agent_stream::Streamer,
     /// Ends the recurring work and the listener ([`Agent::shutdown`]).
     pub stop: crate::periodic::Stop,
 }
@@ -59,6 +62,7 @@ impl Agent {
             rendezvous: Default::default(),
             events: Events::default(),
             launcher: Mutex::new(None),
+            streamer: droidtop_agent_stream::Streamer::new(),
             stop: crate::periodic::Stop::new(store.changes.clone()),
             store,
         })
