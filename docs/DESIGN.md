@@ -240,7 +240,15 @@ the handheld, since droidtop runs this core through `AgentNative`.
   between two identities presents the one asked for.
 - The side that accepts reads the connecting device's key from its
   certificate, after TLS has checked the handshake signature with it, and
-  refuses the session unless that device is pinned.
+  refuses the session unless that device is pinned. Refusing, it first
+  sends one `error` with `code: not_paired` through the finished channel,
+  then closes (Droidtop/tracker#531: a forgotten handheld was told the
+  computer "did not answer"). Only the device the connecting side asked for
+  can send it, since that side checked its certificate first, so the
+  connecting side stops there (`ConnectError::NotPaired`) instead of trying
+  other paths, and droidtop's library answers `{"error", "code":
+  "not_paired"}` asking to pair again. Through WireGuard (section 10) a
+  forgotten key gets no tunnel at all and still reads as unreachable.
 - An application message is a 4-byte big-endian length followed by its
   bytes, at most 64 MiB.
 - Application messages are JSON objects (`serde`, internally tagged by `t`).

@@ -1,7 +1,9 @@
 //! The operations droidtop calls, JSON in and JSON out, so the Kotlin side
 //! needs no types of its own beyond reading the replies. A failure comes back
 //! as `{"error": "..."}` in words the screens can show; a computer that
-//! could not be reached as `{"unreachable": "..."}`.
+//! could not be reached as `{"unreachable": "..."}`; a computer that answered
+//! as itself and no longer knows this device as `{"error": "...", "code":
+//! "not_paired"}` (Droidtop/tracker#531).
 
 use droidtop_agent_core::sync::LockExt;
 use std::io::{Read, Write};
@@ -75,12 +77,15 @@ pub fn call(op: &str, args: &str) -> String {
         Ok(v) => v.to_string(),
         Err(Failure::Error(m)) => error(&m),
         Err(Failure::Unreachable(m)) => json!({ "unreachable": m }).to_string(),
+        Err(Failure::NotPaired(m)) => json!({ "error": m, "code": droidtop_agent_core::proto::NOT_PAIRED }).to_string(),
     }
 }
 
 enum Failure {
     Error(String),
     Unreachable(String),
+    /// The computer answered as itself and said it no longer knows this device.
+    NotPaired(String),
 }
 
 impl From<Error> for Failure {
@@ -317,6 +322,9 @@ fn connect(key: &DeviceKey, args: &Value) -> Result<Session, Failure> {
     };
     client::connect(key, &target).map_err(|e| match e {
         ConnectError::Unreachable(m) => Failure::Unreachable(m),
+        ConnectError::NotPaired => Failure::NotPaired(
+            "it no longer knows this device (it was unpaired there): pair it again in Settings, Computers, Pair a computer".into(),
+        ),
         ConnectError::Failed(e) => Failure::Error(e.to_string()),
     })
 }
@@ -1269,6 +1277,30 @@ mod tests {
         assert!(big["error"].as_str().unwrap().contains("4096"), "{big}");
         call("serve_stop", "{}");
         let _ = std::fs::remove_file(&state);
+    }
+
+    #[test]
+    fn a_computer_that_forgot_this_device_says_so() {
+        let handheld: Value = serde_json::from_str(&call("identity_new", "{}")).unwrap();
+        let pc = DeviceKey::generate();
+        let pc_id = pc.peer_id();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            // It trusts nobody: this handheld was unpaired there.
+            assert!(Channel::accept(s, &pc, |_| false).is_err());
+        });
+        let out: Value = serde_json::from_str(&call(
+            "launch_game",
+            &json!({ "seed": handheld["seed"], "peer": pc_id.to_hex(), "addresses": [at.to_string()], "game": { "key": "steam:440", "title": "Game" } })
+                .to_string(),
+        ))
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(out["code"], "not_paired", "{out}");
+        assert!(out["error"].as_str().unwrap().contains("pair it again"), "{out}");
+        assert!(out.get("unreachable").is_none(), "{out}");
     }
 
     #[test]

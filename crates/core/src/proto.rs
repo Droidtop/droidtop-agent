@@ -229,6 +229,12 @@ impl Offer {
 /// offer to the one that asked.
 pub const NOT_OFFERED: &str = "not_offered";
 
+/// The [`Response::Error`] `code` a device sends, right after the handshake
+/// and in place of any answer, to a device it does not trust: it no longer
+/// knows it (Droidtop/tracker#531). Only the device the other side asked
+/// for can send it, since its certificate was checked first.
+pub const NOT_PAIRED: &str = "not_paired";
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Response {

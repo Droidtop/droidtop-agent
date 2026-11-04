@@ -76,6 +76,7 @@ pub struct Accepted {
 fn refusal(e: ConnectError) -> String {
     match e {
         ConnectError::Unreachable(m) => format!("It could not be reached: {m}."),
+        ConnectError::NotPaired => "It no longer knows this computer (it was unpaired there): pair the two again.".into(),
         ConnectError::Failed(e) => e.to_string(),
     }
 }

@@ -77,6 +77,18 @@ impl<S: Read + Write> Channel<S> {
             _ => return Err(Error::NotPaired),
         };
         if !trusted(&peer) {
+            // Say so in words a program can act on before closing, so the
+            // device learns it was forgotten here rather than that nothing
+            // answered (Droidtop/tracker#531).
+            let mut refused = Channel { tls: Tls::Server(StreamOwned::new(conn, stream)), peer };
+            let _ = refused.send_json(&crate::proto::Response::Error {
+                message: "this device does not know you any more: pair the two again".into(),
+                code: Some(crate::proto::NOT_PAIRED.into()),
+            });
+            if let Tls::Server(s) = &mut refused.tls {
+                s.conn.send_close_notify();
+                let _ = s.conn.complete_io(&mut s.sock);
+            }
             return Err(Error::NotPaired);
         }
         let index = cert::named_index(keys, conn.server_name());
@@ -194,7 +206,12 @@ mod tests {
             Channel::accept(s, &server, |_| false).err()
         });
         let stranger = DeviceKey::generate();
-        let _ = Channel::connect(TcpStream::connect(addr).unwrap(), &stranger, &server_id);
+        let mut ch = Channel::connect(TcpStream::connect(addr).unwrap(), &stranger, &server_id).unwrap();
+        // It hears why, from the device it asked for.
+        match ch.recv_json::<crate::proto::Response>().unwrap() {
+            crate::proto::Response::Error { code, .. } => assert_eq!(code.as_deref(), Some(crate::proto::NOT_PAIRED)),
+            other => panic!("{other:?}"),
+        }
         assert!(matches!(handle.join().unwrap(), Some(Error::NotPaired)));
     }
 

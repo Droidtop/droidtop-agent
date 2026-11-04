@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::channel::Channel;
 use crate::discovery;
 use crate::keys::{DeviceKey, PeerId};
-use crate::proto::{Request, Response};
+use crate::proto::{Request, Response, NOT_PAIRED};
 use crate::tunnel::{self, TunnelStream};
 use crate::{rendezvous, Error, FEATURES, PORT, PROTOCOL_VERSION};
 
@@ -102,11 +102,15 @@ impl Session {
     }
 }
 
-/// Why a device could not be reached: it did not answer by any path, or it
-/// answered and something failed.
+/// Why a device could not be reached: it did not answer by any path, it
+/// answered as itself and said it no longer knows this device ([`NotPaired`],
+/// Droidtop/tracker#531), or it answered and something failed.
+///
+/// [`NotPaired`]: ConnectError::NotPaired
 #[derive(Debug)]
 pub enum ConnectError {
     Unreachable(String),
+    NotPaired,
     Failed(Error),
 }
 
@@ -120,6 +124,7 @@ impl std::fmt::Display for ConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConnectError::Unreachable(m) => f.write_str(m),
+            ConnectError::NotPaired => f.write_str("it no longer knows this device (it was unpaired there): pair the two again"),
             ConnectError::Failed(e) => write!(f, "{e}"),
         }
     }
@@ -164,6 +169,8 @@ fn hello(mut ch: Channel<Link>, address: String, path: Path, key: &DeviceKey, na
     ch.send_json(&Request::Hello { name: name.to_string(), version: PROTOCOL_VERSION, features, disco })?;
     let (name, endpoints, disco, moved, features) = match ch.recv_json::<Response>()? {
         Response::Hello { name, endpoints, disco, moved_to, features, .. } => (name, endpoints, disco, moved_to, features),
+        // The device it asked for (its certificate was checked) forgot it.
+        Response::Error { code: Some(code), .. } if code == NOT_PAIRED => return Err(ConnectError::NotPaired),
         _ => (String::new(), Vec::new(), None, None, Vec::new()),
     };
     // Only a move both keys signed, from the identity this session reached.

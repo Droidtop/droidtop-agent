@@ -6,6 +6,11 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A device this computer no longer knows (it was unpaired here) is told so
+  as the connection opens, with `code: not_paired`, so the handheld says to
+  pair again instead of that the computer did not answer
+  (Droidtop/tracker#531). On the home network only: through WireGuard a
+  forgotten device still gets no answer.
 - Streaming a game to the handheld (Droidtop/tracker#860, docs/DESIGN.md
   section 22): on Windows the agent embeds windowcast's host. When a
   handheld that may start games here asks to play a game and watch it, the
