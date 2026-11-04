@@ -169,6 +169,10 @@ fn send_library(agent: &Agent, share: &std::path::Path) -> Result<(), String> {
             let pushed = lib.cursors.get(&id).map(|c| c.pushed).unwrap_or(0);
             lib.changes_since(pushed)
         };
+        // Whoever opens a letter may run an older library that cannot read a
+        // link (crate::library::LINK_FEATURE), and a letter has no hello to
+        // say so: links travel only in live sessions.
+        let changes: Vec<_> = changes.into_iter().filter(droidtop_agent_core::library::Change::readable_without_links).collect();
         if changes.is_empty() {
             continue;
         }

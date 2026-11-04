@@ -1154,7 +1154,27 @@ identity, pairing, channel, transports, library, saves and scanner.
   recorded on Droidtop/tracker#461, in this order:
   1. cross-store identity: Pythia's opaque game id, its `platform_ids`
      aliases and the merges a person confirmed, as a library change kind in
-     core (both ends keep the same identity model), behind a hello feature;
+     core (both ends keep the same identity model), behind a hello feature.
+     **First slice built (Droidtop/tracker#798):** `Change::Link {game,
+     into, at}` says key `game` is the same game as key `into` (`None`
+     undoes it; one per key, newest wins; a key is never linked to itself).
+     `Library::link` makes one and `Library::canonical` follows links to the
+     key a game is known by; a chain that loops (two devices linking each
+     other's way at once) ends at the smallest key on the loop, so every
+     device answers the same. Hello feature `identity`
+     (`library::LINK_FEATURE`): the server remembers what the device's hello
+     stated and leaves links out of a `library_pull` for one that did not;
+     droidtop's library leaves them out of a push to a computer that did
+     not; and the cloud folder's letters never carry them, since a letter
+     has no hello. Pythia writes them through `droidtop_agent.store.link(game,
+     into=None)` and reads `canonical(key)` and each record's `link`.
+     A link comes only from a person's confirmation or a store's evidence,
+     never from similar names (droidtop SPEC, "What merges, and what only
+     suggests"). This is the shape #863 asks of one library across a
+     person's devices: every device resolves a game to the same key. Next:
+     Pythia's `reconciliation.merge()` and its `platform_ids` write links,
+     then its opaque id as a `pythia:<id>` key, then droidtop reading
+     `canonical`;
   2. ownership of store games that are not installed (owner, 2026-10-14),
      another library fact, written by Pythia's account sync through `store`;
   3. reconciliation's duplicate search (Pythia's difflib pass over every
@@ -1164,8 +1184,10 @@ identity, pairing, channel, transports, library, saves and scanner.
      stays Pythia's (it needs the network; the scanner reads files only);
   5. credentials encrypted at rest on each device and carried inside the
      channel (owner, 2026-10-14), a protocol change.
-- **Later:** a small record of which program serves, so the other can name
-  it ("Pythia serves this computer").
+- **Not built yet** (owner, 2026-10-29: "Stop marking things as 'later'"):
+  a small record of which program serves, so the other can name it
+  ("Pythia serves this computer"). Today only the refusal says so
+  (`crates/python/src/service.rs`).
 
 ## 17. Starting a game for a handheld
 

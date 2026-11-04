@@ -82,12 +82,29 @@ pub enum Change {
         value: Value,
         at: Hlc,
     },
+    /// Cross-store identity (docs/DESIGN.md section 16, step 1;
+    /// Droidtop/tracker#798): the game known by key [`game`] is the same game
+    /// as key [`into`] (a person confirmed it, or a store said so); `None`
+    /// undoes it. One per key, the newest wins. Sent only to a device that
+    /// states hello feature [`LINK_FEATURE`]: an older one cannot read it.
+    Link {
+        game: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        into: Option<String>,
+        at: Hlc,
+    },
 }
+
+/// The hello feature a device states when it reads [`Change::Link`].
+pub const LINK_FEATURE: &str = "identity";
+
+/// How many links [`Library::canonical`] follows before it stops.
+const LINK_DEPTH: usize = 16;
 
 impl Change {
     fn at(&self) -> Hlc {
         match self {
-            Change::Install { at, .. } | Change::Mark { at, .. } => *at,
+            Change::Install { at, .. } | Change::Mark { at, .. } | Change::Link { at, .. } => *at,
         }
     }
 
@@ -95,8 +112,22 @@ impl Change {
         match self {
             Change::Install { game, device, .. } => format!("i\u{0}{game}\u{0}{device}"),
             Change::Mark { game, field, .. } => format!("m\u{0}{game}\u{0}{field}"),
+            Change::Link { game, .. } => format!("l\u{0}{game}"),
         }
     }
+
+    /// Whether a device that does not state [`LINK_FEATURE`] can read it.
+    pub fn readable_without_links(&self) -> bool {
+        !matches!(self, Change::Link { .. })
+    }
+}
+
+/// Which key a game's key is the same game as, and when that was said.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct LinkValue {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub into: Option<String>,
+    pub at: Hlc,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -142,6 +173,10 @@ pub struct GameRecord {
     /// between them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub versions: Vec<VersionSeen>,
+    /// The same game as another key ([`Change::Link`]); its `into` is `None`
+    /// once undone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<LinkValue>,
     #[serde(skip)]
     title_at: Hlc,
 }
@@ -263,6 +298,16 @@ impl Library {
                 }
                 newer
             }
+            // A key is never the same game as itself.
+            Change::Link { game, into, .. } if into.as_deref() == Some(game.as_str()) => false,
+            Change::Link { game, into, at } => {
+                let record = self.games.entry(game.clone()).or_default();
+                let newer = record.link.as_ref().is_none_or(|l| *at > l.at);
+                if newer {
+                    record.link = Some(LinkValue { into: into.clone(), at: *at });
+                }
+                newer
+            }
         };
         if changed {
             self.seq += 1;
@@ -334,6 +379,37 @@ impl Library {
             }
         }
         count
+    }
+
+    /// Says on [`device`] that key [`game`] is the same game as key [`into`]
+    /// (`None` undoes it). True when it changed something.
+    pub fn link(&mut self, device: &PeerId, game: &str, into: Option<&str>) -> bool {
+        let current = self.games.get(game).and_then(|r| r.link.as_ref()).and_then(|l| l.into.as_deref());
+        if current == into || into == Some(game) {
+            return false;
+        }
+        let at = self.tick(device_tag(device));
+        self.apply(Change::Link { game: game.to_string(), into: into.map(str::to_string), at })
+    }
+
+    /// The key [`key`]'s game is known by: its links followed to the end.
+    /// A chain that comes back on itself (two devices linking each other's
+    /// way at once) ends at the smallest key on the loop, so every device
+    /// answers the same.
+    pub fn canonical(&self, key: &str) -> String {
+        let mut seen = vec![key.to_string()];
+        let mut at = key;
+        for _ in 0..LINK_DEPTH {
+            let Some(next) = self.games.get(at).and_then(|r| r.link.as_ref()).and_then(|l| l.into.as_deref()) else {
+                return at.to_string();
+            };
+            if let Some(start) = seen.iter().position(|k| k == next) {
+                return seen[start..].iter().min().cloned().unwrap_or_else(|| next.to_string());
+            }
+            seen.push(next.to_string());
+            at = next;
+        }
+        at.to_string()
     }
 
     /// Sets one of the person's marks on a game, made on [`device`].
@@ -458,6 +534,48 @@ mod tests {
             assert!(!a.apply(c));
         }
         assert_eq!(a.seq(), seq);
+    }
+
+    #[test]
+    fn a_link_converges_and_the_newest_wins() {
+        let pc = DeviceKey::generate().peer_id();
+        let hh = DeviceKey::generate().peer_id();
+        let mut a = Library::default();
+        let mut b = Library::default();
+        assert!(a.link(&pc, "gog:9", Some("steam:1")));
+        // The same again changes nothing, nor does a key linked to itself.
+        assert!(!a.link(&pc, "gog:9", Some("steam:1")));
+        assert!(!a.link(&pc, "steam:1", Some("steam:1")));
+        for c in a.changes_since(0).0 {
+            b.apply(c);
+        }
+        assert_eq!(b.canonical("gog:9"), "steam:1");
+        // Undone later on the handheld: that reaches the computer too.
+        assert!(b.link(&hh, "gog:9", None));
+        for c in b.changes_since(0).0 {
+            a.apply(c);
+        }
+        assert_eq!(a.canonical("gog:9"), "gog:9");
+        assert_eq!(a.games["gog:9"].link, b.games["gog:9"].link);
+        // On the wire: kind `link`, and `into` left out once undone.
+        let undone = b.changes_since(0).0.into_iter().find(|c| matches!(c, Change::Link { .. })).unwrap();
+        let json = serde_json::to_value(&undone).unwrap();
+        assert_eq!((json["kind"].as_str(), json.get("into")), (Some("link"), None));
+        assert!(!undone.readable_without_links());
+    }
+
+    #[test]
+    fn canonical_follows_chains_and_ends_a_loop_at_its_smallest_key() {
+        let pc = DeviceKey::generate().peer_id();
+        let mut lib = Library::default();
+        lib.link(&pc, "epic:abc", Some("gog:9"));
+        lib.link(&pc, "gog:9", Some("steam:1"));
+        assert_eq!(lib.canonical("epic:abc"), "steam:1");
+        assert_eq!(lib.canonical("unknown:key"), "unknown:key");
+        // Two devices linked each other's way: everyone lands on the same key.
+        lib.link(&pc, "steam:1", Some("epic:abc"));
+        let ends: Vec<String> = ["epic:abc", "gog:9", "steam:1"].iter().map(|k| lib.canonical(k)).collect();
+        assert!(ends.iter().all(|e| e == "epic:abc"), "{ends:?}");
     }
 
     #[test]

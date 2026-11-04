@@ -134,6 +134,9 @@ fn session<S: Read + Write>(
     let mut specs: HashMap<GameRef, Option<(SaveSpec, Roots)>> = HashMap::new();
     let mut known: HashMap<GameRef, Manifest> = HashMap::new();
     let mut incoming: Option<(GameRef, crate::gamecopy::Incoming)> = None;
+    // What the device said it reads, in its hello: a library change kind it
+    // does not know is never sent to it (crate::library::LINK_FEATURE).
+    let mut reads_links = false;
     loop {
         let request: Request = match ch.recv_json() {
             Ok(r) => r,
@@ -154,7 +157,8 @@ fn session<S: Read + Write>(
         let mut spec_of = |game: &GameRef| specs.entry(game.clone()).or_insert_with(|| host.saves(game)).clone();
         let reply = match request {
             Request::Bye => return Ok(()),
-            Request::Hello { disco, .. } => {
+            Request::Hello { disco, features: theirs, .. } => {
+                reads_links = theirs.iter().any(|f| f == crate::library::LINK_FEATURE);
                 host.hello(&peer, disco.as_deref());
                 Ok(Response::Hello {
                     name: host.name(),
@@ -165,9 +169,12 @@ fn session<S: Read + Write>(
                     moved_to: moved.clone(),
                 })
             }
-            Request::LibraryPull { since } => {
-                host.library_pull(&peer, since).map(|(changes, cursor)| Response::LibraryChanges { changes, cursor })
-            }
+            Request::LibraryPull { since } => host.library_pull(&peer, since).map(|(mut changes, cursor)| {
+                if !reads_links {
+                    changes.retain(Change::readable_without_links);
+                }
+                Response::LibraryChanges { changes, cursor }
+            }),
             Request::LibraryPush { changes } => host.library_push(&peer, changes).map(|()| Response::Ok),
             Request::SaveSpec { game } => Ok(Response::SaveSpec { spec: spec_of(&game).map(|(s, _)| s) }),
             Request::SaveManifest { game } => match spec_of(&game) {

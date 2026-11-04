@@ -191,6 +191,8 @@ impl Host for Agent {
             changes.retain(|c| match c {
                 Change::Install { game, device, .. } => *device == own && mine(game),
                 Change::Mark { game, .. } => mine(game),
+                // Which of its keys are one game is part of its library.
+                Change::Link { game, .. } => mine(game),
             });
         }
         if !changes.is_empty() {

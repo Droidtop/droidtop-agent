@@ -652,6 +652,17 @@ impl Store {
         });
     }
 
+    /// Says that [`game`] is the same game as [`into`] (`None` undoes it):
+    /// cross-store identity (docs/DESIGN.md section 16, step 1), travelling to
+    /// every paired device that reads it. Returns whether it changed.
+    pub fn set_link(&self, game: &str, into: Option<&str>) -> bool {
+        let device = self.peer_id();
+        self.edit_library(|lib| {
+            let changed = lib.link(&device, game, into);
+            (changed, changed)
+        })
+    }
+
     /// Sets one of the person's marks on a game from this computer (a
     /// favourite, a collection...): it travels to every paired device like
     /// one made on a handheld.
