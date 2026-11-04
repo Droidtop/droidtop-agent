@@ -32,6 +32,10 @@ pub struct Channel<S: Read + Write> {
     peer: PeerId,
 }
 
+/// How much a refused device may send before the refusal's connection is
+/// closed anyway: a hello is far smaller.
+const REFUSED_DRAIN: usize = 64 * 1024;
+
 /// A handshake that could not finish, said the way a person can act on.
 fn handshake(e: std::io::Error) -> Error {
     if e.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -85,6 +89,19 @@ impl<S: Read + Write> Channel<S> {
                 message: "this device does not know you any more: pair the two again".into(),
                 code: Some(crate::proto::NOT_PAIRED.into()),
             });
+            // The device sends its hello before it reads. Closing now would
+            // meet that hello with a reset, and on Windows and macOS a reset
+            // throws away the refusal still unread on the device's side. So
+            // what it sends is read and dropped, a little at most, until it
+            // hangs up (or the stream's own read timeout).
+            let mut sink = [0u8; 4096];
+            let mut drained = 0;
+            while drained < REFUSED_DRAIN {
+                match refused.io().read(&mut sink) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => drained += n,
+                }
+            }
             if let Tls::Server(s) = &mut refused.tls {
                 s.conn.send_close_notify();
                 let _ = s.conn.complete_io(&mut s.sock);
@@ -207,11 +224,13 @@ mod tests {
         });
         let stranger = DeviceKey::generate();
         let mut ch = Channel::connect(TcpStream::connect(addr).unwrap(), &stranger, &server_id).unwrap();
-        // It hears why, from the device it asked for.
+        // As a device does, it speaks first, then hears why, from the device it asked for.
+        ch.send(b"hello").unwrap();
         match ch.recv_json::<crate::proto::Response>().unwrap() {
             crate::proto::Response::Error { code, .. } => assert_eq!(code.as_deref(), Some(crate::proto::NOT_PAIRED)),
             other => panic!("{other:?}"),
         }
+        drop(ch);
         assert!(matches!(handle.join().unwrap(), Some(Error::NotPaired)));
     }
 
