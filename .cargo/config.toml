@@ -1,0 +1,6 @@
+[env]
+# libopus (audiopus_sys, through windowcast's host, docs/DESIGN.md section 22)
+# is built with CMake from a CMakeLists that asks for an old minimum version,
+# which CMake 4 refuses unless told this policy floor. windowcast's own
+# .cargo/config.toml says the same.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
