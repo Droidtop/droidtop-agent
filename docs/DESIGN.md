@@ -1618,7 +1618,11 @@ Sandustry from the owner's Windows desktop to a Retroid Pocket 5.
   Xbox 360 pads through ViGEmBus) in the agent's own process, on a thread of
   its own. Pythia hosts the agent's service in its process, so it streams
   with no code of its own. No streaming code is written here: the crate
-  only starts windowcast's.
+  only starts windowcast's. It is the agent's own scaffold over a shared
+  library that belongs to no app (owner, 2026-11-04, Droidtop/tracker#867:
+  "The scaffold belongs to wach one. The libraries are shared, and don't
+  \"belong\" to either."), so it stays with the agent when the shared
+  crates move to their own repos.
 - **Started when first asked, kept after.** Nothing listens until a
   handheld first asks to watch a game; then the host serves on windowcast's
   port 47100 (TCP, all interfaces) for the life of the process, at 60
