@@ -13,12 +13,12 @@ path = "src/main.rs"
 
 [dependencies]
 droidtop-agent-service = { path = "../service" }
-droidtop-agent-store = { path = "../store" }
-droidtop-agent-saves = { path = "../saves" }
-droidtop-agent-pair = { path = "../pair" }
-droidtop-agent-contexts = { path = "../contexts" }
-droidtop-agent-scan = { path = "../scan" }
-droidtop-agent-core = { path = "../core" }
+droidtop-agent-store.workspace = true
+droidtop-agent-saves.workspace = true
+droidtop-agent-pair.workspace = true
+droidtop-agent-contexts.workspace = true
+droidtop-agent-scan.workspace = true
+droidtop-agent-core.workspace = true
 serde_json.workspace = true
 # The window: egui through eframe, drawn with OpenGL (glow), the stack of
 # windowcast's reference app.

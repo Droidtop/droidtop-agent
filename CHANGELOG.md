@@ -16,6 +16,12 @@ release carries until its number is written in.
   pair again instead of that the computer did not answer
   (Droidtop/tracker#531). On the home network only: through WireGuard a
   forgotten device still gets no answer.
+- Nothing changes for people using the agent. Behind it, the code it shares
+  with droidtop and Pythia now lives in shared libraries of its own
+  (Droidtop/tracker#867): pairing, sync and the agent's state
+  (Droidtop/lib-sync), the scanner (Droidtop/lib-games), engine detection
+  (Droidtop/lib-engines), save locations (Droidtop/lib-saves) and plugin
+  context adapters (Droidtop/lib-plugins), each pinned here by tag.
 - Streaming a game to the handheld (Droidtop/tracker#860, docs/DESIGN.md
   section 22): on Windows the agent embeds windowcast's host. When a
   handheld that may start games here asks to play a game and watch it, the

@@ -12,7 +12,7 @@ name = "droidtop_agent"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-droidtop-agent-core = { path = "../core" }
+droidtop-agent-core.workspace = true
 jni = { version = "0.21", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
@@ -20,4 +20,4 @@ serde_json.workspace = true
 [dev-dependencies]
 # The mesh test runs the real agent as one of its computers.
 droidtop-agent-service = { path = "../service" }
-droidtop-agent-store = { path = "../store" }
+droidtop-agent-store.workspace = true

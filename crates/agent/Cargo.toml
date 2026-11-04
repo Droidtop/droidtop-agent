@@ -13,10 +13,10 @@ name = "droidtop-agent"
 path = "src/main.rs"
 
 [dependencies]
-droidtop-agent-core = { path = "../core" }
+droidtop-agent-core.workspace = true
 droidtop-agent-service = { path = "../service" }
-droidtop-agent-store = { path = "../store" }
-droidtop-agent-saves = { path = "../saves" }
-droidtop-agent-pair = { path = "../pair" }
-droidtop-agent-contexts = { path = "../contexts" }
+droidtop-agent-store.workspace = true
+droidtop-agent-saves.workspace = true
+droidtop-agent-pair.workspace = true
+droidtop-agent-contexts.workspace = true
 serde_json.workspace = true

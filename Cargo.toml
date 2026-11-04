@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/store", "crates/scan", "crates/saves", "crates/pair", "crates/contexts", "crates/service", "crates/stream", "crates/agent", "crates/app", "crates/android", "crates/python"]
+members = ["crates/service", "crates/stream", "crates/agent", "crates/app", "crates/android", "crates/python"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,6 +10,14 @@ repository = "https://github.com/Droidtop/droidtop-agent"
 rust-version = "1.89"
 
 [workspace.dependencies]
+# The shared libraries (Droidtop/tracker#867): each a repository of its own that belongs to no program,
+# pinned here by tag. Their crates keep the names this workspace's code imports them by.
+droidtop-agent-core = { package = "sync-core", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.1" }
+droidtop-agent-store = { package = "sync-store", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.1" }
+droidtop-agent-pair = { package = "sync-pair", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.1" }
+droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", tag = "v0.1.2" }
+droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", tag = "v0.1.2" }
+droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", tag = "v0.1.3" }
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
 # this workspace is too.

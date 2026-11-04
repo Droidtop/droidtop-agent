@@ -823,7 +823,7 @@ no store APIs and no network.
 7i, 7m: `GameEngineDetector.scan` and `PcFolderScan`), so the computer and
 the handheld find the same games in the same tree. Engines are decided by
 droidtop-platforms' `engines-database.json`, which the agent embeds
-(`crates/scan/data/`, refreshed by copying the file in) and evaluates row by
+(Droidtop/lib-engines `crates/detect/data/`, refreshed by copying the file in) and evaluates row by
 row, every row, with droidtop's three byte probes (Godot's pack, a Twine page,
 Unity's player). A folder with an engine's layout or a program is a game and
 ends the walk; a folder holding two engine games is a collection; a lone game
@@ -929,18 +929,28 @@ The computer's side is a set of library crates, so that a desktop manager
 that is this computer's agent (Pythia, section 16) is built from the same
 code as the programs (owner, 2026-10-14: "We will modularize the desktop
 agent, and use its modules as part of pythia"). A lower crate never depends
-on a higher one. Every crate is `droidtop-agent-<name>`, its library
-`droidtop_agent_<name>`. The design went through a two-round society review
+on a higher one. The design went through a two-round society review
 on Droidtop/tracker#461.
+
+**The shared crates are libraries of their own (Droidtop/tracker#867, 2026-11-04).** Owner: "We don't
+want a single "droidtop core", we want each program to have its own scaffold, that can use as many
+shared libraries and stuff as possible. The scaffold belongs to wach one. The libraries are shared, and
+don't "belong" to either." And D2: one repository per library family, each versioned and pinned by each
+program, each repository's CI building and testing every program that uses it. So the crates the agent
+shares with droidtop and Pythia moved out, as they were, into those repositories, and this workspace pins
+them by tag in its root `Cargo.toml`. They keep the library names the code imports them by
+(`droidtop_agent_<name>`); renaming the imports is a later, mechanical change. What stays here is the
+agent's scaffold (`stream`, `service`, `agent`, `app`) and the bindings droidtop and Pythia load
+(`android`, `python`), which move to those programs' own scaffolds in #867 step 1.
 
 | Crate | What it is | Depends on |
 |---|---|---|
-| `crates/core` | Both ends: identity and its certificate, the pairing exchange, the TLS channel, the protocol and the `Host` trait the server answers through, the transport primitives (WireGuard tunnel, LAN discovery, rendezvous client, cloud-share letters), the library model, the save and context sync rules, game copy. No UI and no platform-specific code. | windowcast's crates |
-| `crates/store` | This computer's agent state on disk, `Store`: `Dirs`, `Settings`, the identity shared with windowcast and the migration onto it, the trusted and device lists, `library.json` under its cross-process lock, the person's marks. No networking. | core |
-| `crates/scan` | The scanner (section 11), over `scan::Options` (game and ROM folders, what is switched off), never the agent's state. The engines and platforms databases are in `crates/scan/data`. | core |
-| `crates/saves` | Where a game's saves are on this computer (the person's entries, Ludusavi custom games, the Ludusavi index, token roots natively or in a prefix), the kept-copies listing and restore (sections 6 and 9). Looks games up in a scan it is given. | core, scan, store |
-| `crates/pair` | Pairing from the computer: typing the handheld's code, or showing one (section 3). | core, store |
-| `crates/contexts` | Context adapters: offers, approval, install, runs (section 8). | core, store |
+| `sync-core` (Droidtop/lib-sync `crates/core`) | Both ends: identity and its certificate, the pairing exchange, the TLS channel, the protocol and the `Host` trait the server answers through, the transport primitives (WireGuard tunnel, LAN discovery, rendezvous client, cloud-share letters), the library model, the save and context sync rules, game copy. No UI and no platform-specific code. | windowcast's crates |
+| `sync-store` (Droidtop/lib-sync `crates/store`) | This computer's agent state on disk, `Store`: `Dirs`, `Settings`, the identity shared with windowcast and the migration onto it, the trusted and device lists, `library.json` under its cross-process lock, the person's marks. No networking. | core |
+| `games-scan` (Droidtop/lib-games `crates/scan`) | The scanner (section 11), over `scan::Options` (game and ROM folders, what is switched off), never the agent's state. The platforms database is in its `data`; engine detection, with the engines database, is `engines-detect` (Droidtop/lib-engines). | core, engines-detect |
+| `saves-locate` (Droidtop/lib-saves `crates/locate`) | Where a game's saves are on this computer (the person's entries, Ludusavi custom games, the Ludusavi index, token roots natively or in a prefix), the kept-copies listing and restore (sections 6 and 9). Looks games up in a scan it is given. | core, scan, store |
+| `sync-pair` (Droidtop/lib-sync `crates/pair`) | Pairing from the computer: typing the handheld's code, or showing one (section 3). | core, store |
+| `plugins-contexts` (Droidtop/lib-plugins `crates/contexts`) | Context adapters: offers, approval, install, runs (section 8). | core, store |
 | `crates/stream` | windowcast's host and its Windows window source, started when a handheld first asks to watch a game (section 22). On other systems it only says it cannot stream. | windowcast's host |
 | `crates/service` | The running agent, `Agent`: a `Store` plus the last scan, the save catalog, the rendezvous's state; its `Host` answers (with the launch rule, section 17); serving (LAN, discovery, WireGuard), the computer's rendezvous, the cloud share, a desktop manager's games, autostart, the stream (section 22). | all above |
 | `crates/agent` | The `droidtop-agent` command line: a thin host over the crates. | service and below |

@@ -21,14 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The bundled game databases are droidtop-platforms' files at the commit crates/scan/data/UPSTREAM names.
-  platform-data:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - run: scripts/check-platform-data.sh
+  # The bundled game databases moved with the scanner and the engine detector: lib-games and lib-engines
+  # (Droidtop/tracker#867) check that their copies are droidtop-platforms' files at their pinned commit.
 
   test:
     strategy:

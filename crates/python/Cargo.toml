@@ -13,11 +13,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 droidtop-agent-service = { path = "../service" }
-droidtop-agent-store = { path = "../store" }
-droidtop-agent-pair = { path = "../pair" }
-droidtop-agent-scan = { path = "../scan" }
-droidtop-agent-saves = { path = "../saves" }
-droidtop-agent-core = { path = "../core" }
+droidtop-agent-store.workspace = true
+droidtop-agent-pair.workspace = true
+droidtop-agent-scan.workspace = true
+droidtop-agent-saves.workspace = true
+droidtop-agent-core.workspace = true
 serde_json.workspace = true
 # The stable ABI (abi3) from Python 3.10 on: one wheel per system serves
 # every newer Python. generate-import-lib lets Windows link without an
