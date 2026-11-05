@@ -6,6 +6,12 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Epic games are keyed by Epic's catalog id, `epic:<CatalogItemId>`, the key droidtop gives them, so an Epic game
+  installed on both sides is one game and Stream from and Play on find it (Droidtop/tracker#871). A game with no
+  store id is keyed `title2:` and its title's Lutris slug ("Being a DIK" is `title2:being-a-dik`), the one title key
+  on every device (Droidtop/tracker#870). After a scan the agent links each game's old key to its new one wherever
+  something was stored under the old key, so nothing a person set is lost (docs/DESIGN.md, "A game's identity
+  across devices"). Built on games-scan 0.3.0.
 - Cross-store identity, first part (Droidtop/tracker#798, docs/DESIGN.md
   section 16): the library can say that two keys are one game (a `link`
   change, newest wins, undone with no target), and every device follows

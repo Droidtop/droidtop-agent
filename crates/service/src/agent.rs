@@ -109,7 +109,9 @@ impl Agent {
         let launcher_marks = droidtop_agent_scan::lutris::marks();
         let (device, name) = (self.store.peer_id(), self.store.name());
         let changes = self.store.edit_library(|lib| {
-            let n = lib.update_device(&device, &name, scan.library()) + self.store.note_launcher_marks(lib, launcher_marks);
+            let n = lib.update_device(&device, &name, scan.library())
+                + self.store.note_launcher_marks(lib, launcher_marks)
+                + link_aliases(lib, &device, &scan.games);
             (n, n > 0)
         });
         *self.scan.locked() = Some((Instant::now(), scan));
@@ -184,6 +186,62 @@ fn fixed_folder(pattern: &str, roots: &Roots) -> Option<std::path::PathBuf> {
     Some(path)
 }
 
+/// Links each game's other keys to its key where the library holds
+/// something under one: an Epic game stored by AppName before it was keyed
+/// by catalog id (Droidtop/tracker#871), a game stored under the older
+/// `title:` key (Droidtop/tracker#870). Its installs, marks and play time
+/// are then the same game's on every device that reads links, and nothing
+/// is rewritten. A key nothing was stored under is not linked, so a library
+/// carries no links for keys no device used. Returns how many it linked.
+fn link_aliases(lib: &mut droidtop_agent_core::library::Library, device: &droidtop_agent_core::keys::PeerId, games: &[Found]) -> usize {
+    let mut n = 0;
+    for f in games {
+        for alias in &f.aliases {
+            let stored = lib.games.contains_key(alias.as_str());
+            if stored && lib.canonical(alias) != lib.canonical(&f.game.key) && lib.link(device, alias, Some(&f.game.key)) {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+    use droidtop_agent_core::keys::DeviceKey;
+    use droidtop_agent_core::library::{Install, Library, ScannedGame};
+
+    fn game(key: &str, aliases: &[&str]) -> Found {
+        let scanned = ScannedGame {
+            key: key.into(),
+            title: "Sugar".into(),
+            platform: None,
+            install: Install { installed: true, ..Default::default() },
+        };
+        let mut f = Found::new(scanned);
+        f.aliases = aliases.iter().map(|a| a.to_string()).collect();
+        f
+    }
+
+    #[test]
+    fn an_old_key_with_a_record_is_linked_once_and_a_new_one_is_not() {
+        let pc = DeviceKey::generate().peer_id();
+        let mut lib = Library::default();
+        // What an older scanner stored: the Epic game by AppName.
+        lib.update_device(&pc, "PC", vec![game("epic:Sugar", &[]).game]);
+        let now = vec![game("epic:c0ffee", &["epic:Sugar"]), game("title2:salt", &["title:salt"])];
+        lib.update_device(&pc, "PC", now.iter().map(|f| f.game.clone()).collect());
+
+        assert_eq!(link_aliases(&mut lib, &pc, &now), 1);
+        assert_eq!(lib.canonical("epic:Sugar"), "epic:c0ffee");
+        // Nothing was stored under title:salt, so it gets no link record.
+        assert!(!lib.games.contains_key("title:salt"));
+        // Already linked: the next rescan changes nothing.
+        assert_eq!(link_aliases(&mut lib, &pc, &now), 0);
+    }
+}
+
 #[cfg(test)]
 mod plan_tests {
     use super::*;
@@ -191,17 +249,15 @@ mod plan_tests {
     use std::path::PathBuf;
 
     fn found(engine: Option<&str>) -> Option<Found> {
-        Some(Found {
-            game: droidtop_agent_core::library::ScannedGame {
-                key: "title:g".into(),
-                title: "G".into(),
-                platform: None,
-                install: Default::default(),
-            },
-            base: Some(PathBuf::from("/sync/GameSync/G")),
-            prefix: None,
-            engine: engine.map(str::to_string),
-        })
+        let mut f = Found::new(droidtop_agent_core::library::ScannedGame {
+            key: "title:g".into(),
+            title: "G".into(),
+            platform: None,
+            install: Default::default(),
+        });
+        f.base = Some(PathBuf::from("/sync/GameSync/G"));
+        f.engine = engine.map(str::to_string);
+        Some(f)
     }
 
     fn roots() -> Roots {

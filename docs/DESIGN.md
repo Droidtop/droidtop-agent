@@ -376,11 +376,35 @@ round. Each device is the authority on what it has installed. The person's own
 marks on a game are shared.
 
 - **A game's identity across devices** is its store key where it has one
-  (`steam:<appid>`, `gog:<id>`, `epic:<app name>`, `amazon:<id>`,
+  (`steam:<appid>`, `gog:<id>`, `epic:<catalog item id>`, `amazon:<id>`,
   `itch:<game id>`, `battlenet:<product>`). A game without one uses
-  `title:<normalised title>`. A ROM uses
+  `title2:<the title's Lutris slug>`. A ROM uses
   `rom:<es-de system>/<normalised file stem>`. droidtop already names
   platforms with ES-DE's system names (SPEC 7b).
+  - **Two keys changed on 2026-11-05, and a game keeps its old key as an
+    alias** (games-scan `Found::aliases`):
+    - An Epic game was `epic:<AppName>`; it is now `epic:<CatalogItemId>`,
+      droidtop's key for the same game (Droidtop/tracker#871). The catalog
+      id comes from the launcher's `.item` manifest, or for legendary and
+      Heroic from legendary's `metadata/<AppName>.json`. Without one the key
+      stays `epic:<AppName>`.
+    - A game with no store id was `title:` and its letters and digits joined
+      by single spaces; it is now `title2:` and Lutris's slug of its title
+      (Droidtop/tracker#870; the owner, 2026-11-05: "letters and digits only,
+      but with space-to-hyphen conversion. Lutris's standard"), the same
+      function as droidtop's `TitleKeys.slug`. "Being a DIK" is
+      `title2:being-a-dik`.
+  - **After each scan the agent links an alias to its game's key where the
+    library holds something under the alias** (`link_aliases` in
+    `crates/service/src/agent.rs`), with the link change of section 16.
+    What was stored under the old key (this computer's old install, a mark
+    set on a handheld) is then the same game, on every device that reads
+    links, and nothing is rewritten. A key nothing was stored under gets no
+    link, so the library carries none for keys no device used. These are
+    links from evidence, not from similar names: the Epic pair is one store
+    manifest, and the `title:` alias is the same title from the same scan
+    under the older fold. A handheld still writing `title:` keys meets the
+    computer's game once a rescan here sees its record.
 - **Facts per device:** installed, where it is (path), size, version, and
   which launcher owns it. Only the device that has the game writes these, so
   they never conflict. A removed game is a tombstone.

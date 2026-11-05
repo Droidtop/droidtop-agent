@@ -65,7 +65,12 @@ impl ManagerGames {
                 }
                 _ => true,
             })
-            .map(|g| Found { game: g.game.clone(), base: g.base.clone(), prefix: None, engine: g.engine.clone() })
+            .map(|g| {
+                let mut f = Found::new(g.game.clone());
+                f.base = g.base.clone();
+                f.engine = g.engine.clone();
+                f
+            })
             .collect()
     }
 }
