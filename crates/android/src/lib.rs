@@ -3,8 +3,7 @@
 //! which takes an operation name and its arguments as JSON and returns JSON.
 //! Every operation blocks the calling thread; droidtop calls it from a
 //! background coroutine, never the main thread. Nothing here runs on its
-//! own, except KDE Connect while droidtop has it switched on
-//! (`kdeconnect_start` to `kdeconnect_stop`, docs/DESIGN.md section 23).
+//! own: there is no resident thread, listener or timer.
 
 use jni::objects::{JClass, JString};
 use jni::sys::jstring;

@@ -1724,7 +1724,8 @@ kde-connect as a programmatic module".
 - **One operation table, two front ends.** `kdeconnect_service::ops` is the
   only binding:
   - droidtop calls `AgentNative.call("kdeconnect_<op>", json)`, which
-    `crates/android/src/api.rs` passes through as it is;
+    droidtop's own native library (droidtop `native/src/api.rs`, the crate
+    that moved there from `crates/android`) passes through as it is;
   - Pythia calls `droidtop_agent.kdeconnect.call(op, **kwargs)`
     (`crates/python/src/kdeconnect.rs`), where a reply with `error` raises
     `AgentError`.

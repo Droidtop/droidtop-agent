@@ -10,8 +10,8 @@ release carries until its number is written in.
   and Pythia can now be KDE Connect devices. They are found by the official
   KDE Connect apps and by each other, pair with the 8-character code both
   screens show, and ping. File transfer, clipboard and remote input follow.
-  droidtop reaches it as `kdeconnect_<op>` through its library; Pythia as
-  `droidtop_agent.kdeconnect.call`.
+  Pythia reaches it as `droidtop_agent.kdeconnect.call`; droidtop through
+  its own native library.
 - Context adapters, protocol 2 (Droidtop/tracker#794, docs/DESIGN.md
   section 8): an adapter for an app that cannot publish its own copy
   (F95Checker) says `"snapshot": true`, and before a handheld reads the copy
