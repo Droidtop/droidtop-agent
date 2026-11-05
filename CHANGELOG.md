@@ -13,6 +13,14 @@ release carries until its number is written in.
   receive links; the cloud folder carries none (droidtop's side is in its
   `native/`). Pythia sets them with
   `store.link` and reads `store.canonical`.
+- What each handheld may watch when it streams from this computer
+  (Droidtop/tracker#116): every window, as before, or only the games it
+  starts. Choose it beside each handheld under Streaming games on the
+  Status page, or with `droidtop-agent sharing <id> all|games`.
+- The window's Status page has a Streaming games section
+  (Droidtop/tracker#116): whether this computer can stream to a handheld,
+  which handhelds can watch the games they start, and who is watching now,
+  with how many windows and for how long.
 - Releases no longer carry droidtop's Android library (`droidtop-agent-android.tar.zst`): droidtop builds
   `libdroidtop_agent.so` itself from its own `native/`, the code that was `crates/android` here, over the
   same shared libraries (Droidtop/tracker#867). Nothing changes for people using the agent.

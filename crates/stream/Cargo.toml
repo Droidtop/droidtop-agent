@@ -16,6 +16,7 @@ path = "src/lib.rs"
 # library and the macOS and Linux builds carry none of it.
 [target.'cfg(windows)'.dependencies]
 windowcast-host.workspace = true
+windowcast-identity.workspace = true
 windowcast-agent-windows.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net"] }
 windows-sys = { workspace = true, features = ["Win32_UI_HiDpi"] }

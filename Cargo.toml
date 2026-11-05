@@ -15,7 +15,7 @@ rust-version = "1.89"
 droidtop-agent-core = { package = "sync-core", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.2" }
 droidtop-agent-store = { package = "sync-store", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.2" }
 droidtop-agent-pair = { package = "sync-pair", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.2" }
-# lib-games main 6642652 and lib-saves ci/sync-0.1.2 d5d848f: the commits that become lib-games v0.1.3 and lib-saves
+# lib-games main 6642652 and lib-saves main d5d848f: the commits that become lib-games v0.1.3 and lib-saves
 # v0.1.3. Their tags wait on CI that builds this agent with them (Droidtop/tracker#798); each becomes its tag once
 # it exists.
 droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", rev = "664265258b06db4f4d41b0d3658154c78e462647" }
@@ -24,20 +24,20 @@ droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
 # this workspace is too.
-windowcast-identity = { git = "https://github.com/Droidtop/windowcast", rev = "7359936a6083cc7f2ca6cae67aedf45ad9797026" }
-windowcast-pairing = { git = "https://github.com/Droidtop/windowcast", rev = "7359936a6083cc7f2ca6cae67aedf45ad9797026" }
+windowcast-identity = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
+windowcast-pairing = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
 # windowcast's secure-screen helper and its client API (windowcast#467):
 # service mode, docs/DESIGN.md section 19. The same windowcast as above.
-windowcast-secure-helper = { git = "https://github.com/Droidtop/windowcast", rev = "7359936a6083cc7f2ca6cae67aedf45ad9797026" }
+windowcast-secure-helper = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
 # Rendezvous away from the LAN (Syncthing's global discovery, STUN, hole
 # punching), shared with windowcast rather than copied. windowcast v0.37.0 and
 # one commit (7359936).
-windowcast-rendezvous = { git = "https://github.com/Droidtop/windowcast", rev = "7359936a6083cc7f2ca6cae67aedf45ad9797026" }
+windowcast-rendezvous = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
 # windowcast's host and its Windows window source: the agent streams the
 # window of a game it started for a handheld (docs/DESIGN.md section 22).
 # The same windowcast as above.
-windowcast-host = { git = "https://github.com/Droidtop/windowcast", rev = "7359936a6083cc7f2ca6cae67aedf45ad9797026" }
-windowcast-agent-windows = { git = "https://github.com/Droidtop/windowcast", rev = "7359936a6083cc7f2ca6cae67aedf45ad9797026" }
+windowcast-host = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
+windowcast-agent-windows = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 # Userspace WireGuard (BSD-3-Clause) and a userspace TCP stack to carry the
@@ -86,6 +86,6 @@ strip = true
 # reach a crate taken from git, so they are repeated here, from the same
 # windowcast. Drop them when windowcast does.
 [patch.crates-io]
-ironrdp-connector = { git = "https://github.com/Droidtop/windowcast", rev = "7359936a6083cc7f2ca6cae67aedf45ad9797026" }
-sspi = { git = "https://github.com/Droidtop/windowcast", rev = "7359936a6083cc7f2ca6cae67aedf45ad9797026" }
-winscard = { git = "https://github.com/Droidtop/windowcast", rev = "7359936a6083cc7f2ca6cae67aedf45ad9797026" }
+ironrdp-connector = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
+sspi = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
+winscard = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }

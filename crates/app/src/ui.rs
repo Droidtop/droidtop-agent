@@ -118,6 +118,8 @@ pub struct App {
     save_outcome: Outcome,
     archive: Vec<GameCopies>,
     rendezvous: Option<rendezvous::Status>,
+    /// What each handheld may watch, read when the Status page opens.
+    sharing: std::collections::HashMap<String, droidtop_agent_service::sharing::Sharing>,
     loaded_at: Instant,
     plugin_outcome: Outcome,
     settings: Option<Settings>,
@@ -150,6 +152,7 @@ impl App {
             save_outcome: Default::default(),
             archive: Vec::new(),
             rendezvous: None,
+            sharing: Default::default(),
             loaded_at: Instant::now() - Duration::from_secs(3600),
             plugin_outcome: Default::default(),
             settings: None,
@@ -177,7 +180,20 @@ impl App {
         }
         self.loaded_at = Instant::now();
         match self.page {
-            Page::Status => self.rendezvous = read_json::<rendezvous::Status>(&self.agent.store.dirs.rendezvous()).ok(),
+            Page::Status => {
+                self.rendezvous = read_json::<rendezvous::Status>(&self.agent.store.dirs.rendezvous()).ok();
+                let config = &self.agent.store.dirs.config;
+                self.sharing = self
+                    .agent
+                    .store
+                    .devices_now()
+                    .into_iter()
+                    .map(|d| {
+                        let choice = droidtop_agent_service::sharing::of(config, &d.id);
+                        (d.id, choice)
+                    })
+                    .collect();
+            }
             Page::Saves => {
                 let titles = droidtop_agent_saves::library_titles(&self.agent.store.library_now());
                 self.archive = copies::kept(&self.agent.store.dirs.archive(), &titles);
@@ -231,6 +247,31 @@ impl eframe::App for App {
         });
         // Threads finish work the page shows; look again now and then.
         ctx.request_repaint_after(Duration::from_secs(1));
+    }
+}
+
+/// The paired handheld whose windowcast viewer [`viewer`] is, by name.
+fn watcher_name(devices: &[droidtop_agent_store::Device], viewer: &str) -> String {
+    devices
+        .iter()
+        .find(|d| d.viewer.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(viewer)))
+        .map(|d| d.name.clone())
+        .unwrap_or_else(|| format!("A viewer this agent did not pair ({})", &viewer[..viewer.len().min(8)]))
+}
+
+fn windows_word(n: usize) -> String {
+    match n {
+        0 => "connected, watching nothing yet".into(),
+        1 => "watching 1 window".into(),
+        n => format!("watching {n} windows"),
+    }
+}
+
+fn duration_words(secs: u64) -> String {
+    match secs {
+        0..=59 => "under a minute".into(),
+        60..=3599 => format!("{} min", secs / 60),
+        _ => format!("{} h {} min", secs / 3600, secs % 3600 / 60),
     }
 }
 
@@ -339,7 +380,7 @@ impl App {
         ui.heading("Status");
         ui.add_space(6.0);
         let service = self.service.locked().clone();
-        match service {
+        match &service {
             Service::Starting => ui.label("Starting…"),
             Service::Running => ui.label(format!(
                 "Serving paired handhelds on this network (port {}). The handheld connects when a game starts or ends, or when you sync.",
@@ -348,7 +389,7 @@ impl App {
             Service::Attached => ui.label(
                 "Serving paired handhelds: droidtop-agent is already running on this computer. This window shows what it keeps and changes the same files.",
             ),
-            Service::Stopped(why) => ui.colored_label(ui.visuals().error_fg_color, why),
+            Service::Stopped(why) => ui.colored_label(ui.visuals().error_fg_color, why.as_str()),
         };
         ui.label(
             RichText::new(
@@ -387,6 +428,8 @@ impl App {
             }
             self.forget = None;
         }
+        ui.add_space(12.0);
+        self.streaming(ui, &service, &devices);
         ui.add_space(12.0);
         ui.strong("Addresses handhelds can use");
         ui.label(
@@ -438,6 +481,64 @@ impl App {
         }
         ui.add_space(12.0);
         ui.label(RichText::new(format!("This computer's id: {}", short(&self.agent.store.peer_id()))).weak());
+    }
+
+    /// Streaming a game to a handheld (docs/DESIGN.md sections 15 and 22,
+    /// Droidtop/tracker#116): whether this computer can, the handhelds that
+    /// may watch, and who watches now.
+    fn streaming(&mut self, ui: &mut egui::Ui, service: &Service, devices: &[droidtop_agent_store::Device]) {
+        ui.strong("Streaming games");
+        if !droidtop_agent_stream::supported() {
+            ui.label("This computer cannot stream games to a handheld yet: droidtop-agent streams from Windows only.");
+            return;
+        }
+        let allowed: Vec<&str> = devices.iter().filter(|d| d.viewer.is_some()).map(|d| d.name.as_str()).collect();
+        if allowed.is_empty() {
+            ui.label(
+                "No handheld has watched a game from here yet. A handheld that may start games here (Settings) can watch the game it starts.",
+            );
+        } else {
+            ui.label(format!("Handhelds that can watch the games they start: {}.", allowed.join(", ")));
+        }
+        // What each may watch (Droidtop/tracker#116): every window, or only the games it starts.
+        use droidtop_agent_service::sharing::Sharing;
+        for d in devices.iter().filter(|d| d.viewer.is_some()) {
+            let mut choice = self.sharing.get(&d.id).copied().unwrap_or_default();
+            let before = choice;
+            ui.horizontal(|ui| {
+                ui.label(format!("{} watches", d.name));
+                egui::ComboBox::from_id_salt(("sharing", &d.id)).selected_text(choice.words()).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut choice, Sharing::All, Sharing::All.words());
+                    ui.selectable_value(&mut choice, Sharing::Games, Sharing::Games.words());
+                });
+            });
+            if choice != before {
+                // A choice, not every frame: the file is written once, then kept here.
+                if droidtop_agent_service::sharing::set(&self.agent.store.dirs.config, &d.id, choice).is_ok() {
+                    self.sharing.insert(d.id.clone(), choice);
+                }
+            }
+        }
+        if !matches!(service, Service::Running) {
+            ui.label(RichText::new("Who is watching shows in the window of the droidtop-agent that serves.").weak());
+            return;
+        }
+        ui.label(RichText::new(format!("The streaming host is {}.", self.agent.streamer.status())).weak());
+        let watching = self.agent.streamer.watching();
+        if watching.is_empty() {
+            ui.label("Nobody is watching now.");
+            return;
+        }
+        // Who connects and leaves changes without any file changing: look again every few seconds.
+        ui.ctx().request_repaint_after(Duration::from_secs(2));
+        egui::Grid::new("watching").striped(true).num_columns(3).show(ui, |ui| {
+            for w in &watching {
+                ui.label(watcher_name(devices, &w.viewer));
+                ui.label(format!("{}, for {}", windows_word(w.windows), duration_words(w.for_secs)));
+                ui.label(RichText::new(&w.address).weak());
+                ui.end_row();
+            }
+        });
     }
 
     fn pair(&mut self, ui: &mut egui::Ui) {
@@ -1246,6 +1347,28 @@ fn draw_qr(ui: &mut egui::Ui, qr: &Qr, module: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn device(name: &str, viewer: Option<&str>) -> droidtop_agent_store::Device {
+        serde_json::from_value(serde_json::json!({ "id": "ab".repeat(32), "name": name, "paired_ms": 1, "viewer": viewer }))
+            .expect("a device")
+    }
+
+    #[test]
+    fn a_watcher_is_named_by_the_handheld_whose_viewer_it_is() {
+        let devices = vec![device("Retroid", Some(&"cd".repeat(32))), device("Phone", None)];
+        assert_eq!(watcher_name(&devices, &"CD".repeat(32)), "Retroid");
+        assert!(watcher_name(&devices, &"ef".repeat(32)).starts_with("A viewer this agent did not pair (efefefef"));
+    }
+
+    #[test]
+    fn watching_is_said_in_words() {
+        assert_eq!(windows_word(0), "connected, watching nothing yet");
+        assert_eq!(windows_word(1), "watching 1 window");
+        assert_eq!(windows_word(3), "watching 3 windows");
+        assert_eq!(duration_words(5), "under a minute");
+        assert_eq!(duration_words(125), "2 min");
+        assert_eq!(duration_words(3 * 3600 + 7 * 60), "3 h 7 min");
+    }
 
     #[test]
     fn a_pairing_invitation_fits_a_qr_code() {

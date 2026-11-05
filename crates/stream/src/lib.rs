@@ -47,9 +47,26 @@ enum State {
     Stopped(String),
 }
 
+/// A viewer connected to the embedded host now, as the window shows it
+/// (Droidtop/tracker#116).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Watcher {
+    /// The viewer's windowcast identity in hex: a paired handheld's `viewer`.
+    pub viewer: String,
+    /// Where it connected from.
+    pub address: String,
+    /// How long it has been connected, in seconds.
+    pub for_secs: u64,
+    /// How many of this computer's windows it watches now.
+    pub windows: usize,
+}
+
 /// The embedded host, started on demand.
 pub struct Streamer {
     state: Arc<Mutex<State>>,
+    /// The serving host's control: who is connected and what each watches.
+    #[cfg(windows)]
+    control: Mutex<Option<Arc<windowcast_host::HostControl>>>,
 }
 
 impl Default for Streamer {
@@ -60,7 +77,11 @@ impl Default for Streamer {
 
 impl Streamer {
     pub fn new() -> Self {
-        Streamer { state: Arc::new(Mutex::new(State::Off)) }
+        Streamer {
+            state: Arc::new(Mutex::new(State::Off)),
+            #[cfg(windows)]
+            control: Mutex::new(None),
+        }
     }
 
     /// Makes sure a windowcast host serves this computer's windows, starting
@@ -71,11 +92,67 @@ impl Streamer {
         if matches!(*state, State::Serving) {
             return Ok(Hosting::Here);
         }
-        let hosting = start(data_dir, Arc::clone(&self.state))?;
-        if hosting == Hosting::Here {
-            *state = State::Serving;
-        }
+        let hosting = match start(data_dir, Arc::clone(&self.state))? {
+            Started::Here(_control) => {
+                #[cfg(windows)]
+                {
+                    *self.control.lock().unwrap_or_else(|e| e.into_inner()) = Some(_control);
+                }
+                *state = State::Serving;
+                Hosting::Here
+            }
+            Started::Elsewhere => Hosting::Elsewhere,
+        };
         Ok(hosting)
+    }
+
+    /// Keeps the viewer `viewer` (hex) to the windows `globs` match, app id
+    /// or title (windowcast's `HostControl::limit_device`,
+    /// Droidtop/tracker#116); empty takes the limit away. Sessions it starts
+    /// after this use it. Nothing to do where this process does not serve.
+    pub fn limit_viewer(&self, viewer: &str, globs: Vec<String>) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            let peer = windowcast_identity::PeerId::from_hex(viewer).map_err(|e| format!("not a viewer id ({e})"))?;
+            if let Some(control) = self.control.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                control.limit_device(peer, globs);
+            }
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (viewer, globs);
+            Ok(())
+        }
+    }
+
+    /// The viewers connected to the embedded host now; none while it does not
+    /// serve here (another program on the port serves its own).
+    pub fn watching(&self) -> Vec<Watcher> {
+        #[cfg(windows)]
+        {
+            if !matches!(*self.state.lock().unwrap_or_else(|e| e.into_inner()), State::Serving) {
+                return Vec::new();
+            }
+            let Some(control) = self.control.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+                return Vec::new();
+            };
+            let streams = control.streams();
+            let mut out: Vec<Watcher> = control
+                .clients()
+                .into_iter()
+                .map(|c| Watcher {
+                    viewer: c.peer.to_hex(),
+                    address: c.address.clone(),
+                    for_secs: c.since.elapsed().as_secs(),
+                    windows: streams.iter().filter(|s| s.peer == c.peer).count(),
+                })
+                .collect();
+            out.sort_by_key(|w| std::cmp::Reverse(w.for_secs));
+            out
+        }
+        #[cfg(not(windows))]
+        Vec::new()
     }
 
     /// In words, for the window and the log: whether it serves, and why it
@@ -90,10 +167,22 @@ impl Streamer {
     }
 }
 
+/// What [`start`] found: its own host, with the control the window reads, or
+/// another program already on the port.
+enum Started {
+    #[cfg(windows)]
+    Here(Arc<windowcast_host::HostControl>),
+    #[cfg(not(windows))]
+    #[allow(dead_code)]
+    Here(()),
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Elsewhere,
+}
+
 #[cfg(windows)]
-fn start(data_dir: &Path, state: Arc<Mutex<State>>) -> Result<Hosting, String> {
+fn start(data_dir: &Path, state: Arc<Mutex<State>>) -> Result<Started, String> {
     use windowcast_agent_windows::{Options, WindowsSource};
-    use windowcast_host::HostConfig;
+    use windowcast_host::{HostConfig, HostControl};
 
     // Captures and injected input are in physical pixels; a process that is
     // not DPI-aware gets a scaled view of a scaled monitor. A process whose
@@ -106,7 +195,7 @@ fn start(data_dir: &Path, state: Arc<Mutex<State>>) -> Result<Hosting, String> {
     }
     let listener = match std::net::TcpListener::bind(("0.0.0.0", PORT)) {
         Ok(listener) => listener,
-        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return Ok(Hosting::Elsewhere),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return Ok(Started::Elsewhere),
         Err(e) => return Err(format!("could not listen on port {PORT} ({e})")),
     };
     listener.set_nonblocking(true).map_err(|e| format!("could not listen on port {PORT} ({e})"))?;
@@ -118,12 +207,15 @@ fn start(data_dir: &Path, state: Arc<Mutex<State>>) -> Result<Hosting, String> {
         .build()
         .map_err(|e| format!("could not start the streaming host ({e})"))?;
     let config = HostConfig { listen: format!("0.0.0.0:{PORT}"), pairing: false, data_dir: data_dir.to_path_buf() };
+    // The host's own control, kept so the window can show who is watching.
+    let control = HostControl::open(&config).map_err(|e| format!("could not start the streaming host ({e})"))?;
+    let serving = Arc::clone(&control);
     std::thread::Builder::new()
         .name("windowcast-host".into())
         .spawn(move || {
             let served = runtime.block_on(async move {
                 let listener = tokio::net::TcpListener::from_std(listener)?;
-                windowcast_host::serve(listener, config, Arc::new(source)).await
+                windowcast_host::serve_with(listener, serving, Arc::new(source)).await
             });
             let why = match served {
                 Ok(()) => "it ended".to_string(),
@@ -133,11 +225,11 @@ fn start(data_dir: &Path, state: Arc<Mutex<State>>) -> Result<Hosting, String> {
             *state.lock().unwrap_or_else(|e| e.into_inner()) = State::Stopped(why);
         })
         .map_err(|e| format!("could not start the streaming host ({e})"))?;
-    Ok(Hosting::Here)
+    Ok(Started::Here(control))
 }
 
 #[cfg(not(windows))]
-fn start(_data_dir: &Path, _state: Arc<Mutex<State>>) -> Result<Hosting, String> {
+fn start(_data_dir: &Path, _state: Arc<Mutex<State>>) -> Result<Started, String> {
     Err("this computer cannot stream a game yet: droidtop-agent streams from Windows only".into())
 }
 
@@ -152,5 +244,6 @@ mod tests {
         assert!(!supported());
         assert!(s.ensure(Path::new(".")).unwrap_err().contains("Windows only"));
         assert!(s.status().contains("Windows only"));
+        assert!(s.watching().is_empty());
     }
 }
