@@ -1133,6 +1133,17 @@ identity, pairing, channel, transports, library, saves and scanner.
     - `saves`: `lookup(key, title="", fetch=False)`, `copies`,
       `restore(key, path, title="")`
     - `service`: `serve`, `serving`, `events(since=0, wait=0)`
+- **One set of bindings, built into each manager's own module** (Droidtop/tracker#867, owner 2026-11-04:
+  "each program to have its own scaffold, that can use as many shared libraries and stuff as possible").
+  `crates/python` is also a library (`rlib`): a manager's extension module depends on it, calls
+  `configure(Embedder { program, title, open, module })` (the name `DTCQ1` answers with, its name in
+  messages, how its agent opens its own files, and its module's name), then `register(m)` for `store`,
+  `pair`, `scan`, `saves`, `remote` and `service`, and adds its own submodules with `submodule`.
+  `agent()`, `run`, `from_py` and `AgentError` are public for those. droidtop-agent's own module is
+  `Embedder::AGENT`. Pythia's additions to these bindings came in with this: `saves.back_up`,
+  `service.set_launcher` (a manager's launcher for the games it starts itself, section 17) and pairing a
+  computer by comparison (`pair.offer`, `find`, `pick`, `compare_status`, `confirm`, `stop`), so Pythia's
+  `native/` keeps only what is Pythia's (its folder, `agent`, `pad`, `secure_screen`, `takeover`).
 - **One agent per computer.** `serve` starts the same service as
   `droidtop-agent run`, on threads of its own. If another agent already
   listens on port 47610 (droidtop-agent, its window, or another Pythia),

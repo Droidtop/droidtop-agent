@@ -7,6 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use pyo3::prelude::*;
+use pyo3::types::IntoPyDict;
 use serde_json::json;
 
 use crate::{agent, run};
@@ -15,7 +16,56 @@ pub fn fill(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serve, m)?)?;
     m.add_function(wrap_pyfunction!(serving, m)?)?;
     m.add_function(wrap_pyfunction!(events, m)?)?;
+    m.add_function(wrap_pyfunction!(set_launcher, m)?)?;
     Ok(())
+}
+
+/// The desktop manager's launcher as the agent's (droidtop-agent-service
+/// launch::Launcher): a Python callable that starts one of the manager's own
+/// games for a handheld.
+struct PythonLauncher(PyObject);
+
+impl droidtop_agent_service::launch::Launcher for PythonLauncher {
+    fn launch(&self, game: &droidtop_agent_core::proto::GameRef) -> Option<droidtop_agent_core::proto::Launch> {
+        Python::with_gil(|py| {
+            let answer = match self.0.call_bound(py, (), Some(&[("key", &game.key), ("title", &game.title)].into_py_dict_bound(py))) {
+                Ok(answer) => answer,
+                Err(e) => {
+                    return Some(droidtop_agent_core::proto::Launch::Failed {
+                        message: format!("{} could not start it: {e}", crate::title()),
+                    })
+                }
+            };
+            if answer.is_none(py) {
+                return None;
+            }
+            let value = match crate::from_py(answer.bind(py)) {
+                Ok(value) => value,
+                Err(e) => return Some(droidtop_agent_core::proto::Launch::Failed { message: e.to_string() }),
+            };
+            Some(serde_json::from_value(value.clone()).unwrap_or_else(|e| droidtop_agent_core::proto::Launch::Failed {
+                message: format!("{} answered {value} ({e})", crate::title()),
+            }))
+        })
+    }
+}
+
+/// Starts the desktop manager's own games for a handheld that may start games here:
+/// `launcher(key=, title=)` is called for every key that is not Steam's
+/// (on one of the service's threads) and returns None when the key is not
+/// one of its games, else the outcome as the protocol has it:
+/// `{"result": "started", "stream": "windowcast"}`, `{"result":
+/// "unknown_game"}` or `{"result": "failed", "message": ...}`. A launcher
+/// that raises is `failed` with its words. While one is set, the hello
+/// states `launch_host`. None takes it away.
+#[pyfunction]
+#[pyo3(signature = (launcher))]
+fn set_launcher(py: Python<'_>, launcher: Option<PyObject>) -> PyResult<PyObject> {
+    let a = py.allow_threads(agent).map_err(crate::AgentError::new_err)?;
+    let set = launcher.is_some();
+    *a.launcher.lock().unwrap() =
+        launcher.map(|l| std::sync::Arc::new(PythonLauncher(l)) as std::sync::Arc<dyn droidtop_agent_service::launch::Launcher>);
+    run(py, move || Ok(json!({ "launcher": set })))
 }
 
 /// The service, once started: Ok while it serves, or why it stopped.

@@ -12,6 +12,11 @@ release carries until its number is written in.
   links to the same key. Only devices that state hello feature `identity`
   receive links; the cloud folder carries none. Pythia sets them with
   `store.link` and reads `store.canonical`.
+- The Python module (`droidtop_agent`) can now keep a copy of a game's saves on demand (`saves.back_up`),
+  take a desktop manager's launcher for the games it starts itself (`service.set_launcher`), and pair this
+  computer with another by comparing a code (`pair.offer`, `find`, `pick`, `compare_status`, `confirm`,
+  `stop`), as Pythia's own copy of these bindings already did. A desktop manager now builds its module
+  over this one instead of copying it (Droidtop/tracker#867).
 - Context adapters, protocol 2 (Droidtop/tracker#794, docs/DESIGN.md
   section 8): an adapter for an app that cannot publish its own copy
   (F95Checker) says `"snapshot": true`, and before a handheld reads the copy
