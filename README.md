@@ -86,6 +86,17 @@ and `droidtop-agent saves add` covers anything else.
 
 [Pythia](https://github.com/bi0shacker001/pythia) is the associated desktop manager: a multi-system game library manager (GPL-3.0). It does not run games. It keeps track of which games exist, where, on which of your systems and platforms, and what each one needs to run.
 
+## Install on Windows
+
+`droidtop-agent-setup-windows-x86_64.exe` installs it for you alone, with no
+administrator, into your own Programs folder with a Start menu entry. Setup
+asks whether it should start when you sign in (off unless you tick it).
+Uninstalling it from Settings > Apps stops it and removes the program; your
+pairings, settings and kept saves stay. `packaging/windows/README.txt` has the
+silent install for scripts. The installer is not signed yet, so SmartScreen
+may ask: More info, then Run anyway. The bare `.exe` files are in each release
+too.
+
 ## Install on Linux
 
 Every release carries four ways to install it (x86_64 and aarch64, 64-bit

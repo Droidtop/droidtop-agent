@@ -6,6 +6,11 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A Windows installer (Droidtop/tracker#116):
+  `droidtop-agent-setup-windows-x86_64.exe` installs the agent for you
+  alone, with no administrator, adds it to the Start menu, and can start it
+  when you sign in. Uninstalling it stops the agent and keeps your
+  pairings, settings and kept saves.
 - Context adapters, protocol 2 (Droidtop/tracker#794, docs/DESIGN.md
   section 8): an adapter for an app that cannot publish its own copy
   (F95Checker) says `"snapshot": true`, and before a handheld reads the copy
