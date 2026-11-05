@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 droidtop-agent-service = { path = "../service" }
+droidtop-agent-stream = { path = "../stream" }
 droidtop-agent-store.workspace = true
 droidtop-agent-saves.workspace = true
 droidtop-agent-pair.workspace = true

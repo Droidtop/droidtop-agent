@@ -6,6 +6,10 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- The window's Status page has a Streaming games section
+  (Droidtop/tracker#116): whether this computer can stream to a handheld,
+  which handhelds can watch the games they start, and who is watching now,
+  with how many windows and for how long.
 - Context adapters, protocol 2 (Droidtop/tracker#794, docs/DESIGN.md
   section 8): an adapter for an app that cannot publish its own copy
   (F95Checker) says `"snapshot": true`, and before a handheld reads the copy
