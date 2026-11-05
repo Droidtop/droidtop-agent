@@ -179,6 +179,14 @@ pub const COMMANDS: &[Command] = &[
         ]
     ),
     command!(
+        "sharing",
+        devices::sharing,
+        [(
+            "sharing [<id> all | games]",
+            "What a handheld may watch when it streams from here: every window\n(all, the default) or only the games it starts (games)"
+        )]
+    ),
+    command!(
         "autostart",
         network::autostart,
         [(

@@ -218,3 +218,30 @@ fn launch_switch(agent: &Agent, id: &str, allow: bool) -> Result<(), String> {
     println!("{name} {} start games on this computer.", if allow { "may now" } else { "may no longer" });
     Ok(())
 }
+
+/// What each handheld may watch when it streams from here (docs/DESIGN.md
+/// section 22, Droidtop/tracker#116).
+pub fn sharing(agent: &Arc<Agent>, args: &[&str]) -> Result<(), String> {
+    use droidtop_agent_service::sharing::{self, Sharing};
+    let config = &agent.store.dirs.config;
+    match args {
+        [] => {
+            let devices = agent.store.devices_now();
+            if devices.is_empty() {
+                println!("No handheld is paired.");
+            }
+            for d in &devices {
+                println!("{}  {}  watches {}", &d.id[..16], d.name, sharing::of(config, &d.id).words());
+            }
+            Ok(())
+        }
+        [id, word] => {
+            let choice = Sharing::parse(word).ok_or_else(|| usage("sharing"))?;
+            let (full, name) = one(agent, id, "handheld")?;
+            sharing::set(config, &full, choice).map_err(|e| e.to_string())?;
+            println!("{name} now watches {} when it streams from this computer.", choice.words());
+            Ok(())
+        }
+        _ => Err(usage("sharing")),
+    }
+}

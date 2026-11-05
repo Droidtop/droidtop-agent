@@ -1077,7 +1077,17 @@ macOS, so nobody needs the command line.
 - **Pages:**
   - **Status:** whether it serves, the firewall hint (TCP and UDP 47610 at
     home, UDP 47611 away), the paired handhelds with when each was last seen
-    (each can be forgotten), and how it is reached away from home.
+    (each can be forgotten), and how it is reached away from home. Then
+    **Streaming games** (Droidtop/tracker#116): whether this computer can
+    stream (Windows only, section 22), the handhelds that can watch the
+    games they start (those with a `viewer`), the streaming host's state,
+    and who is watching now: each viewer connected to the embedded host
+    (windowcast's `HostControl::clients` and `streams`, which the agent keeps
+    by serving through `serve_with`), named by the paired handheld whose
+    viewer it is, with how many windows it watches, for how long, and from
+    where. A window attached to another running agent says the one that
+    serves shows it. Stopping one viewer's stream from here is not built:
+    windowcast's host has no call to end one client's session.
   - **Pair a handheld:** type the code the handheld shows, or "Show a code":
     this computer listens (TCP 47612) and shows its addresses, the code and
     a QR code of the same invitation. Stop ends it.
@@ -1759,12 +1769,20 @@ Sandustry from the owner's Windows desktop to a Retroid Pocket 5.
   compositor (sway) and PulseAudio, and would add libpulse to the agent's
   Linux packages; there is no macOS host. Elsewhere the agent states no
   `stream`.
+- **What a handheld may watch** (Droidtop/tracker#116): every window, the
+  default, or only the games it starts (`droidtop-agent sharing <id> all |
+  games`, or the choice beside each handheld under Streaming games on the
+  Status page), kept by device id in the agent's own
+  `stream-sharing.json`. With games, starting a game for that handheld
+  limits its viewer to the game's windows through windowcast's
+  `HostControl::limit_device`: the game's title anywhere in a window's
+  title, and each program at the top of its install folder (a Windows
+  window's app id is its program's name). The next game it starts replaces
+  the limit. Every window is the default because a handheld also streams
+  the computer's other applications (droidtop's Apps), which reach
+  windowcast without the agent and a game's limit would refuse. Built to the
+  recommendation, owner to confirm.
 - **Not built:**
-  - showing *only* the game's windows. windowcast admits a trusted viewer
-    to every window (its policy has per-window rules only for accounts),
-    exactly as it already admits every handheld paired with the agent,
-    which shares its trusted list. Limiting a viewer to the windows of the
-    game it started needs a per-peer window rule in windowcast;
   - streaming from away: the host listens on the LAN, and the agent's
     WireGuard tunnel carries only the agent's own channel;
   - the Linux host, and service mode (a host running as SYSTEM to reach the
