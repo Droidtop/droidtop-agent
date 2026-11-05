@@ -129,9 +129,10 @@ droidtop-agent` or `dnf remove droidtop-agent`.
 cargo build --release -p droidtop-agent -p droidtop-agent-app
 ```
 
-CI builds both programs for Linux (x86_64, aarch64, and the four Linux packages above), Windows and macOS (arm64, x86_64), and droidtop's Android library
-(`libdroidtop_agent.so`, arm64-v8a and x86_64), on every push. Each green
-build on `main` is published as a release.
+CI builds both programs for Linux (x86_64, aarch64, and the four Linux packages above), Windows and macOS (arm64,
+x86_64) on every push. Each green build on `main` is published as a release. droidtop's Android library
+(`libdroidtop_agent.so`) is built by droidtop from its own `native/`, over the same shared libraries
+(Droidtop/tracker#867).
 
 ## Licence
 

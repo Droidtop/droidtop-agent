@@ -6,6 +6,9 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Releases no longer carry droidtop's Android library (`droidtop-agent-android.tar.zst`): droidtop builds
+  `libdroidtop_agent.so` itself from its own `native/`, the code that was `crates/android` here, over the
+  same shared libraries (Droidtop/tracker#867). Nothing changes for people using the agent.
 - The Python module (`droidtop_agent`) can now keep a copy of a game's saves on demand (`saves.back_up`),
   take a desktop manager's launcher for the games it starts itself (`service.set_launcher`), and pair this
   computer with another by comparing a code (`pair.offer`, `find`, `pick`, `compare_status`, `confirm`,

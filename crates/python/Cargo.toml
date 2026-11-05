@@ -8,9 +8,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [lib]
-# The Rust name a manager imports it by; the Python module is still droidtop_agent (pyproject.toml
-# module-name, and the #[pymodule] below). Not droidtop_agent: crates/android's rlib has that name, and two rlibs
-# of one name in one target folder overwrite each other.
+# The Rust name a manager imports it by (Pythia's native/); the Python module is droidtop_agent
+# (pyproject.toml module-name, and the #[pymodule] in src/lib.rs).
 name = "droidtop_agent_python"
 # cdylib: the droidtop_agent module itself; rlib: so a desktop manager builds its own module over it
 # (Embedder, register; docs/DESIGN.md section 16).
