@@ -1053,7 +1053,17 @@ macOS, so nobody needs the command line.
 - **Pages:**
   - **Status:** whether it serves, the firewall hint (TCP and UDP 47610 at
     home, UDP 47611 away), the paired handhelds with when each was last seen
-    (each can be forgotten), and how it is reached away from home.
+    (each can be forgotten), and how it is reached away from home. Then
+    **Streaming games** (Droidtop/tracker#116): whether this computer can
+    stream (Windows only, section 22), the handhelds that can watch the
+    games they start (those with a `viewer`), the streaming host's state,
+    and who is watching now: each viewer connected to the embedded host
+    (windowcast's `HostControl::clients` and `streams`, which the agent keeps
+    by serving through `serve_with`), named by the paired handheld whose
+    viewer it is, with how many windows it watches, for how long, and from
+    where. A window attached to another running agent says the one that
+    serves shows it. Stopping one viewer's stream from here is not built:
+    windowcast's host has no call to end one client's session.
   - **Pair a handheld:** type the code the handheld shows, or "Show a code":
     this computer listens (TCP 47612) and shows its addresses, the code and
     a QR code of the same invitation. Stop ends it.

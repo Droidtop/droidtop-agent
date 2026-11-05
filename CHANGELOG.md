@@ -6,6 +6,10 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- The window's Status page has a Streaming games section
+  (Droidtop/tracker#116): whether this computer can stream to a handheld,
+  which handhelds can watch the games they start, and who is watching now,
+  with how many windows and for how long.
 - Releases no longer carry droidtop's Android library (`droidtop-agent-android.tar.zst`): droidtop builds
   `libdroidtop_agent.so` itself from its own `native/`, the code that was `crates/android` here, over the
   same shared libraries (Droidtop/tracker#867). Nothing changes for people using the agent.
