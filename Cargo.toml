@@ -15,12 +15,12 @@ rust-version = "1.85"
 droidtop-agent-core = { package = "sync-core", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
 droidtop-agent-store = { package = "sync-store", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
 droidtop-agent-pair = { package = "sync-pair", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
-# On Rust 1.85 (Droidtop/tracker#867): lib-games ci/rust-1.85 ee121ab (games-scan 0.3.1), lib-saves ci/rust-1.85
-# b1e1108 (saves-locate 0.2.1), lib-plugins ci/rust-1.85 17c2981 (plugins-contexts 0.2.2), each on lib-sync 0.1.6.
-# Each becomes its tag once released.
+# The Rust 1.85 releases (Droidtop/tracker#867). games-scan by rev ee121ab, the commit tagged lib-games v0.3.1,
+# because lib-saves v0.2.1 names it by that rev and cargo counts a rev and a tag as two sources; it becomes
+# tag = "v0.3.1" with the next lib-saves that names the tag.
 droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", rev = "ee121ab997b76c3f24951aae6ffe49d670d822da" }
-droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", rev = "b1e11080dc3a93031f344073f0e835dfa8192621" }
-droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", rev = "17c2981eb275abaeb1425489061834c09b3eec36" }
+droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", tag = "v0.2.1" }
+droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", tag = "v0.2.2" }
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
 # this workspace is too.
