@@ -15,11 +15,10 @@ rust-version = "1.89"
 droidtop-agent-core = { package = "sync-core", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.2" }
 droidtop-agent-store = { package = "sync-store", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.2" }
 droidtop-agent-pair = { package = "sync-pair", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.2" }
-# lib-games main 6642652 and lib-saves ci/sync-0.1.2 d5d848f: the commits that become lib-games v0.1.3 and lib-saves
-# v0.1.3. Their tags wait on CI that builds this agent with them (Droidtop/tracker#798); each becomes its tag once
-# it exists.
-droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", rev = "664265258b06db4f4d41b0d3658154c78e462647" }
-droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", rev = "d5d848fea9123e7ec7bd5f882a1bd92a36bcf97d" }
+# lib-games ci/title-key-870 688f6ad (games-scan 0.3.0: Epic catalog ids, title2 keys; Droidtop/tracker#871, #870)
+# and lib-saves ci/title-key-870 af9de3b (saves-locate 0.2.0 on it). Each becomes its tag once released.
+droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", rev = "688f6adf382e291457e007e3d8caf7f9c8f34134" }
+droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", rev = "af9de3be74d0d7d931f32142be54ba806b640c3b" }
 droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", tag = "v0.2.1" }
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
