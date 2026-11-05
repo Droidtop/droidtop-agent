@@ -113,6 +113,29 @@ jobs:
           name: droidtop-agent-${{ matrix.system }}
           path: dist/
 
+  # Pythia builds the agent crates it links (python, service, stream and what they use) with Ubuntu's rustc-1.85,
+  # as Launchpad does (Droidtop/tracker#867). They are checked with 1.85, resolving dependencies to versions 1.85 can
+  # build, as a consumer's lock would. simple_asn1 0.6.4 (windowcast-accounts -> jsonwebtoken) needs time >= 0.3.47,
+  # which needs 1.88, but declares no rust-version, so the resolver cannot see it: it is held at 0.6.3. crates/app
+  # (egui 0.33, Rust 1.88) and the binary that links it are not Pythia's and are left out.
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: "1.85"
+      - name: Check Pythia's crates with Rust 1.85
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        run: |
+          cargo generate-lockfile
+          cargo update -p simple_asn1 --precise 0.6.3
+          cargo update -p time
+          cargo check -p droidtop-agent-python -p droidtop-agent-service -p droidtop-agent-stream --all-targets
+
   linux-packages:
     # The Linux builds of the test job, packed four ways (packaging/linux):
     # a portable tarball, one runnable file, a .deb and an .rpm. Each is

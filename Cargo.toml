@@ -7,19 +7,20 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 repository = "https://github.com/Droidtop/droidtop-agent"
-rust-version = "1.89"
+rust-version = "1.85"
 
 [workspace.dependencies]
 # The shared libraries (Droidtop/tracker#867): each a repository of its own that belongs to no program,
 # pinned here by tag. Their crates keep the names this workspace's code imports them by.
-droidtop-agent-core = { package = "sync-core", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.2" }
-droidtop-agent-store = { package = "sync-store", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.2" }
-droidtop-agent-pair = { package = "sync-pair", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.2" }
-# lib-games ci/title-key-870 688f6ad (games-scan 0.3.0: Epic catalog ids, title2 keys; Droidtop/tracker#871, #870)
-# and lib-saves ci/title-key-870 af9de3b (saves-locate 0.2.0 on it). Each becomes its tag once released.
-droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", rev = "688f6adf382e291457e007e3d8caf7f9c8f34134" }
-droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", rev = "af9de3be74d0d7d931f32142be54ba806b640c3b" }
-droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", tag = "v0.2.1" }
+droidtop-agent-core = { package = "sync-core", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
+droidtop-agent-store = { package = "sync-store", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
+droidtop-agent-pair = { package = "sync-pair", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
+# On Rust 1.85 (Droidtop/tracker#867): lib-games ci/rust-1.85 ee121ab (games-scan 0.3.1), lib-saves ci/rust-1.85
+# b1e1108 (saves-locate 0.2.1), lib-plugins ci/rust-1.85 17c2981 (plugins-contexts 0.2.2), each on lib-sync 0.1.6.
+# Each becomes its tag once released.
+droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", rev = "ee121ab997b76c3f24951aae6ffe49d670d822da" }
+droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", rev = "b1e11080dc3a93031f344073f0e835dfa8192621" }
+droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", rev = "17c2981eb275abaeb1425489061834c09b3eec36" }
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
 # this workspace is too.

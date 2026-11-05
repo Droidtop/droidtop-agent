@@ -5,7 +5,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+# The window's egui 0.33 needs Rust 1.88 in every 0.33.x; Pythia does not link this crate, so the rest of the
+# workspace stays on 1.85 (Droidtop/tracker#867).
+rust-version = "1.88"
 
 [[bin]]
 name = "droidtop-agent-app"

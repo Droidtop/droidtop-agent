@@ -6,6 +6,10 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Builds with Rust 1.85 again for what Pythia links (Droidtop/tracker#867): the workspace's `rust-version` is 1.85,
+  on lib-sync 0.1.6, games-scan 0.3.1, saves-locate 0.2.1 and plugins-contexts 0.2.2, the releases that build with
+  it. The tray window (`crates/app`) declares 1.88, which egui 0.33 needs. A new `msrv` CI job checks Pythia's
+  crates with 1.85.
 - Epic games are keyed by Epic's catalog id, `epic:<CatalogItemId>`, the key droidtop gives them, so an Epic game
   installed on both sides is one game and Stream from and Play on find it (Droidtop/tracker#871). A game with no
   store id is keyed `title2:` and its title's Lutris slug ("Being a DIK" is `title2:being-a-dik`), the one title key
