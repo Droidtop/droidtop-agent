@@ -6,6 +6,11 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A Windows installer (Droidtop/tracker#116):
+  `droidtop-agent-setup-windows-x86_64.exe` installs the agent for you
+  alone, with no administrator, adds it to the Start menu, and can start it
+  when you sign in. Uninstalling it stops the agent and keeps your
+  pairings, settings and kept saves.
 - Releases no longer carry droidtop's Android library (`droidtop-agent-android.tar.zst`): droidtop builds
   `libdroidtop_agent.so` itself from its own `native/`, the code that was `crates/android` here, over the
   same shared libraries (Droidtop/tracker#867). Nothing changes for people using the agent.
