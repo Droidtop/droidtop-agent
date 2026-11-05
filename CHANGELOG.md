@@ -6,6 +6,11 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A Windows installer (Droidtop/tracker#116):
+  `droidtop-agent-setup-windows-x86_64.exe` installs the agent for you
+  alone, with no administrator, adds it to the Start menu, and can start it
+  when you sign in. Uninstalling it stops the agent and keeps your
+  pairings, settings and kept saves.
 - What each handheld may watch when it streams from this computer
   (Droidtop/tracker#116): every window, as before, or only the games it
   starts. Choose it beside each handheld under Streaming games on the
