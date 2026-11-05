@@ -20,7 +20,7 @@ droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Dro
 droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", tag = "v0.1.3" }
 # KDE Connect for Pythia (Droidtop/tracker#645; droidtop links it in its own native/). Pinned to the
 # commit on lib-kdeconnect's ci/kdeconnect-core-645 until that lands and is tagged v0.1.0.
-kdeconnect-service = { git = "https://github.com/Droidtop/lib-kdeconnect", rev = "89afa65869e527f57909538875703ee075143396" }
+kdeconnect-service = { git = "https://github.com/Droidtop/lib-kdeconnect", rev = "9c0e88cfc9cbe8cb85dcad82d48d3a157008fbbc" }
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
 # this workspace is too.
