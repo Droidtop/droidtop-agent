@@ -1706,3 +1706,47 @@ Sandustry from the owner's Windows desktop to a Retroid Pocket 5.
     secure desktop);
   - a stream for a computer asking another computer to play (`play_on`),
     which sends no viewer.
+
+## 23. KDE Connect (Droidtop/tracker#645)
+
+The owner, 2026-11-05: "We want to get kde connect and tailscale integrated
+more closely. File transfer, keyboard input, and etc are good first things",
+and on #645: "We might as well implement all of kde connect, both client and
+server stuff. We wanna be a whole computer, but sometimes we're a phone."
+Library home, owner, 2026-11-05: "lib-kdeconnect implements explicitly
+kde-connect as a programmatic module".
+
+- **The device is lib-kdeconnect's** (`kdeconnect-service`): protocol 8,
+  discovery, the TLS link, pairing with the verification key, the plugins.
+  It speaks the real protocol, so the official KDE Connect apps see droidtop
+  and Pythia as KDE Connect devices, and they see each other the same way.
+  This repository adds no protocol code.
+- **One operation table, two front ends.** `kdeconnect_service::ops` is the
+  only binding:
+  - droidtop calls `AgentNative.call("kdeconnect_<op>", json)`, which
+    `crates/android/src/api.rs` passes through as it is;
+  - Pythia calls `droidtop_agent.kdeconnect.call(op, **kwargs)`
+    (`crates/python/src/kdeconnect.rs`), where a reply with `error` raises
+    `AgentError`.
+  The operations (`start`, `stop`, `identity`, `devices`, `event`,
+  `announce`, `addresses`, `pair`, `accept`, `refuse`, `unpair`, `ping`) and
+  their replies are listed in lib-kdeconnect's `crates/service/src/ops.rs`.
+- **It runs while it is switched on.** This is the one part of the library
+  that keeps threads and listeners (UDP 1716 and a TCP port in 1716-1764)
+  between calls, because a KDE Connect device has to be findable. It runs
+  from `start` until `stop`. The program follows it with `event`, a wait of
+  at most a minute. section 12's "no resident process" still holds for
+  everything else.
+- **State** is two JSON files in the folder `start` names: the device id
+  with its certificate, and the paired devices with their pinned
+  certificates and last addresses. droidtop passes its files dir, Pythia the
+  agent's config dir. The KDE Connect identity is its own and is not the
+  agent's `PeerId`: the official apps require their own certificate form (CN
+  = device id, no SAN).
+- **Extra addresses** (`addresses`) are the devices a person added by
+  address and a VPN plugin's peers (Tailscale, owner 2026-11-05: "Tailcale
+  plugin, not full tailscale client"). They are announced to besides the
+  broadcast, and allowed to connect from outside the local ranges.
+- **One per machine.** A second KDE Connect on the same machine (the
+  official app, or Pythia beside droidtop-agent) cannot bind UDP 1716, and
+  `start` says so in words.
