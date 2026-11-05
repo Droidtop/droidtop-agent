@@ -297,7 +297,11 @@ jobs:
               {"key": "title:ci game", "title": "CI Game", "platform": "pc", "install": {"installed": True, "version": "1.0"}, "base": folder}
           ])
           assert out["games"] == 1, out
-          assert "title:ci game" in store.library()
+          # A desktop manager's title: key is re-keyed to the one title key, title2:<Lutris slug> (Droidtop/tracker#870);
+          # nothing was stored under the old key, so it leaves no record or link behind.
+          library = store.library()
+          assert "title2:ci-game" in library, sorted(library)
+          assert "title:ci game" not in library, sorted(library)
           try:
               store.unpair("ffff")
               raise SystemExit("unpair of an unknown handheld did not raise")
