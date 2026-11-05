@@ -16,6 +16,13 @@
 //! - Any of them may print `{"error": "<words a screen can show>"}`; a
 //!   non-zero exit is an error too, with what it wrote to standard error.
 //!
+//! Protocol 2 (docs/DESIGN.md section 8) adds, for a copy the agent keeps:
+//! - `received` reads `{"generation": n, "records": {...}}`, the copy made
+//!   current, and prints `{"deferred": null}` or `{"deferred": "<why>"}`;
+//! - `snapshot` (when `describe` says `"snapshot": true`) prints
+//!   `{"records": {...}}`, the app's data as it is now; the agent publishes
+//!   it before a handheld reads the copy when it changed.
+//!
 //! An adapter reads only the fields its context declares and writes only
 //! the ones that may travel to the computer, and it writes only while the
 //! app that owns the data is closed.
@@ -142,19 +149,41 @@ impl Adapter {
     /// The protocol the program speaks now (it is asked each time, so an
     /// adapter replaced by a newer one is spoken to as the newer one).
     pub fn protocol(&self) -> Result<u64, String> {
-        Ok(run(&self.program, "describe", None)?["protocol"].as_u64().unwrap_or(1))
+        Ok(self.describe()?.0)
+    }
+
+    /// Its protocol, and whether it answers `snapshot` (protocol 2).
+    fn describe(&self) -> Result<(u64, bool), String> {
+        let reply = run(&self.program, "describe", None)?;
+        let protocol = reply["protocol"].as_u64().unwrap_or(1);
+        Ok((protocol, protocol >= 2 && reply["snapshot"].as_bool() == Some(true)))
+    }
+
+    /// The app's data as it is now (`snapshot`, protocol 2), for an adapter
+    /// that keeps no copy of its own because the app that owns the data
+    /// cannot publish one (F95Checker): read before a handheld reads the
+    /// copy, and published when it changed (docs/DESIGN.md section 8,
+    /// owner 2026-11-05). None for an adapter that does not answer it.
+    pub fn snapshot(&self) -> Result<Option<Records>, String> {
+        if !self.describe()?.1 {
+            return Ok(None);
+        }
+        let reply = run(&self.program, "snapshot", None)?;
+        serde_json::from_value(reply["records"].clone())
+            .map(Some)
+            .map_err(|e| format!("the {} adapter's snapshot could not be read ({e})", self.id))
     }
 
     /// Tells a protocol 2 adapter that a new copy of its context is current
-    /// (`received`, with the copy's generation); it brings the copy into its
-    /// own data when that is safe. Ok(Some(reason)) when it must wait (the
-    /// app that owns the data is open). A protocol 1 adapter has nothing to
-    /// be told.
-    pub fn received(&self, generation: u64) -> Result<Option<String>, String> {
+    /// (`received`, with the copy's generation and its records); it brings
+    /// the copy into its own data when that is safe. Ok(Some(reason)) when it
+    /// must wait (the app that owns the data is open). A protocol 1 adapter
+    /// has nothing to be told.
+    pub fn received(&self, generation: u64, records: &Records) -> Result<Option<String>, String> {
         if self.protocol()? < 2 {
             return Ok(None);
         }
-        let reply = run(&self.program, "received", Some(json!({ "generation": generation })))?;
+        let reply = run(&self.program, "received", Some(json!({ "generation": generation, "records": records })))?;
         Ok(reply["deferred"].as_str().map(str::to_string))
     }
 
@@ -187,7 +216,11 @@ fn pending_path(store: &Store, id: &str) -> PathBuf {
 pub fn tell_received(store: &Store, id: &str, generation: u64) -> Result<Option<String>, String> {
     let Some(adapter) = adapter(store, id) else { return Ok(None) };
     let pending = pending_path(store, id);
-    match adapter.received(generation)? {
+    let copy =
+        droidtop_agent_core::copy::CopyStore::open(&store.dirs.adapters(), id).and_then(|c| c.current()).map_err(|e| e.to_string())?;
+    // A copy made current since the one it waits for is the one to take in.
+    let generation = generation.max(copy.generation);
+    match adapter.received(generation, &copy.records)? {
         Some(why) => {
             std::fs::write(&pending, generation.to_string()).map_err(|e| e.to_string())?;
             Ok(Some(why))
@@ -214,6 +247,29 @@ pub fn deliver_pending(store: &Store) -> usize {
             matches!(tell_received(store, id, generation), Ok(None))
         })
         .count()
+}
+
+/// Brings the copy of [`id`] up to date with the app's data before a
+/// handheld reads it: a protocol 2 adapter that answers `snapshot` is asked
+/// for the data as it is now, and when its records differ from the current
+/// copy's they are published as a new generation (the files stay). Returns
+/// the new generation, or None when nothing changed or the adapter keeps no
+/// snapshot. The agent stays the only writer of the copy.
+pub fn refresh(store: &Store, id: &str) -> Result<Option<u64>, String> {
+    let Some(adapter) = adapter(store, id) else { return Ok(None) };
+    // A copy still waiting to be taken in (the app was open) holds changes
+    // the app has not got yet: a snapshot now would publish over them. The
+    // app's own changes wait until it has taken the copy in.
+    if pending_path(store, id).exists() {
+        return Ok(None);
+    }
+    let Some(records) = adapter.snapshot()? else { return Ok(None) };
+    let copies = droidtop_agent_core::copy::CopyStore::open(&store.dirs.adapters(), id).map_err(|e| e.to_string())?;
+    let current = copies.current().map_err(|e| e.to_string())?;
+    if current.records == records {
+        return Ok(None);
+    }
+    copies.publish(records, current.files).map(Some).map_err(|e| e.to_string())
 }
 
 /// The plugin's computer side publishes a new copy of [`id`] (`updated`;
@@ -450,14 +506,48 @@ esac"#,
         let adapter = Adapter { id: "demo".into(), program: program.clone() };
         assert_eq!(adapter.protocol().unwrap(), 2);
         let dir = program.parent().unwrap().to_path_buf();
-        assert_eq!(adapter.received(3).unwrap(), None);
-        assert_eq!(std::fs::read_to_string(dir.join("took")).unwrap().trim(), r#"{"generation":3}"#);
+        assert_eq!(adapter.received(3, &Records::new()).unwrap(), None);
+        assert_eq!(std::fs::read_to_string(dir.join("took")).unwrap().trim(), r#"{"generation":3,"records":{}}"#);
         std::fs::write(dir.join("open"), b"").unwrap();
-        assert_eq!(adapter.received(4).unwrap(), Some("Demo is open".to_string()));
+        assert_eq!(adapter.received(4, &Records::new()).unwrap(), Some("Demo is open".to_string()));
         // A protocol 1 adapter has nothing to be told and is not run for it.
         let old = stand_in("one", r#"case "$1" in describe) echo '{"protocol":1,"id":"old"}' ;; *) echo '{"error":"not asked"}' ;; esac"#);
-        assert_eq!(Adapter { id: "old".into(), program: old.clone() }.received(1).unwrap(), None);
+        assert_eq!(Adapter { id: "old".into(), program: old.clone() }.received(1, &Records::new()).unwrap(), None);
         for p in [program, old] {
+            let _ = std::fs::remove_dir_all(p.parent().unwrap());
+        }
+    }
+
+    #[test]
+    fn a_snapshot_adapter_publishes_its_app_data_only_when_it_changed() {
+        let store = store("snapshot");
+        let program = stand_in(
+            "snap",
+            r#"case "$1" in
+  describe) echo '{"protocol":2,"id":"demo","snapshot":true}' ;;
+  snapshot) cat "$(dirname "$0")/data" ;;
+esac"#,
+        );
+        let dir = program.parent().unwrap().to_path_buf();
+        store.settings.lock().unwrap().adapters.insert("demo".into(), program.clone());
+        std::fs::write(dir.join("data"), r#"{"records":{"1":{"name":"A"}}}"#).unwrap();
+        assert_eq!(refresh(&store, "demo").unwrap(), Some(1));
+        // The same data again makes no new generation.
+        assert_eq!(refresh(&store, "demo").unwrap(), None);
+        std::fs::write(dir.join("data"), r#"{"records":{"1":{"name":"B"}}}"#).unwrap();
+        assert_eq!(refresh(&store, "demo").unwrap(), Some(2));
+        // While a copy waits to be taken in, no snapshot is published over it.
+        std::fs::write(pending_path(&store, "demo"), "2").unwrap();
+        std::fs::write(dir.join("data"), r#"{"records":{"1":{"name":"C"}}}"#).unwrap();
+        assert_eq!(refresh(&store, "demo").unwrap(), None);
+        std::fs::remove_file(pending_path(&store, "demo")).unwrap();
+        let copy = droidtop_agent_core::copy::CopyStore::open(&store.dirs.adapters(), "demo").unwrap().current().unwrap();
+        assert_eq!(copy.records["1"]["name"], "B");
+        // An adapter that does not say snapshot is not asked.
+        let plain = demo_two("snap-plain");
+        store.settings.lock().unwrap().adapters.insert("plain".into(), plain.clone());
+        assert_eq!(refresh(&store, "plain").unwrap(), None);
+        for p in [program, plain] {
             let _ = std::fs::remove_dir_all(p.parent().unwrap());
         }
     }
@@ -477,7 +567,7 @@ esac"#,
         std::fs::remove_file(dir.join("open")).unwrap();
         assert_eq!(deliver_pending(&store), 1);
         assert!(!pending_path(&store, "demo").exists());
-        assert_eq!(std::fs::read_to_string(dir.join("took")).unwrap().trim(), r#"{"generation":5}"#);
+        assert_eq!(std::fs::read_to_string(dir.join("took")).unwrap().trim(), r#"{"generation":5,"records":{}}"#);
         let _ = std::fs::remove_dir_all(dir);
     }
 

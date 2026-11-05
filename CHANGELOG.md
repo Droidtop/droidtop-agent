@@ -6,6 +6,11 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Context adapters, protocol 2 (Droidtop/tracker#794, docs/DESIGN.md
+  section 8): an adapter for an app that cannot publish its own copy
+  (F95Checker) says `"snapshot": true`, and before a handheld reads the copy
+  the agent asks it for the app's data and publishes it when it changed.
+  `received` now carries the copy's records with its generation.
 - A device this computer no longer knows (it was unpaired here) is told so
   as the connection opens, with `code: not_paired`, so the handheld says to
   pair again instead of that the computer did not answer

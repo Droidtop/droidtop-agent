@@ -566,9 +566,26 @@ droidtop's `docs/plugin-api.md` (F8). The shape:
     to a file and runs it, and the agent makes it the current copy in one
     step. The program never touches the copy folder, so the agent is the only
     writer of the generation.
+  - **Snapshot on read** (owner, 2026-11-05, Droidtop/tracker#794,
+    choosing it over an adapter that watches the app's files and runs
+    `contexts publish`): an app the plugin does not control, F95Checker,
+    cannot publish. An adapter for one says `"snapshot": true` in
+    `describe`, and before the agent serves `context_copy_get` it runs the
+    adapter's `snapshot` verb (`{"records": {...}}`, the app's data now). When
+    the records differ from the current copy's, they are published as a new
+    generation first (`contexts::refresh`; the files stay). So the agent is
+    still the only writer of the copy, and the handheld's three-way merge sees
+    the computer's changes since the last sync. A copy still waiting to be
+    taken in (`copy/pending`, the app was open) is delivered first, and while
+    it waits no snapshot is taken: one would publish the app's older data over
+    the handheld's changes. The adapter itself merges what it receives against
+    its last snapshot, so a change made in the app between the snapshot and
+    `received` is kept.
   - **`received`** on the computer is the adapter verb `received
-    {"generation": n}`, run after a merged copy was made current. The adapter
-    brings the copy into its own data when that is safe, or answers
+    {"generation": n, "records": {...}}`, run after a merged copy was made
+    current, with that copy's records, so the adapter needs no path into the
+    agent's folders. The adapter brings the copy into its own data when that
+    is safe, or answers
     `{"deferred": "<why>"}`. A deferral is remembered (`copy/pending`) and
     told again when anything next happens in that context (a copy read or
     replaced, or a publish); there is no timer. A protocol 1 adapter is not

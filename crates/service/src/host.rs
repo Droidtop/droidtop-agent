@@ -276,10 +276,13 @@ impl Host for Agent {
     }
 
     fn context_copy(&self, context: &str) -> Result<Copy> {
-        let copy = CopyStore::open(&self.store.dirs.adapters(), context)?.current()?;
-        // A wait that is over ends here, with no timer.
+        // The app's data as it is now, for an adapter whose app cannot
+        // publish (docs/DESIGN.md section 8: snapshot on read).
+        // A wait that is over ends here, with no timer, and before the
+        // snapshot: a copy still waiting is never published over.
         droidtop_agent_contexts::deliver_pending(&self.store);
-        Ok(copy)
+        droidtop_agent_contexts::refresh(&self.store, context).map_err(Error::Protocol)?;
+        Ok(CopyStore::open(&self.store.dirs.adapters(), context)?.current()?)
     }
 
     fn context_copy_put(
