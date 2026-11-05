@@ -15,11 +15,36 @@
 //! and PulseAudio, and there is no macOS host.
 
 use std::path::Path;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+
+// The agent's tunnel as windowcast's carrier (Droidtop/tracker#113); also
+// built for its tests on Linux x86_64, where nothing serves it.
+#[cfg(any(windows, all(test, target_os = "linux", target_arch = "x86_64")))]
+pub mod carried;
 
 /// The port windowcast's host listens on, the one a handheld assumes when the
 /// answer names no address.
 pub const PORT: u16 = 47100;
+
+/// One tunnel session's side link and datagrams, as lib-sync hands them
+/// over (`TunnelStream::side` and `TunnelStream::datagrams`). An empty read
+/// on the side link is its end; dropping `side_out` closes it.
+pub struct Carried {
+    pub side_out: Sender<Vec<u8>>,
+    pub side_in: Receiver<Vec<u8>>,
+    pub datagrams_out: Sender<Vec<u8>>,
+    pub datagrams_in: Receiver<Vec<u8>>,
+}
+
+impl Carried {
+    /// Waits for the other end to say something on the side link: the
+    /// handheld starting a stream's signaling. Its first bytes, or `None`
+    /// when the tunnel ended first.
+    pub fn first_words(&self) -> Option<Vec<u8>> {
+        self.side_in.recv().ok().filter(|chunk| !chunk.is_empty())
+    }
+}
 
 /// Whether this build can host a stream on this system.
 pub const fn supported() -> bool {
@@ -64,9 +89,20 @@ pub struct Watcher {
 /// The embedded host, started on demand.
 pub struct Streamer {
     state: Arc<Mutex<State>>,
-    /// The serving host's control: who is connected and what each watches.
+    /// The serving host: its control (who is connected and what each
+    /// watches), its windows, and the runtime it runs on, which a stream
+    /// carried by the agent's tunnel uses too.
     #[cfg(windows)]
-    control: Mutex<Option<Arc<windowcast_host::HostControl>>>,
+    serving: Mutex<Option<Serving>>,
+}
+
+/// What the embedded host serves with, kept for a carried stream.
+#[cfg(windows)]
+#[derive(Clone)]
+struct Serving {
+    control: Arc<windowcast_host::HostControl>,
+    source: Arc<dyn windowcast_host::WindowSource>,
+    runtime: tokio::runtime::Handle,
 }
 
 impl Default for Streamer {
@@ -80,7 +116,7 @@ impl Streamer {
         Streamer {
             state: Arc::new(Mutex::new(State::Off)),
             #[cfg(windows)]
-            control: Mutex::new(None),
+            serving: Mutex::new(None),
         }
     }
 
@@ -93,10 +129,10 @@ impl Streamer {
             return Ok(Hosting::Here);
         }
         let hosting = match start(data_dir, Arc::clone(&self.state))? {
-            Started::Here(_control) => {
+            Started::Here(_serving) => {
                 #[cfg(windows)]
                 {
-                    *self.control.lock().unwrap_or_else(|e| e.into_inner()) = Some(_control);
+                    *self.serving.lock().unwrap_or_else(|e| e.into_inner()) = Some(_serving);
                 }
                 *state = State::Serving;
                 Hosting::Here
@@ -114,8 +150,8 @@ impl Streamer {
         #[cfg(windows)]
         {
             let peer = windowcast_identity::PeerId::from_hex(viewer).map_err(|e| format!("not a viewer id ({e})"))?;
-            if let Some(control) = self.control.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                control.limit_device(peer, globs);
+            if let Some(serving) = self.serving.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                serving.control.limit_device(peer, globs);
             }
             Ok(())
         }
@@ -134,7 +170,7 @@ impl Streamer {
             if !matches!(*self.state.lock().unwrap_or_else(|e| e.into_inner()), State::Serving) {
                 return Vec::new();
             }
-            let Some(control) = self.control.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+            let Some(control) = self.serving.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|s| Arc::clone(&s.control)) else {
                 return Vec::new();
             };
             let streams = control.streams();
@@ -155,6 +191,31 @@ impl Streamer {
         Vec::new()
     }
 
+    /// Serves a handheld whose stream comes through the agent's own tunnel
+    /// (Droidtop/tracker#113): windowcast's signaling on the tunnel's side
+    /// link, its media on the tunnel's datagrams. `first` is what
+    /// [`Carried::first_words`] read. Blocks until the session ends,
+    /// so it runs on the tunnel session's own thread. Only this process's
+    /// host can serve it: another program on windowcast's port has its own
+    /// listener and no way in to the tunnel.
+    #[cfg(windows)]
+    pub fn serve_carried(&self, data_dir: &Path, carried: Carried, first: Vec<u8>, address: String) -> Result<(), String> {
+        if self.ensure(data_dir)? == Hosting::Elsewhere {
+            return Err(format!(
+                "another program listens on windowcast's port {PORT}, so a stream from away cannot come through the agent's tunnel"
+            ));
+        }
+        let Some(serving) = self.serving.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+            return Err("the streaming host is not serving".into());
+        };
+        serving.runtime.block_on(carried::serve(carried, first, address, serving.control, serving.source))
+    }
+
+    #[cfg(not(windows))]
+    pub fn serve_carried(&self, _data_dir: &Path, _carried: Carried, _first: Vec<u8>, _address: String) -> Result<(), String> {
+        Err("droidtop-agent streams from Windows only for now".into())
+    }
+
     /// In words, for the window and the log: whether it serves, and why it
     /// stopped when it did.
     pub fn status(&self) -> String {
@@ -171,7 +232,7 @@ impl Streamer {
 /// another program already on the port.
 enum Started {
     #[cfg(windows)]
-    Here(Arc<windowcast_host::HostControl>),
+    Here(Serving),
     #[cfg(not(windows))]
     #[allow(dead_code)]
     Here(()),
@@ -209,13 +270,15 @@ fn start(data_dir: &Path, state: Arc<Mutex<State>>) -> Result<Started, String> {
     let config = HostConfig { listen: format!("0.0.0.0:{PORT}"), pairing: false, data_dir: data_dir.to_path_buf() };
     // The host's own control, kept so the window can show who is watching.
     let control = HostControl::open(&config).map_err(|e| format!("could not start the streaming host ({e})"))?;
-    let serving = Arc::clone(&control);
+    let source: Arc<dyn windowcast_host::WindowSource> = Arc::new(source);
+    let kept = Serving { control: Arc::clone(&control), source: Arc::clone(&source), runtime: runtime.handle().clone() };
+    let serving = control;
     std::thread::Builder::new()
         .name("windowcast-host".into())
         .spawn(move || {
             let served = runtime.block_on(async move {
                 let listener = tokio::net::TcpListener::from_std(listener)?;
-                windowcast_host::serve_with(listener, serving, Arc::new(source)).await
+                windowcast_host::serve_with(listener, serving, source).await
             });
             let why = match served {
                 Ok(()) => "it ended".to_string(),
@@ -225,7 +288,7 @@ fn start(data_dir: &Path, state: Arc<Mutex<State>>) -> Result<Started, String> {
             *state.lock().unwrap_or_else(|e| e.into_inner()) = State::Stopped(why);
         })
         .map_err(|e| format!("could not start the streaming host ({e})"))?;
-    Ok(Started::Here(control))
+    Ok(Started::Here(kept))
 }
 
 #[cfg(not(windows))]

@@ -1708,10 +1708,13 @@ dependencies = [
 name = "droidtop-agent-stream"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "tokio",
  "windowcast-agent-windows",
  "windowcast-host",
  "windowcast-identity 0.38.0",
+ "windowcast-protocol",
+ "windowcast-transport",
  "windows-sys 0.59.0",
 ]
 

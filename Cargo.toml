@@ -38,6 +38,10 @@ windowcast-rendezvous = { git = "https://github.com/Droidtop/windowcast", rev = 
 # The same windowcast as above.
 windowcast-host = { git = "https://github.com/Droidtop/windowcast", rev = "37e2e432d565e94a83e49ea064283fbc661c2ef0" }
 windowcast-agent-windows = { git = "https://github.com/Droidtop/windowcast", rev = "37e2e432d565e94a83e49ea064283fbc661c2ef0" }
+# windowcast's transport and protocol: the conduit a stream through the
+# agent's tunnel takes (Droidtop/tracker#113). The same windowcast as above.
+windowcast-transport = { git = "https://github.com/Droidtop/windowcast", rev = "37e2e432d565e94a83e49ea064283fbc661c2ef0" }
+windowcast-protocol = { git = "https://github.com/Droidtop/windowcast", rev = "37e2e432d565e94a83e49ea064283fbc661c2ef0" }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 # Userspace WireGuard (BSD-3-Clause) and a userspace TCP stack to carry the

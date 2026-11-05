@@ -54,6 +54,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
+      # The stream crate's test runs windowcast's host, which links libpam.
+      - name: Install libpam for the stream test
+        if: matrix.system == 'linux-x86_64'
+        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
+
       - name: Format check
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
@@ -134,7 +139,9 @@ jobs:
           cargo generate-lockfile
           cargo update -p simple_asn1 --precise 0.6.3
           cargo update -p time
-          cargo check -p droidtop-agent-python -p droidtop-agent-service -p droidtop-agent-stream --all-targets
+          cargo check -p droidtop-agent-python -p droidtop-agent-service --all-targets
+          # Pythia links the stream crate's library; its test runs windowcast's host, which needs Rust 1.89.
+          cargo check -p droidtop-agent-stream --lib
 
   linux-packages:
     # The Linux builds of the test job, packed four ways (packaging/linux):

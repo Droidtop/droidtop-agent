@@ -18,5 +18,18 @@ path = "src/lib.rs"
 windowcast-host.workspace = true
 windowcast-identity.workspace = true
 windowcast-agent-windows.workspace = true
-tokio = { version = "1", features = ["rt-multi-thread", "net"] }
+windowcast-transport.workspace = true
+bytes = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync"] }
 windows-sys = { workspace = true, features = ["Win32_UI_HiDpi"] }
+
+# The tunnel's join to windowcast's host (src/carried.rs) is tested on
+# Linux x86_64, with a host that has no windows: windowcast's own CI builds
+# its host there, and it needs libpam (CI installs libpam0g-dev).
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
+windowcast-host.workspace = true
+windowcast-identity.workspace = true
+windowcast-transport.workspace = true
+windowcast-protocol.workspace = true
+bytes = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }

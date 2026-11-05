@@ -1782,9 +1782,28 @@ Sandustry from the owner's Windows desktop to a Retroid Pocket 5.
   the computer's other applications (droidtop's Apps), which reach
   windowcast without the agent and a game's limit would refuse. Built to the
   recommendation, owner to confirm.
+- **From away, through the agent's tunnel** (Droidtop/tracker#113; the
+  owner, 2026-10-28: "Our standard carrier tunnel is also a remote
+  streaming tunnel"). Each WireGuard session (section 10) carries, beside
+  the agent's channel, a side link (a second TCP link, inner port 47614)
+  and datagrams (inner UDP), lib-sync's `TunnelStream::side` and
+  `datagrams`. On a computer that can stream, the tunnel's thread hands
+  both to a thread of their own, which waits for the handheld's first
+  words on the side link and then serves it with the embedded host through
+  windowcast's `serve_over`: windowcast's own signaling on the side link,
+  its media on the datagrams (`crates/stream/src/carried.rs`). No second
+  path, no port 47100 from away, no rendezvous of windowcast's own. The
+  host lets in only the viewer the handheld named when it asked to start
+  the game (the same `launch_game` as on the LAN, over the same channel),
+  never a PIN. The side link and the datagrams end with the channel's link,
+  so the computer keeps that link while a stream runs, even after its
+  channel stops answering, and the handheld keeps its channel open for as
+  long as it watches. Where another program serves port 47100 the agent
+  cannot reach its host, and says so in its events.
 - **Not built:**
-  - streaming from away: the host listens on the LAN, and the agent's
-    WireGuard tunnel carries only the agent's own channel;
+  - the handheld's half of a stream from away: droidtop's library opening
+    the tunnel's side link and datagrams to windowcast's `connect_over`
+    when the LAN address does not answer (Droidtop/tracker#113 step 4);
   - the Linux host, and service mode (a host running as SYSTEM to reach the
     secure desktop);
   - a stream for a computer asking another computer to play (`play_on`),

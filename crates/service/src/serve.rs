@@ -6,6 +6,7 @@
 
 use droidtop_agent_core::sync::LockExt;
 use std::net::{TcpListener, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -101,11 +102,21 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
                 let a = a.clone();
                 thread::spawn(move || {
                     stream.set_read_timeout(Some(Duration::from_secs(120)));
+                    // The same tunnel carries a stream from away (Droidtop/tracker#113).
+                    let away = carried(&mut stream).map(|c| away_stream(&a, peer, c));
                     match Channel::accept(stream, &a.store.key, |p| *p == peer && a.store.is_trusted(p)) {
                         Ok(mut ch) => {
                             a.store.seen(&peer, None);
                             let served = serve(&mut ch, &*a);
                             session_ended(&a, &peer, " through WireGuard", served);
+                            // The side link and datagrams end with the channel's
+                            // link: a stream that started keeps it until it ends.
+                            if let Some((started, streaming)) = away {
+                                if started.load(Ordering::SeqCst) {
+                                    let _ = streaming.join();
+                                }
+                            }
+                            drop(ch);
                         }
                         Err(e) => a.events.warn(
                             "session",
@@ -170,6 +181,45 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
 
 /// A session with [`peer`] is over: said as a warning when it broke off.
 /// [`via`] names the transport when it was not the LAN.
+/// A tunnel session's side link and datagrams, which a stream from away
+/// comes through (Droidtop/tracker#113). Only where this computer can host a
+/// stream: elsewhere they are dropped, which closes the side link.
+fn carried(stream: &mut tunnel::TunnelStream) -> Option<droidtop_agent_stream::Carried> {
+    if !droidtop_agent_stream::supported() {
+        return None;
+    }
+    let side = stream.side()?;
+    let datagrams = stream.datagrams()?;
+    Some(droidtop_agent_stream::Carried {
+        side_out: side.outbound,
+        side_in: side.inbound,
+        datagrams_out: datagrams.outbound,
+        datagrams_in: datagrams.inbound,
+    })
+}
+
+/// Waits, on a thread of its own, for the handheld to start a stream on the
+/// tunnel's side link, then serves it with the embedded host. Whether one
+/// started, and the thread, which ends with the stream or with the tunnel.
+/// The host lets in only the viewer the handheld named when it asked to
+/// watch a game here, the same as on the LAN (docs/DESIGN.md section 22).
+fn away_stream(agent: &Arc<Agent>, peer: PeerId, carried: droidtop_agent_stream::Carried) -> (Arc<AtomicBool>, thread::JoinHandle<()>) {
+    let started = Arc::new(AtomicBool::new(false));
+    let (a, flag) = (agent.clone(), started.clone());
+    let streaming = thread::spawn(move || {
+        let Some(first) = carried.first_words() else { return };
+        flag.store(true, Ordering::SeqCst);
+        let device = a.store.device_name(&peer);
+        let detail = json!({ "peer": peer.to_hex(), "device": device });
+        a.events.info("stream", format!("{device} is watching from away, through WireGuard."), detail.clone());
+        match a.streamer.serve_carried(&a.store.dirs.computer, carried, first, format!("{device} (WireGuard)")) {
+            Ok(()) => a.events.info("stream", format!("{device} stopped watching from away."), detail),
+            Err(e) => a.events.warn("stream", format!("Streaming to {device} from away: {e}"), detail),
+        }
+    });
+    (started, streaming)
+}
+
 fn session_ended(agent: &Agent, peer: &PeerId, via: &str, served: droidtop_agent_core::Result<()>) {
     let device = agent.store.device_name(peer);
     let detail = |error: Option<String>| json!({ "peer": peer.to_hex(), "device": device, "error": error });

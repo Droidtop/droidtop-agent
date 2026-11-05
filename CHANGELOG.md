@@ -6,6 +6,9 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- A game streams from away through the agent's own WireGuard tunnel (Droidtop/tracker#113, docs/DESIGN.md section
+  22): on Windows, the embedded windowcast host serves a handheld over the tunnel's side link (signaling) and its
+  datagrams (media), with windowcast's `serve_over`. The handheld's half, in droidtop's library, is next.
 - Builds with Rust 1.85 again for what Pythia links (Droidtop/tracker#867): the workspace's `rust-version` is 1.85,
   on lib-sync 0.1.6, games-scan 0.3.1, saves-locate 0.2.1 and plugins-contexts 0.2.2, the releases that build with
   it. The tray window (`crates/app`) declares 1.88, which egui 0.33 needs. A new `msrv` CI job checks Pythia's
