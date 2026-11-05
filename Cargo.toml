@@ -21,20 +21,20 @@ droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
 # this workspace is too.
-windowcast-identity = { git = "https://github.com/Droidtop/windowcast", rev = "386eb74be9c17529282742a659ef6778e0fbee75" }
-windowcast-pairing = { git = "https://github.com/Droidtop/windowcast", rev = "386eb74be9c17529282742a659ef6778e0fbee75" }
+windowcast-identity = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
+windowcast-pairing = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
 # windowcast's secure-screen helper and its client API (windowcast#467):
 # service mode, docs/DESIGN.md section 19. The same windowcast as above.
-windowcast-secure-helper = { git = "https://github.com/Droidtop/windowcast", rev = "386eb74be9c17529282742a659ef6778e0fbee75" }
+windowcast-secure-helper = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
 # Rendezvous away from the LAN (Syncthing's global discovery, STUN, hole
 # punching), shared with windowcast rather than copied. windowcast v0.37.0 and
 # one commit (7359936).
-windowcast-rendezvous = { git = "https://github.com/Droidtop/windowcast", rev = "386eb74be9c17529282742a659ef6778e0fbee75" }
+windowcast-rendezvous = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
 # windowcast's host and its Windows window source: the agent streams the
 # window of a game it started for a handheld (docs/DESIGN.md section 22).
 # The same windowcast as above.
-windowcast-host = { git = "https://github.com/Droidtop/windowcast", rev = "386eb74be9c17529282742a659ef6778e0fbee75" }
-windowcast-agent-windows = { git = "https://github.com/Droidtop/windowcast", rev = "386eb74be9c17529282742a659ef6778e0fbee75" }
+windowcast-host = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
+windowcast-agent-windows = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 # Userspace WireGuard (BSD-3-Clause) and a userspace TCP stack to carry the
@@ -83,6 +83,6 @@ strip = true
 # reach a crate taken from git, so they are repeated here, from the same
 # windowcast. Drop them when windowcast does.
 [patch.crates-io]
-ironrdp-connector = { git = "https://github.com/Droidtop/windowcast", rev = "386eb74be9c17529282742a659ef6778e0fbee75" }
-sspi = { git = "https://github.com/Droidtop/windowcast", rev = "386eb74be9c17529282742a659ef6778e0fbee75" }
-winscard = { git = "https://github.com/Droidtop/windowcast", rev = "386eb74be9c17529282742a659ef6778e0fbee75" }
+ironrdp-connector = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
+sspi = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }
+winscard = { git = "https://github.com/Droidtop/windowcast", rev = "b5c9aa723c4d6173e9cc101ccfbffc27cf975b73" }

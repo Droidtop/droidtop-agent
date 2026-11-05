@@ -1722,7 +1722,7 @@ dependencies = [
  "tokio",
  "windowcast-agent-windows",
  "windowcast-host",
- "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75)",
+ "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73)",
  "windows-sys 0.59.0",
 ]
 
@@ -3344,7 +3344,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-connector"
 version = "0.10.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "ironrdp-core",
  "ironrdp-error",
@@ -6928,7 +6928,7 @@ dependencies = [
 [[package]]
 name = "sspi"
 version = "0.21.3"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "async-dnssd",
  "async-recursion",
@@ -8175,7 +8175,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 [[package]]
 name = "windowcast-accounts"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -8192,7 +8192,7 @@ dependencies = [
  "thiserror 1.0.69",
  "ureq",
  "url",
- "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75)",
+ "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73)",
  "windowcast-protocol",
  "windows",
 ]
@@ -8200,7 +8200,7 @@ dependencies = [
 [[package]]
 name = "windowcast-agent-windows"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "tokio",
  "vigem-client",
@@ -8216,7 +8216,7 @@ dependencies = [
 [[package]]
 name = "windowcast-discovery"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "thiserror 1.0.69",
 ]
@@ -8224,7 +8224,7 @@ dependencies = [
 [[package]]
 name = "windowcast-host"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "async-trait",
  "audiopus_sys",
@@ -8237,22 +8237,12 @@ dependencies = [
  "tracing",
  "windowcast-accounts",
  "windowcast-discovery",
- "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75)",
- "windowcast-pairing 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75)",
+ "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73)",
+ "windowcast-pairing 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73)",
  "windowcast-protocol",
  "windowcast-pty",
- "windowcast-rendezvous 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75)",
+ "windowcast-rendezvous 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73)",
  "windowcast-transport",
-]
-
-[[package]]
-name = "windowcast-identity"
-version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
-dependencies = [
- "ed25519-dalek 2.2.0",
- "rand_core 0.6.4",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -8266,18 +8256,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "windowcast-pairing"
+name = "windowcast-identity"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
- "hkdf 0.12.4",
- "hmac 0.12.1",
+ "ed25519-dalek 2.2.0",
  "rand_core 0.6.4",
- "sha2 0.10.9",
- "spake2",
  "thiserror 1.0.69",
- "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75)",
- "zeroize",
 ]
 
 [[package]]
@@ -8296,9 +8281,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "windowcast-pairing"
+version = "0.37.0"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
+dependencies = [
+ "hkdf 0.12.4",
+ "hmac 0.12.1",
+ "rand_core 0.6.4",
+ "sha2 0.10.9",
+ "spake2",
+ "thiserror 1.0.69",
+ "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73)",
+ "zeroize",
+]
+
+[[package]]
 name = "windowcast-protocol"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "bincode",
  "serde",
@@ -8308,7 +8308,7 @@ dependencies = [
 [[package]]
 name = "windowcast-pty"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "portable-pty",
 ]
@@ -8316,7 +8316,7 @@ dependencies = [
 [[package]]
 name = "windowcast-rdp"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8346,7 +8346,7 @@ dependencies = [
 [[package]]
 name = "windowcast-rendezvous"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=7359936a6083cc7f2ca6cae67aedf45ad9797026#7359936a6083cc7f2ca6cae67aedf45ad9797026"
 dependencies = [
  "ed25519-dalek 2.2.0",
  "rand_core 0.6.4",
@@ -8362,7 +8362,7 @@ dependencies = [
 [[package]]
 name = "windowcast-rendezvous"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=7359936a6083cc7f2ca6cae67aedf45ad9797026#7359936a6083cc7f2ca6cae67aedf45ad9797026"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "ed25519-dalek 2.2.0",
  "rand_core 0.6.4",
@@ -8378,7 +8378,7 @@ dependencies = [
 [[package]]
 name = "windowcast-secure-helper"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "bincode",
  "serde",
@@ -8389,7 +8389,7 @@ dependencies = [
 [[package]]
 name = "windowcast-transport"
 version = "0.37.0"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "async-trait",
  "bytes",
@@ -8402,10 +8402,10 @@ dependencies = [
  "tracing",
  "webrtc",
  "windowcast-accounts",
- "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75)",
- "windowcast-pairing 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75)",
+ "windowcast-identity 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73)",
+ "windowcast-pairing 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73)",
  "windowcast-protocol",
- "windowcast-rendezvous 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75)",
+ "windowcast-rendezvous 0.37.0 (git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73)",
 ]
 
 [[package]]
@@ -8851,7 +8851,7 @@ dependencies = [
 [[package]]
 name = "winscard"
 version = "0.3.4"
-source = "git+https://github.com/Droidtop/windowcast?rev=386eb74be9c17529282742a659ef6778e0fbee75#386eb74be9c17529282742a659ef6778e0fbee75"
+source = "git+https://github.com/Droidtop/windowcast?rev=b5c9aa723c4d6173e9cc101ccfbffc27cf975b73#b5c9aa723c4d6173e9cc101ccfbffc27cf975b73"
 dependencies = [
  "bitflags 2.13.2",
  "crypto-bigint 0.7.10",
