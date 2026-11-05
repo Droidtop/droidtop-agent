@@ -1721,14 +1721,17 @@ kde-connect as a programmatic module".
   It speaks the real protocol, so the official KDE Connect apps see droidtop
   and Pythia as KDE Connect devices, and they see each other the same way.
   This repository adds no protocol code.
-- **One operation table, two front ends.** `kdeconnect_service::ops` is the
-  only binding:
+- **One operation table, two front ends,** each in the program's own
+  native module (Droidtop/tracker#867: each program has its own scaffold).
+  `kdeconnect_service::ops` is the only binding:
   - droidtop calls `AgentNative.call("kdeconnect_<op>", json)`, which
     droidtop's own native library (droidtop `native/src/api.rs`, the crate
     that moved there from `crates/android`) passes through as it is;
-  - Pythia calls `droidtop_agent.kdeconnect.call(op, **kwargs)`
-    (`crates/python/src/kdeconnect.rs`), where a reply with `error` raises
-    `AgentError`.
+  - Pythia calls `pythia._native.kdeconnect.call(op, **kwargs)` (Pythia
+    `native/src/kdeconnect.rs`, its own native module), where a reply with
+    `error` raises `AgentError`.
+  This repository's `crates/android` and `crates/python` carry no KDE
+  Connect: neither program loads them any more.
   The operations (`start`, `stop`, `identity`, `devices`, `event`,
   `announce`, `addresses`, `pair`, `accept`, `refuse`, `unpair`, `ping`) and
   their replies are listed in lib-kdeconnect's `crates/service/src/ops.rs`.
@@ -1740,8 +1743,8 @@ kde-connect as a programmatic module".
   everything else.
 - **State** is two JSON files in the folder `start` names: the device id
   with its certificate, and the paired devices with their pinned
-  certificates and last addresses. droidtop passes its files dir, Pythia the
-  agent's config dir. The KDE Connect identity is its own and is not the
+  certificates and last addresses. droidtop passes its files dir, Pythia
+  `DATA_DIR/droidtop/kdeconnect`. The KDE Connect identity is its own and is not the
   agent's `PeerId`: the official apps require their own certificate form (CN
   = device id, no SAN).
 - **Extra addresses** (`addresses`) are the devices a person added by

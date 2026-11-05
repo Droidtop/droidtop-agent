@@ -6,7 +6,7 @@
 //! either can take over from the other (docs/DESIGN.md section 16).
 //!
 //! One extension module with one submodule per crate of the agent:
-//! `droidtop_agent.store`, `.pair`, `.scan`, `.saves`, `.remote`, `.service` and `.kdeconnect`. One
+//! `droidtop_agent.store`, `.pair`, `.scan`, `.saves`, `.remote` and `.service`. One
 //! module and not one per crate: each extension module links its own copy of
 //! the Rust code, and one process must hold one agent.
 //!
@@ -26,7 +26,6 @@ use droidtop_agent_service::Agent;
 use pyo3::prelude::*;
 use serde_json::Value;
 
-mod kdeconnect;
 mod pair;
 mod remote;
 mod saves;
@@ -107,6 +106,5 @@ fn droidtop_agent(m: &Bound<'_, PyModule>) -> PyResult<()> {
     submodule(m, "saves", saves::fill)?;
     submodule(m, "remote", remote::fill)?;
     submodule(m, "service", service::fill)?;
-    submodule(m, "kdeconnect", kdeconnect::fill)?;
     Ok(())
 }

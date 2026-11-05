@@ -12,7 +12,6 @@ name = "droidtop_agent"
 crate-type = ["cdylib"]
 
 [dependencies]
-kdeconnect-service.workspace = true
 droidtop-agent-service = { path = "../service" }
 droidtop-agent-store.workspace = true
 droidtop-agent-pair.workspace = true
