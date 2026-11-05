@@ -6,6 +6,13 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- KDE Connect (Droidtop/tracker#645, docs/DESIGN.md section 23): droidtop
+  and Pythia can now be KDE Connect devices. They are found by the official
+  KDE Connect apps and by each other, pair with the 8-character code both
+  screens show, and share files, links, text and the clipboard both ways,
+  type and move the pointer, ring each other, show each other's battery and
+  notifications. droidtop and Pythia reach it through their own native modules; this
+  repository records the design (docs/DESIGN.md section 23).
 - Cross-store identity, first part (Droidtop/tracker#798, docs/DESIGN.md
   section 16): the library can say that two keys are one game (a `link`
   change, newest wins, undone with no target), and every device follows
