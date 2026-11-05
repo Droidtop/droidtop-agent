@@ -6,6 +6,10 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- What each handheld may watch when it streams from this computer
+  (Droidtop/tracker#116): every window, as before, or only the games it
+  starts. Choose it beside each handheld under Streaming games on the
+  Status page, or with `droidtop-agent sharing <id> all|games`.
 - The window's Status page has a Streaming games section
   (Droidtop/tracker#116): whether this computer can stream to a handheld,
   which handhelds can watch the games they start, and who is watching now,

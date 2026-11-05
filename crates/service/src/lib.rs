@@ -15,6 +15,7 @@ pub mod rendezvous;
 pub mod secure_screen;
 pub mod serve;
 pub mod share;
+pub mod sharing;
 pub mod syncthing;
 
 pub use agent::{scan_options, Agent, SavePlan};

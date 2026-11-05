@@ -118,6 +118,8 @@ pub struct App {
     save_outcome: Outcome,
     archive: Vec<GameCopies>,
     rendezvous: Option<rendezvous::Status>,
+    /// What each handheld may watch, read when the Status page opens.
+    sharing: std::collections::HashMap<String, droidtop_agent_service::sharing::Sharing>,
     loaded_at: Instant,
     plugin_outcome: Outcome,
     settings: Option<Settings>,
@@ -150,6 +152,7 @@ impl App {
             save_outcome: Default::default(),
             archive: Vec::new(),
             rendezvous: None,
+            sharing: Default::default(),
             loaded_at: Instant::now() - Duration::from_secs(3600),
             plugin_outcome: Default::default(),
             settings: None,
@@ -177,7 +180,20 @@ impl App {
         }
         self.loaded_at = Instant::now();
         match self.page {
-            Page::Status => self.rendezvous = read_json::<rendezvous::Status>(&self.agent.store.dirs.rendezvous()).ok(),
+            Page::Status => {
+                self.rendezvous = read_json::<rendezvous::Status>(&self.agent.store.dirs.rendezvous()).ok();
+                let config = &self.agent.store.dirs.config;
+                self.sharing = self
+                    .agent
+                    .store
+                    .devices_now()
+                    .into_iter()
+                    .map(|d| {
+                        let choice = droidtop_agent_service::sharing::of(config, &d.id);
+                        (d.id, choice)
+                    })
+                    .collect();
+            }
             Page::Saves => {
                 let titles = droidtop_agent_saves::library_titles(&self.agent.store.library_now());
                 self.archive = copies::kept(&self.agent.store.dirs.archive(), &titles);
@@ -470,7 +486,7 @@ impl App {
     /// Streaming a game to a handheld (docs/DESIGN.md sections 15 and 22,
     /// Droidtop/tracker#116): whether this computer can, the handhelds that
     /// may watch, and who watches now.
-    fn streaming(&self, ui: &mut egui::Ui, service: &Service, devices: &[droidtop_agent_store::Device]) {
+    fn streaming(&mut self, ui: &mut egui::Ui, service: &Service, devices: &[droidtop_agent_store::Device]) {
         ui.strong("Streaming games");
         if !droidtop_agent_stream::supported() {
             ui.label("This computer cannot stream games to a handheld yet: droidtop-agent streams from Windows only.");
@@ -483,6 +499,25 @@ impl App {
             );
         } else {
             ui.label(format!("Handhelds that can watch the games they start: {}.", allowed.join(", ")));
+        }
+        // What each may watch (Droidtop/tracker#116): every window, or only the games it starts.
+        use droidtop_agent_service::sharing::Sharing;
+        for d in devices.iter().filter(|d| d.viewer.is_some()) {
+            let mut choice = self.sharing.get(&d.id).copied().unwrap_or_default();
+            let before = choice;
+            ui.horizontal(|ui| {
+                ui.label(format!("{} watches", d.name));
+                egui::ComboBox::from_id_salt(("sharing", &d.id)).selected_text(choice.words()).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut choice, Sharing::All, Sharing::All.words());
+                    ui.selectable_value(&mut choice, Sharing::Games, Sharing::Games.words());
+                });
+            });
+            if choice != before {
+                // A choice, not every frame: the file is written once, then kept here.
+                if droidtop_agent_service::sharing::set(&self.agent.store.dirs.config, &d.id, choice).is_ok() {
+                    self.sharing.insert(d.id.clone(), choice);
+                }
+            }
         }
         if !matches!(service, Service::Running) {
             ui.label(RichText::new("Who is watching shows in the window of the droidtop-agent that serves.").weak());

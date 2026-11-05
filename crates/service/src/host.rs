@@ -42,6 +42,9 @@ struct Watching<'a> {
     agent: &'a Agent,
     peer: &'a PeerId,
     ask: &'a StreamAsk,
+    /// The game's windows, for a handheld that may watch only the games it
+    /// starts (crate::sharing).
+    game_windows: Vec<String>,
 }
 
 impl crate::launch::Watch for Watching<'_> {
@@ -55,6 +58,12 @@ impl crate::launch::Watch for Watching<'_> {
         let viewer = PeerId::from_hex(&self.ask.viewer).map_err(|_| "the handheld named no viewer windowcast can trust".to_string())?;
         self.agent.store.set_viewer(self.peer, &viewer).map_err(|e| format!("could not trust the handheld's viewer ({e})"))?;
         let hosting = self.agent.streamer.ensure(&self.agent.store.dirs.computer)?;
+        // What this handheld may watch (Droidtop/tracker#116): this game's windows, or every one.
+        let limit = match crate::sharing::of(&self.agent.store.dirs.config, &self.peer.to_hex()) {
+            crate::sharing::Sharing::Games => self.game_windows.clone(),
+            crate::sharing::Sharing::All => Vec::new(),
+        };
+        self.agent.streamer.limit_viewer(&self.ask.viewer, limit)?;
         if hosting == droidtop_agent_stream::Hosting::Elsewhere {
             self.agent.events.info(
                 "stream",
@@ -101,7 +110,11 @@ impl Host for Agent {
         self.store.reload_settings();
         let installed = || self.fresh_scan(300).find(&game.key).is_some_and(|f| f.game.install.installed);
         let host = self.launcher.locked().clone();
-        let watch = stream.map(|ask| Watching { agent: self, peer, ask });
+        let game_windows = match stream {
+            Some(_) => crate::sharing::game_globs(&game.title, self.game_folder(game).map(|(base, _)| base).as_deref()),
+            None => Vec::new(),
+        };
+        let watch = stream.map(|ask| Watching { agent: self, peer, ask, game_windows });
         let outcome = crate::launch::launch(
             self.store.may_launch(peer),
             installed,

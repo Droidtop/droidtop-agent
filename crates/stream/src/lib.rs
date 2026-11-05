@@ -106,6 +106,26 @@ impl Streamer {
         Ok(hosting)
     }
 
+    /// Keeps the viewer `viewer` (hex) to the windows `globs` match, app id
+    /// or title (windowcast's `HostControl::limit_device`,
+    /// Droidtop/tracker#116); empty takes the limit away. Sessions it starts
+    /// after this use it. Nothing to do where this process does not serve.
+    pub fn limit_viewer(&self, viewer: &str, globs: Vec<String>) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            let peer = windowcast_identity::PeerId::from_hex(viewer).map_err(|e| format!("not a viewer id ({e})"))?;
+            if let Some(control) = self.control.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                control.limit_device(peer, globs);
+            }
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (viewer, globs);
+            Ok(())
+        }
+    }
+
     /// The viewers connected to the embedded host now; none while it does not
     /// serve here (another program on the port serves its own).
     pub fn watching(&self) -> Vec<Watcher> {
