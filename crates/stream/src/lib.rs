@@ -128,7 +128,7 @@ impl Streamer {
                     windows: streams.iter().filter(|s| s.peer == c.peer).count(),
                 })
                 .collect();
-            out.sort_by(|a, b| b.for_secs.cmp(&a.for_secs));
+            out.sort_by_key(|w| std::cmp::Reverse(w.for_secs));
             out
         }
         #[cfg(not(windows))]
