@@ -21,6 +21,8 @@ pub fn fill(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_offer, m)?)?;
     m.add_function(wrap_pyfunction!(library, m)?)?;
     m.add_function(wrap_pyfunction!(set_mark, m)?)?;
+    m.add_function(wrap_pyfunction!(link, m)?)?;
+    m.add_function(wrap_pyfunction!(canonical, m)?)?;
     m.add_function(wrap_pyfunction!(announcements, m)?)?;
     m.add_function(wrap_pyfunction!(set_announce, m)?)?;
     Ok(())
@@ -162,6 +164,23 @@ fn library(py: Python<'_>) -> PyResult<PyObject> {
 fn set_mark(py: Python<'_>, game: String, field: String, value: &Bound<'_, PyAny>) -> PyResult<PyObject> {
     let value = from_py(value)?;
     run(py, move || Ok(json!(agent()?.store.set_mark(&game, &field, value))))
+}
+
+/// Says that the game known by key [`game`] is the same game as key
+/// [`into`] (`None` undoes it): a merge the person confirmed, or two store
+/// ids a store says are one game (docs/DESIGN.md section 16, step 1). It
+/// travels to every paired device that reads links. Returns whether it
+/// changed.
+#[pyfunction]
+#[pyo3(signature = (game, into=None))]
+fn link(py: Python<'_>, game: String, into: Option<String>) -> PyResult<PyObject> {
+    run(py, move || Ok(json!(agent()?.store.set_link(&game, into.as_deref()))))
+}
+
+/// The key [`key`]'s game is known by, its links followed to the end.
+#[pyfunction]
+fn canonical(py: Python<'_>, key: String) -> PyResult<PyObject> {
+    run(py, move || Ok(json!(agent()?.store.library_now().canonical(&key))))
 }
 
 /// The paired device whose id starts with [`id`].

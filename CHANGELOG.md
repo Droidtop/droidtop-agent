@@ -6,6 +6,12 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- Cross-store identity, first part (Droidtop/tracker#798, docs/DESIGN.md
+  section 16): the library can say that two keys are one game (a `link`
+  change, newest wins, undone with no target), and every device follows
+  links to the same key. Only devices that state hello feature `identity`
+  receive links; the cloud folder carries none. Pythia sets them with
+  `store.link` and reads `store.canonical`.
 - Context adapters, protocol 2 (Droidtop/tracker#794, docs/DESIGN.md
   section 8): an adapter for an app that cannot publish its own copy
   (F95Checker) says `"snapshot": true`, and before a handheld reads the copy
