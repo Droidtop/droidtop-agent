@@ -16,8 +16,12 @@ release carries until its number is written in.
   section 16): the library can say that two keys are one game (a `link`
   change, newest wins, undone with no target), and every device follows
   links to the same key. Only devices that state hello feature `identity`
-  receive links; the cloud folder carries none. Pythia sets them with
+  receive links; the cloud folder carries none (droidtop's side is in its
+  `native/`). Pythia sets them with
   `store.link` and reads `store.canonical`.
+- Releases no longer carry droidtop's Android library (`droidtop-agent-android.tar.zst`): droidtop builds
+  `libdroidtop_agent.so` itself from its own `native/`, the code that was `crates/android` here, over the
+  same shared libraries (Droidtop/tracker#867). Nothing changes for people using the agent.
 - The Python module (`droidtop_agent`) can now keep a copy of a game's saves on demand (`saves.back_up`),
   take a desktop manager's launcher for the games it starts itself (`service.set_launcher`), and pair this
   computer with another by comparing a code (`pair.offer`, `find`, `pick`, `compare_status`, `confirm`,

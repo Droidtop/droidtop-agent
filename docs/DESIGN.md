@@ -689,7 +689,7 @@ A context's conflicts are per record and per field, never per file, so
 nothing there is overwritten without a rule or an answer.
 
 CI covers this with three handhelds and three computers in one process,
-paired in a partial mesh (`crates/android/tests/mesh.rs`):
+paired in a partial mesh (droidtop's `native/tests/mesh.rs`, run by droidtop's CI):
 - the library relaying across the mesh, with one entry per game and two
   locations;
 - saves edited on two devices at once (the sync answers `conflict` and moves
@@ -909,7 +909,7 @@ and skips folders it cannot read.
   - while droidtop serves the handhelds paired with it (`serve_start` to
     `serve_stop`), the one thing that listens, and only while droidtop asks.
   Nothing polls.
-- **The operations** (`AgentNative.call(op, json)`, `crates/android/src/api.rs`).
+- **The operations** (`AgentNative.call(op, json)`, droidtop's `native/src/api.rs`).
   Every one takes the device's `seed`; the ones that reach a paired device
   also take its `peer` id, its known `addresses`, `name`, and for the
   computer path `disco` and `rendezvous`. A failure is `{"error"}`, a device
@@ -964,8 +964,9 @@ program, each repository's CI building and testing every program that uses it. S
 shares with droidtop and Pythia moved out, as they were, into those repositories, and this workspace pins
 them by tag in its root `Cargo.toml`. They keep the library names the code imports them by
 (`droidtop_agent_<name>`); renaming the imports is a later, mechanical change. What stays here is the
-agent's scaffold (`stream`, `service`, `agent`, `app`) and the bindings droidtop and Pythia load
-(`android`, `python`), which move to those programs' own scaffolds in #867 step 1.
+agent's scaffold (`stream`, `service`, `agent`, `app`) and the Python bindings a desktop manager loads
+(`python`). droidtop's JNI bindings (`crates/android`) moved to droidtop's own scaffold, `native/`, in
+#867 step 1, and droidtop builds `libdroidtop_agent.so` itself.
 
 | Crate | What it is | Depends on |
 |---|---|---|
@@ -979,7 +980,6 @@ agent's scaffold (`stream`, `service`, `agent`, `app`) and the bindings droidtop
 | `crates/service` | The running agent, `Agent`: a `Store` plus the last scan, the save catalog, the rendezvous's state; its `Host` answers (with the launch rule, section 17); serving (LAN, discovery, WireGuard), the computer's rendezvous, the cloud share, a desktop manager's games, autostart, the stream (section 22). | all above |
 | `crates/agent` | The `droidtop-agent` command line: a thin host over the crates. | service and below |
 | `crates/app` | `droidtop-agent-app`, the window and tray (section 15): what people run. | service and below |
-| `crates/android` | droidtop's `cdylib` (`libdroidtop_agent.so`) and its JNI surface. | core |
 | `crates/python` | `droidtop_agent`, the Python extension module a desktop manager loads (section 16). | service and below |
 
 - Why core stays one crate: both ends link all of it, its modules meet in
