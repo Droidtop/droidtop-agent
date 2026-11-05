@@ -4,7 +4,8 @@ name: CI
 # Linux (x86_64 and aarch64) and macOS (arm64, and x86_64 built beside it), and builds
 # droidtop's library for both Android ABIs. On Linux the programs are also
 # packed four ways (packaging/linux): a tarball, one runnable file, a .deb and
-# an .rpm. A green push to main publishes a release: the computer programs,
+# an .rpm; on Windows they are also made into a per-user installer
+# (packaging/windows). A green push to main publishes a release: the computer programs,
 # the Linux packages with install.sh, uninstall.sh and SHA256SUMS, and the
 # Android library droidtop fetches by its pin (docs/DESIGN.md section 12).
 # Releases are permanent history.
@@ -242,6 +243,81 @@ jobs:
           name: droidtop-agent-linux-packages-${{ matrix.arch }}
           path: linux/
 
+  windows-installer:
+    # The Windows build of the test job, made into a per-user installer
+    # (packaging/windows, Droidtop/tracker#116). It is installed silently,
+    # run once, and uninstalled again here before it is offered.
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: droidtop-agent-windows-x86_64
+          path: dist
+
+      - name: Install Inno Setup (pinned)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pins = @{}
+          Get-Content packaging/windows/pins.env | Where-Object { $_ -match '^([A-Z0-9_]+)=(.+)$' } | ForEach-Object { $pins[$Matches[1]] = $Matches[2] }
+          $version = $pins['INNO_VERSION']
+          $tag = 'is-' + $version.Replace('.', '_')
+          Invoke-WebRequest -Uri "https://github.com/jrsoftware/issrc/releases/download/$tag/innosetup-$version.exe" -OutFile inno.exe
+          $hash = (Get-FileHash inno.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $pins['INNO_SHA256']) { throw "Inno Setup's SHA-256 is $hash, not the pinned one" }
+          $dir = Join-Path $env:RUNNER_TEMP 'inno'
+          $p = Start-Process -FilePath .\inno.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/CURRENTUSER',"/DIR=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Inno Setup's installer exited $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path $dir 'ISCC.exe'))) { throw 'no ISCC.exe' }
+
+      - name: Make the installer
+        shell: pwsh
+        env:
+          RUN: ${{ github.run_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $iscc = Join-Path $env:RUNNER_TEMP 'inno\ISCC.exe'
+          & $iscc "/DAppVersion=0.1.$env:RUN" "/DDist=$env:GITHUB_WORKSPACE\dist" packaging\windows\droidtop-agent.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC exited $LASTEXITCODE" }
+          New-Item -ItemType Directory -Force windows | Out-Null
+          Copy-Item packaging\windows\out\droidtop-agent-setup-windows-x86_64.exe windows\
+          Get-ChildItem windows
+
+      - name: Install it, run it, uninstall it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Start-Process -FilePath windows\droidtop-agent-setup-windows-x86_64.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=autostart' -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "setup exited $($setup.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\droidtop-agent'
+          foreach ($f in 'droidtop-agent.exe','droidtop-agent-app.exe','windowcast-secure-helper.exe','unins000.exe') {
+            if (-not (Test-Path (Join-Path $dir $f))) { throw "missing $f" }
+          }
+          $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'droidtop-agent.lnk'
+          if (-not (Test-Path $lnk)) { throw "no Start menu entry at $lnk" }
+          & (Join-Path $dir 'droidtop-agent.exe') --help | Select-Object -First 3
+          $run = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'droidtop-agent' -ErrorAction SilentlyContinue
+          if (-not $run) { throw 'the autostart task did not turn on starting at sign-in' }
+          Write-Output "starts at sign-in: $($run.'droidtop-agent')"
+          $un = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($un.ExitCode -ne 0) { throw "uninstall exited $($un.ExitCode)" }
+          # The uninstaller removes itself a moment after it exits.
+          Start-Sleep -Seconds 5
+          if (Test-Path (Join-Path $dir 'droidtop-agent.exe')) { throw 'the program was left behind' }
+          if (Test-Path $lnk) { throw 'the Start menu entry was left behind' }
+          if (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'droidtop-agent' -ErrorAction SilentlyContinue) { throw 'starting at sign-in was left on' }
+          Write-Output 'installed, ran and uninstalled'
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: droidtop-agent-windows-installer
+          path: windows/
+
   python:
     # The agent as a Python extension module (crates/python), the one a
     # desktop manager such as Pythia loads to be this computer's agent:
@@ -346,7 +422,7 @@ jobs:
 
   release:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test, linux-packages, python]
+    needs: [test, linux-packages, windows-installer, python]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

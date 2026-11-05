@@ -26,6 +26,11 @@ release carries until its number is written in.
   type and move the pointer, ring each other, show each other's battery and
   notifications. droidtop and Pythia reach it through their own native modules; this
   repository records the design (docs/DESIGN.md section 23).
+- A Windows installer (Droidtop/tracker#116):
+  `droidtop-agent-setup-windows-x86_64.exe` installs the agent for you
+  alone, with no administrator, adds it to the Start menu, and can start it
+  when you sign in. Uninstalling it stops the agent and keeps your
+  pairings, settings and kept saves.
 - Cross-store identity, first part (Droidtop/tracker#798, docs/DESIGN.md
   section 16): the library can say that two keys are one game (a `link`
   change, newest wins, undone with no target), and every device follows

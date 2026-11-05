@@ -1096,6 +1096,18 @@ agent's scaffold (`stream`, `relay`, `service`, `agent`, `app`) and the Python b
   keeps the person's data unless `--purge`. The packages ship the systemd
   user unit disabled. The downloaded tools (nfpm, uruntime) are pinned by
   version and SHA-256 in `packaging/linux/pins.env`.
+  Windows also gets an installer (`packaging/windows`, built by the
+  `windows-installer` job, Droidtop/tracker#116):
+  `droidtop-agent-setup-windows-x86_64.exe`, made with Inno Setup (pinned by
+  version and SHA-256 in `packaging/windows/pins.env`). It installs per user
+  with no administrator into `%LOCALAPPDATA%\Programs\droidtop-agent`: the
+  agent, the window-and-tray app and the secure-screen helper (section 19),
+  and a Start menu entry. Its one choice is starting at sign-in, off unless
+  ticked (decision 9), which runs the agent's own `autostart on`. Updating
+  over it and uninstalling stop the running copies first; uninstalling
+  removes the program, its Start menu entry and the Run value, and keeps the
+  person's data, as `uninstall.sh` does. CI installs it silently, runs it,
+  and uninstalls it before it is offered.
 
 ## 14. Decisions for the owner
 
