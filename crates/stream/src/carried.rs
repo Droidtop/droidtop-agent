@@ -118,7 +118,8 @@ pub async fn serve(
     windowcast_host::serve_over(stream, address, control, source, conduit).await.map_err(|e| e.to_string())
 }
 
-#[cfg(test)]
+// Its dependencies are Linux x86_64's only (Cargo.toml).
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
