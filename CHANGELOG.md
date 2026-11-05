@@ -6,6 +6,12 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- KDE Connect (Droidtop/tracker#645, docs/DESIGN.md section 23): droidtop
+  and Pythia can now be KDE Connect devices. They are found by the official
+  KDE Connect apps and by each other, pair with the 8-character code both
+  screens show, and ping. File transfer, clipboard and remote input follow.
+  droidtop and Pythia reach it through their own native modules; this
+  repository records the design (docs/DESIGN.md section 23).
 - What each handheld may watch when it streams from this computer
   (Droidtop/tracker#116): every window, as before, or only the games it
   starts. Choose it beside each handheld under Streaming games on the
