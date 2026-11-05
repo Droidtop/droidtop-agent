@@ -13,21 +13,24 @@ pub fn fill(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lookup, m)?)?;
     m.add_function(wrap_pyfunction!(copies, m)?)?;
     m.add_function(wrap_pyfunction!(restore, m)?)?;
+    m.add_function(wrap_pyfunction!(back_up, m)?)?;
     Ok(())
 }
 
 /// Where a game (by `key`, or by `title` when the key is not found) keeps
 /// its saves here: `patterns` (None when nothing is known) and the `files`
 /// found now, each with its `name` and `path`; `syncthing`, the locations the
-/// Syncthing here already syncs (each `pattern` with its folder's `label` and
-/// `path`), which this computer leaves to it, and `all_by_syncthing` when that
-/// is every one. With `fetch`, the Ludusavi
-/// manifest is fetched first when there is none yet. May rescan (slow).
+/// Syncthing here already syncs (`pattern`, its folder's `label` and `path`),
+/// which this computer leaves to it, and `all_by_syncthing` when that is
+/// every one. With `fetch`, the Ludusavi manifest is fetched first when there
+/// is none yet. May rescan (slow).
 #[pyfunction]
 #[pyo3(signature = (key, title = String::new(), fetch = false))]
 fn lookup(py: Python<'_>, key: String, title: String, fetch: bool) -> PyResult<PyObject> {
     run(py, move || {
         let a = agent()?;
+        // What the agent syncs and what it leaves to the Syncthing here (droidtop-agent
+        // Agent::save_plan; Droidtop/tracker#538).
         Ok(match a.save_plan(&GameRef { key, title }, fetch) {
             None => json!({ "patterns": null, "files": [], "syncthing": [], "all_by_syncthing": false }),
             Some(plan) => {
@@ -66,4 +69,32 @@ fn copies(py: Python<'_>) -> PyResult<PyObject> {
 #[pyo3(signature = (key, path, title = String::new()))]
 fn restore(py: Python<'_>, key: String, path: PathBuf, title: String) -> PyResult<PyObject> {
     run(py, move || Ok(json!(agent()?.restore_saves(&GameRef { key, title }, &path)?)))
+}
+
+/// Keeps a copy of a game's saves as they are here now, as this computer's
+/// own copy (the copy it kept before moves into the dated archive, which
+/// keeps the 5 newest): what a sync keeps before it overwrites, on demand.
+/// Returns `files` (how many were copied; 0 when the game has none here) and
+/// `known` (False when no save location is known for the game: nothing is
+/// copied). May rescan (slow).
+#[pyfunction]
+#[pyo3(signature = (key, title = String::new()))]
+fn back_up(py: Python<'_>, key: String, title: String) -> PyResult<PyObject> {
+    use droidtop_agent_core::server::Host;
+
+    run(py, move || {
+        let a = agent()?;
+        let game = GameRef { key, title };
+        let Some((spec, roots, _)) = a.save_lookup(&game, false) else {
+            return Ok(json!({ "files": 0, "known": false }));
+        };
+        let files = droidtop_agent_core::saves::collect(&spec, &roots);
+        let count = files.len();
+        if count > 0 {
+            let archive = Host::archive_dir(&*a, &game);
+            droidtop_agent_core::savesync::keep_copy(files.into_iter(), &archive, &a.store.name())
+                .map_err(|e| format!("the copy could not be kept: {e}"))?;
+        }
+        Ok(json!({ "files": count, "known": true }))
+    })
 }
