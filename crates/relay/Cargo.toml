@@ -1,0 +1,21 @@
+[package]
+name = "droidtop-agent-relay"
+description = "A DERP-style relay that forwards WireGuard ciphertext between two paired keys, and the bridge that carries a tunnel through it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "droidtop_agent_relay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "droidtop-relay"
+path = "src/main.rs"
+
+[dependencies]
+droidtop-agent-core.workspace = true
+ed25519-dalek.workspace = true
+rand_core.workspace = true

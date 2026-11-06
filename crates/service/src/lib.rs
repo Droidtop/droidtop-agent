@@ -10,6 +10,7 @@ pub mod host;
 pub mod launch;
 pub mod manager;
 pub mod periodic;
+pub mod relay;
 pub mod remote;
 pub mod rendezvous;
 pub mod secure_screen;

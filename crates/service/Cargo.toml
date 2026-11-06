@@ -18,6 +18,8 @@ droidtop-agent-saves.workspace = true
 droidtop-agent-scan.workspace = true
 droidtop-agent-store.workspace = true
 droidtop-agent-stream = { path = "../stream" }
+# The droidtop-run relay's client: the fallback for a paired device away (docs/DESIGN.md section 10).
+droidtop-agent-relay = { path = "../relay" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

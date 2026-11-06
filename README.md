@@ -74,7 +74,10 @@ reachable: forward it on your router and run
 address through your firewall. The handheld learns these each time the two
 meet. When neither works, `droidtop-agent share set <folder>` names a folder
 your own sync tool carries to the handheld (pick the same folder under
-droidtop's Settings > Computers > Cloud folder).
+droidtop's Settings > Computers > Cloud folder). As a last resort,
+`droidtop-agent relay set <host>` keeps the agent on a droidtop-run relay
+(`droidtop-relay`, on the server VM), which forwards the WireGuard tunnel's
+encrypted packets between two paired devices and can read none of them.
 
 Save locations come from the [Ludusavi
 manifest](https://github.com/mtkennerly/ludusavi-manifest) (data from

@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use droidtop_agent_contexts as contexts;
 use droidtop_agent_core::sync::LockExt;
-use droidtop_agent_service::{autostart, host, rendezvous as service_rendezvous, serve, syncthing as service_syncthing, Agent};
+use droidtop_agent_service::{
+    autostart, host, relay as service_relay, rendezvous as service_rendezvous, serve, syncthing as service_syncthing, Agent,
+};
 use droidtop_agent_store::read_json;
 
 use super::{change, usage};
@@ -128,6 +130,21 @@ pub fn rendezvous(agent: &Arc<Agent>, args: &[&str]) -> Result<(), String> {
         }
         ["stun", list @ ..] if !list.is_empty() => change(agent, |s| s.stun_servers = list.iter().map(|s| s.to_string()).collect()),
         _ => Err(usage("rendezvous")),
+    }
+}
+
+pub fn relay(agent: &Arc<Agent>, args: &[&str]) -> Result<(), String> {
+    match args {
+        [] => {
+            match service_relay::settings(agent).address {
+                Some(at) => println!("Relay: {at} (only when a paired device can't reach this computer directly)"),
+                None => println!("No relay is set."),
+            }
+            Ok(())
+        }
+        ["set", at] => service_relay::set(agent, Some(at)).map_err(|e| e.to_string()),
+        ["off"] => service_relay::set(agent, None).map_err(|e| e.to_string()),
+        _ => Err(usage("relay")),
     }
 }
 

@@ -816,9 +816,62 @@ share only ever sees ciphertext.
    both, is the next backend. Credentials for any share are the person's own,
    entered through droidtop's in-app sign-in helper and stored with
    `KeystoreSecretCipher`; nothing that authenticates ships in either program.
-4. **A droidtop-run relay, later**, on the server VM (#364): a DERP-style
+4. **A droidtop-run relay**, on the server VM (#364): a DERP-style
    relay that forwards ciphertext between two keys. Only as a fallback, and
-   never a community-run one.
+   never a community-run one. Built in Droidtop/tracker#800 as
+   `crates/relay` (`droidtop-agent-relay`: the server, its client and the
+   `droidtop-relay` program), with the computer's side in the service.
+   - **It carries the WireGuard tunnel's own packets** (owner, 2026-11-06,
+     "WireGuard packets"), the way Tailscale's DERP does. They are sealed by
+     WireGuard with the two devices' pairing keys before they leave either
+     device, and the session channel's TLS runs inside them, so a sync
+     through the relay is the same call as a direct one, and the relay can
+     read none of it. No second sealing, and no second channel.
+   - **What the relay sees:** the two public keys, the packets' sizes and
+     times. Never a private key, never plaintext. It keeps no packet longer
+     than handing it on takes, and nothing on disk.
+   - **Not an open forwarder.** A device proves its key: the relay sends 32
+     random bytes, and the device signs them with its Ed25519 identity (with
+     a fixed context string). It then lists the keys it takes packets from,
+     its paired devices. A packet goes to a key only when that key allowed
+     the sender; any other packet is dropped without a word.
+   - **No change to the tunnel.** The tunnel speaks UDP, so the client (a
+     `Bridge`) stands in for the other device with a loopback UDP socket
+     per call. On the handheld, `Bridge::dial` gives an address to pass to
+     `tunnel::connect` as the computer's endpoint. On the computer, each
+     call that arrives gets a loopback socket of its own that sends to the
+     agent's WireGuard socket (127.0.0.1:47611), so `tunnel::serve` sees
+     each call from an endpoint of its own and keeps one session per call
+     (Droidtop/tracker#529). Each call is a flow, a random 32-bit number,
+     in the relay's frames.
+   - **The wire:** TCP to port 47615, then frames: a type byte, a 4-byte
+     length, the body (`Challenge`, `Hello`, `Allow`, `Send`, `Recv`). A
+     frame larger than the protocol makes (one 64 KiB packet) is refused
+     before it is read. A device that falls behind loses packets, as UDP
+     would: 512 frames wait for it, then more are dropped, and WireGuard
+     and the TCP inside it recover. The connection itself is not TLS,
+     because what it carries is already WireGuard ciphertext. A network
+     observer learns which two keys talk, as UDP between two addresses
+     would show.
+   - **On the computer:** `droidtop-agent relay set <host[:port]>` (or
+     `off`) in `relay.json`. While the agent runs, it stays connected to
+     the relay, sends its paired devices as the allow list when they
+     change, says so again every minute (which keeps the connection up),
+     and reconnects a minute after the connection ends.
+   - **On droidtop:** the handheld uses the same client crate from its
+     native library: a `Bridge` with no answer address, and its `dial`
+     address after the LAN, the stated endpoints and rendezvous. That is
+     droidtop's change. Until the relay address travels in `hello`, the
+     person enters the same relay on both.
+   - **Kept separate so it can move.** `crates/relay` depends only on
+     sync-core's keys, so it moves whole into a shared library repository
+     (#867) once droidtop takes it.
+   - **Tests** (`crates/relay/tests/through_the_relay.rs`) run lib-sync's
+     own `tunnel::serve` and `tunnel::connect` through a relay in the
+     process, with two calls at once. A tap shows each forwarded packet:
+     each one is a WireGuard message, and none holds the plaintext or
+     either key. A key that didn't allow the sender gets nothing, and a
+     device that signs with another key is turned away.
 
 Bulk traffic never goes through anyone else's relay.
 
@@ -964,7 +1017,7 @@ program, each repository's CI building and testing every program that uses it. S
 shares with droidtop and Pythia moved out, as they were, into those repositories, and this workspace pins
 them by tag in its root `Cargo.toml`. They keep the library names the code imports them by
 (`droidtop_agent_<name>`); renaming the imports is a later, mechanical change. What stays here is the
-agent's scaffold (`stream`, `service`, `agent`, `app`) and the Python bindings a desktop manager loads
+agent's scaffold (`stream`, `relay`, `service`, `agent`, `app`) and the Python bindings a desktop manager loads
 (`python`). droidtop's JNI bindings (`crates/android`) moved to droidtop's own scaffold, `native/`, in
 #867 step 1, and droidtop builds `libdroidtop_agent.so` itself.
 
@@ -976,6 +1029,7 @@ agent's scaffold (`stream`, `service`, `agent`, `app`) and the Python bindings a
 | `saves-locate` (Droidtop/lib-saves `crates/locate`) | Where a game's saves are on this computer (the person's entries, Ludusavi custom games, the Ludusavi index, token roots natively or in a prefix), the kept-copies listing and restore (sections 6 and 9). Looks games up in a scan it is given. | core, scan, store |
 | `sync-pair` (Droidtop/lib-sync `crates/pair`) | Pairing from the computer: typing the handheld's code, or showing one (section 3). | core, store |
 | `plugins-contexts` (Droidtop/lib-plugins `crates/contexts`) | Context adapters: offers, approval, install, runs (section 8). | core, store |
+| `crates/relay` | The droidtop-run relay (section 10, transport 4): the server, the `droidtop-relay` program for the server VM, and the `Bridge` client that carries a WireGuard tunnel through it. | core |
 | `crates/stream` | windowcast's host and its Windows window source, started when a handheld first asks to watch a game (section 22). On other systems it only says it cannot stream. | windowcast's host |
 | `crates/service` | The running agent, `Agent`: a `Store` plus the last scan, the save catalog, the rendezvous's state; its `Host` answers (with the launch rule, section 17); serving (LAN, discovery, WireGuard), the computer's rendezvous, the cloud share, a desktop manager's games, autostart, the stream (section 22). | all above |
 | `crates/agent` | The `droidtop-agent` command line: a thin host over the crates. | service and below |

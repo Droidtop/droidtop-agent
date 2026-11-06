@@ -1682,10 +1682,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "droidtop-agent-relay"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek 2.2.0",
+ "rand_core 0.6.4",
+ "sync-core",
+]
+
+[[package]]
 name = "droidtop-agent-service"
 version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",
+ "droidtop-agent-relay",
  "droidtop-agent-stream",
  "games-scan",
  "if-addrs",

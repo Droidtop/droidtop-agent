@@ -140,6 +140,14 @@ pub const COMMANDS: &[Command] = &[
         ]
     ),
     command!(
+        "relay",
+        network::relay,
+        [(
+            "relay [set <host[:port]> | off]",
+            "A droidtop-run relay (port 47615 unless given), for a paired device that\ncan't reach this computer directly: it forwards the WireGuard tunnel's\nencrypted packets and can't read them"
+        )]
+    ),
+    command!(
         "syncthing",
         network::syncthing,
         [(

@@ -86,6 +86,8 @@ pub fn run(agent: Arc<Agent>) -> std::io::Result<()> {
     if rendezvous_on.is_some() {
         crate::rendezvous::run(agent.clone());
     }
+    // A droidtop-run relay, when one is set, carries the same WireGuard to these sockets.
+    crate::relay::run(agent.clone());
     for (i, udp) in sockets.into_iter().enumerate() {
         let a = agent.clone();
         let stop = stop.clone();
