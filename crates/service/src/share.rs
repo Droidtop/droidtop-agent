@@ -1,9 +1,12 @@
 //! Store and forward through the person's own cloud share (docs/DESIGN.md
 //! section 10, transport 3): `droidtop-agent share set <folder>` names a
 //! folder their own sync tool (Drive, OneDrive, Dropbox, Nextcloud, a
-//! Syncthing folder they already run) carries to the handheld. Once a
-//! minute the running agent opens what paired devices left for it and
-//! leaves them the library changes they have not had.
+//! Syncthing folder they already run) carries to the handheld, and
+//! `droidtop-agent share webdav <url>` a WebDAV share both reach directly
+//! (crate::webdav, with the `webdav` feature). Once a minute the running
+//! agent opens what paired devices left for it and leaves them the library
+//! changes they have not had. Both kinds are a [`Share`], so the letters and
+//! their sealing are the same on either.
 
 use droidtop_agent_core::sync::LockExt;
 use std::fs;
@@ -14,35 +17,53 @@ use droidtop_agent_core::manifest::{self, FileEntry, Manifest};
 use droidtop_agent_core::proto::GameRef;
 use droidtop_agent_core::saves;
 use droidtop_agent_core::savesync::keep_copy;
+use droidtop_agent_core::share::{Folder, Share};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::Agent;
 
-pub fn process(agent: &Agent) -> Result<(), String> {
-    let Some(share) = agent.store.settings.locked().share.clone() else { return Ok(()) };
-    if !share.is_dir() {
-        return Err(format!("{} is not there", share.display()));
+/// The share set on this computer: the WebDAV share when there is one, else the folder.
+pub fn open(agent: &Agent) -> Result<Option<Box<dyn Share>>, String> {
+    #[cfg(feature = "webdav")]
+    if let Some(dav) = crate::webdav::current(agent).map_err(|e| format!("the WebDAV share's settings: {e}"))? {
+        return Ok(Some(Box::new(crate::webdav::connect(agent, &dav).map_err(|e| e.to_string())?)));
     }
-    let (letters, failed) = mailbox::collect(&share, &agent.store.key, |p| agent.store.is_trusted(p)).map_err(|e| e.to_string())?;
+    let Some(folder) = agent.store.settings.locked().share.clone() else { return Ok(None) };
+    if !folder.is_dir() {
+        return Err(format!("{} is not there", folder.display()));
+    }
+    Ok(Some(Box::new(Folder::new(folder))))
+}
+
+pub fn process(agent: &Agent) -> Result<(), String> {
+    let Some(share) = open(agent)? else { return Ok(()) };
+    process_with(agent, share.as_ref())
+}
+
+/// [`process`] on a share the caller opened.
+pub fn process_with(agent: &Agent, share: &dyn Share) -> Result<(), String> {
+    let (letters, failed) = mailbox::collect_via(share, &agent.store.key, |p| agent.store.is_trusted(p)).map_err(|e| e.to_string())?;
     for (path, why) in failed {
-        agent.events.warn("share", format!("Left {} in the share: {why}", path.display()), json!({ "path": path }));
+        agent.events.warn("share", format!("Left {path} in the share: {why}"), json!({ "path": path }));
     }
     for letter in letters {
         match mailbox::unpack(&letter.payload) {
-            Ok((envelope, contents)) => handle(agent, &share, &letter.from, envelope, contents),
+            Ok((envelope, contents)) => handle(agent, share, &letter.from, envelope, contents),
             Err(e) => agent.events.warn(
                 "share",
                 format!("A message from {} could not be read: {e}", agent.store.device_name(&letter.from)),
                 json!({ "peer": letter.from.to_hex() }),
             ),
         }
-        let _ = fs::remove_file(&letter.path);
+        if let Err(e) = share.remove(&letter.path) {
+            agent.events.warn("share", format!("Could not remove {} from the share: {e}", letter.path), json!({ "path": letter.path }));
+        }
     }
-    send_library(agent, &share)
+    send_library(agent, share)
 }
 
-fn handle(agent: &Agent, share: &std::path::Path, from: &PeerId, envelope: Envelope, contents: &[u8]) {
+fn handle(agent: &Agent, share: &dyn Share, from: &PeerId, envelope: Envelope, contents: &[u8]) {
     match envelope {
         Envelope::Library { changes } => {
             let changed = agent.store.edit_library(|lib| {
@@ -68,7 +89,7 @@ fn handle(agent: &Agent, share: &std::path::Path, from: &PeerId, envelope: Envel
                     agent.events.warn("saves", format!("Saves of {} from {sender} not taken: {reason}", game.title), detail);
                     let reply = Envelope::SavesRefused { game, reason };
                     if let Ok(payload) = mailbox::pack(&reply, &[]) {
-                        let _ = mailbox::post(share, &agent.store.key, from, &payload);
+                        let _ = mailbox::post_via(share, &agent.store.key, from, &payload);
                     }
                 }
             }
@@ -160,7 +181,7 @@ fn apply_saves(
 }
 
 /// Leaves each paired device the library changes it has not been sent.
-fn send_library(agent: &Agent, share: &std::path::Path) -> Result<(), String> {
+fn send_library(agent: &Agent, share: &dyn Share) -> Result<(), String> {
     let devices: Vec<String> = agent.store.devices_now().iter().map(|d| d.id.clone()).collect();
     for id in devices {
         let Ok(peer) = PeerId::from_hex(&id) else { continue };
@@ -177,7 +198,7 @@ fn send_library(agent: &Agent, share: &std::path::Path) -> Result<(), String> {
             continue;
         }
         let payload = mailbox::pack(&Envelope::Library { changes }, &[]).map_err(|e| e.to_string())?;
-        mailbox::post(share, &agent.store.key, &peer, &payload).map_err(|e| e.to_string())?;
+        mailbox::post_via(share, &agent.store.key, &peer, &payload).map_err(|e| e.to_string())?;
         agent.store.edit_library(|lib| {
             lib.cursors.entry(id).or_default().pushed = seq;
             ((), true)

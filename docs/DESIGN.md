@@ -816,6 +816,41 @@ share only ever sees ciphertext.
    both, is the next backend. Credentials for any share are the person's own,
    entered through droidtop's in-app sign-in helper and stored with
    `KeystoreSecretCipher`; nothing that authenticates ships in either program.
+   - **The agent's WebDAV share** (Droidtop/tracker#800):
+     `droidtop-agent share webdav <url> [--user <name>] [--allow-http]`, in
+     place of the folder (setting one clears the other). The letters, their
+     names and their sealing are the folder's: both are a lib-sync
+     `share::Share`, and the minute's pass (`crates/service/src/share.rs`)
+     runs over either.
+   - **One client, lib-net's.** The WebDAV client is `net-remote`'s
+     (Droidtop/lib-net, owner on #573: "Share client? That's be in lib-net"),
+     with default features off, so WebDAV only: PROPFIND to list, GET, PUT to
+     a temporary name then MOVE onto the letter's name so a reader never
+     takes half of one, DELETE (after a PROPFIND that refuses a folder) and
+     MKCOL. The agent has no client of its own.
+   - **No conditional requests are needed for letters.** Every letter is
+     written once under a name nobody else makes (sender, time, a random
+     tag) and removed only by its recipient after opening it, so two writers
+     never race for one name and a delete never takes a newer version.
+     `If-Match`/`If-None-Match` would matter for a file both sides rewrite;
+     a later backend use that needs them adds them in net-remote.
+   - **Adapter here, for now.** lib-sync v0.1.7 has the same
+     `net-remote`-to-`Share` adapter, but lib-saves, lib-plugins and lib-games
+     pin lib-sync v0.1.6, and two lib-syncs in one build are two copies of
+     its types. So the service carries the 30-line adapter
+     (`webdav::RemoteShare`) until those move, then uses lib-sync's.
+   - **Rust 1.85 holds for Pythia.** lib-net needs 1.89, so WebDAV is the
+     service's optional `webdav` feature: the agent and the app turn it on,
+     Pythia's crates (`python`, the service alone) do not.
+   - **The password, sealed to the computer's own key** (owner, 2026-11-06):
+     the agent has no keystore of its own, so `webdav.json` (the address and
+     user name, owner-only permissions) holds the password only as a
+     mailbox-sealed blob from the device key to itself. The file can be
+     backed up or shown without giving the password away, another identity
+     cannot open it, and nothing prints or logs it. Its limit, in plain
+     words: whoever can read the device key itself can open it. The password
+     is read from standard input, never the command line, where other
+     programs and the shell history see it.
 4. **A droidtop-run relay**, on the server VM (#364): a DERP-style
    relay that forwards ciphertext between two keys. Only as a fallback, and
    never a community-run one. Built in Droidtop/tracker#800 as

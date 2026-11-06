@@ -15,6 +15,11 @@ rust-version = "1.85"
 droidtop-agent-core = { package = "sync-core", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
 droidtop-agent-store = { package = "sync-store", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
 droidtop-agent-pair = { package = "sync-pair", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
+# lib-net's share client, for store and forward through a WebDAV share (docs/DESIGN.md section 10,
+# transport 3; Droidtop/tracker#800). WebDAV only: no SFTP (russh) in the agent until it uses it. It needs
+# Rust 1.89, so only the service's optional `webdav` feature takes it, which the agent and the app turn
+# on and Pythia's crates do not: the 1.85 floor holds for them.
+net-remote = { git = "https://github.com/Droidtop/lib-net", tag = "v0.2.4", default-features = false }
 # The Rust 1.85 releases (Droidtop/tracker#867). games-scan by rev ee121ab, the commit tagged lib-games v0.3.1,
 # because lib-saves v0.2.1 names it by that rev and cargo counts a rev and a tag as two sources; it becomes
 # tag = "v0.3.1" with the next lib-saves that names the tag.

@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 droidtop-agent-core.workspace = true
-droidtop-agent-service = { path = "../service" }
+droidtop-agent-service = { path = "../service", features = ["webdav"] }
 droidtop-agent-store.workspace = true
 droidtop-agent-saves.workspace = true
 droidtop-agent-pair.workspace = true

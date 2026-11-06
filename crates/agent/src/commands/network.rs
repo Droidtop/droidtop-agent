@@ -7,7 +7,7 @@ use std::sync::Arc;
 use droidtop_agent_contexts as contexts;
 use droidtop_agent_core::sync::LockExt;
 use droidtop_agent_service::{
-    autostart, host, relay as service_relay, rendezvous as service_rendezvous, serve, syncthing as service_syncthing, Agent,
+    autostart, host, relay as service_relay, rendezvous as service_rendezvous, serve, syncthing as service_syncthing, webdav, Agent,
 };
 use droidtop_agent_store::read_json;
 
@@ -23,6 +23,11 @@ pub fn run(agent: &Arc<Agent>, args: &[&str]) -> Result<(), String> {
 pub fn share(agent: &Arc<Agent>, args: &[&str]) -> Result<(), String> {
     match args {
         [] => {
+            if let Some(dav) = webdav::current(agent).map_err(|e| e.to_string())? {
+                let user = dav.user.as_deref().map(|u| format!(", signed in as {u}")).unwrap_or_default();
+                println!("WebDAV share {}{user}", dav.url);
+                return Ok(());
+            }
             match &agent.store.settings.locked().share {
                 Some(s) => println!("{}", s.display()),
                 None => println!("No share is set."),
@@ -34,11 +39,43 @@ pub fn share(agent: &Arc<Agent>, args: &[&str]) -> Result<(), String> {
             if !path.is_dir() {
                 return Err(format!("{} is not a folder.", path.display()));
             }
+            webdav::clear(agent).map_err(|e| e.to_string())?;
             change(agent, |s| s.share = Some(path))
         }
-        ["clear"] => change(agent, |s| s.share = None),
+        ["webdav", url, rest @ ..] => {
+            let (mut user, mut allow_plain_http) = (None, false);
+            let mut rest = rest.iter();
+            while let Some(arg) = rest.next() {
+                match *arg {
+                    "--user" => user = Some(*rest.next().ok_or_else(|| usage("share"))?),
+                    "--allow-http" => allow_plain_http = true,
+                    _ => return Err(usage("share")),
+                }
+            }
+            // The password comes from standard input, never the command line, where other
+            // programs and the shell's history can see it.
+            let password = match user {
+                Some(u) => Some(read_password(u)?),
+                None => None,
+            };
+            webdav::set(agent, url, user, password.as_deref(), allow_plain_http).map_err(|e| e.to_string())?;
+            change(agent, |s| s.share = None)?;
+            println!("The WebDAV share is set; the agent checks it once a minute.");
+            Ok(())
+        }
+        ["clear"] => {
+            webdav::clear(agent).map_err(|e| e.to_string())?;
+            change(agent, |s| s.share = None)
+        }
         _ => Err(usage("share")),
     }
+}
+
+fn read_password(user: &str) -> Result<String, String> {
+    eprint!("Password for {user} (one line from standard input): ");
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
 pub fn contexts(agent: &Arc<Agent>, args: &[&str]) -> Result<(), String> {

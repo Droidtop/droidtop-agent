@@ -18,5 +18,7 @@ pub mod serve;
 pub mod share;
 pub mod sharing;
 pub mod syncthing;
+#[cfg(feature = "webdav")]
+pub mod webdav;
 
 pub use agent::{scan_options, Agent, SavePlan};

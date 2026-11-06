@@ -97,7 +97,10 @@ pub const COMMANDS: &[Command] = &[
     command!(
         "share",
         network::share,
-        [("share [set <folder> | clear]", "A folder your own sync tool carries to the handheld,\nused when the two are never online together")]
+        [
+            ("share [set <folder> | clear]", "A folder your own sync tool carries to the handheld,\nused when the two are never online together"),
+            ("share webdav <url> [--user <name>] [--allow-http]", "A WebDAV share both reach directly instead (Nextcloud,\nownCloud, a NAS); the password is read from standard\ninput and kept sealed to this computer's key"),
+        ]
     ),
     command!(
         "contexts",

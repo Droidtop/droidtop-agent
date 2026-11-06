@@ -11,7 +11,13 @@ rust-version.workspace = true
 name = "droidtop_agent_service"
 path = "src/lib.rs"
 
+[features]
+# Store and forward through a WebDAV share (src/webdav.rs), over lib-net's share client. Off by default
+# because lib-net needs Rust 1.89 and Pythia's build holds 1.85; the agent and the app turn it on.
+webdav = ["dep:net-remote"]
+
 [dependencies]
+net-remote = { workspace = true, optional = true }
 droidtop-agent-core.workspace = true
 droidtop-agent-contexts.workspace = true
 droidtop-agent-saves.workspace = true
