@@ -6,6 +6,8 @@ release carries until its number is written in.
 
 ## Unreleased
 
+- On lib-sync 0.2 (Droidtop/tracker#573), with lib-games 0.4, lib-saves 0.3 and lib-plugins 0.3, the libraries' lib-sync 0.2
+  releases. Nothing in the agent changes; its crates build unchanged against them.
 - A game streams from away through the agent's own WireGuard tunnel (Droidtop/tracker#113, docs/DESIGN.md section
   22): on Windows, the embedded windowcast host serves a handheld over the tunnel's side link (signaling) and its
   datagrams (media), with windowcast's `serve_over`. The handheld's half, in droidtop's library, is next.

@@ -12,20 +12,20 @@ rust-version = "1.85"
 [workspace.dependencies]
 # The shared libraries (Droidtop/tracker#867): each a repository of its own that belongs to no program,
 # pinned here by tag. Their crates keep the names this workspace's code imports them by.
-droidtop-agent-core = { package = "sync-core", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
-droidtop-agent-store = { package = "sync-store", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
-droidtop-agent-pair = { package = "sync-pair", git = "https://github.com/Droidtop/lib-sync", tag = "v0.1.6" }
+droidtop-agent-core = { package = "sync-core", git = "https://github.com/Droidtop/lib-sync", tag = "v0.2.0" }
+droidtop-agent-store = { package = "sync-store", git = "https://github.com/Droidtop/lib-sync", tag = "v0.2.0" }
+droidtop-agent-pair = { package = "sync-pair", git = "https://github.com/Droidtop/lib-sync", tag = "v0.2.0" }
 # lib-net's share client, for store and forward through a WebDAV share (docs/DESIGN.md section 10,
 # transport 3; Droidtop/tracker#800). WebDAV only: no SFTP (russh) in the agent until it uses it. It needs
 # Rust 1.89, so only the service's optional `webdav` feature takes it, which the agent and the app turn
 # on and Pythia's crates do not: the 1.85 floor holds for them.
 net-remote = { git = "https://github.com/Droidtop/lib-net", tag = "v0.2.4", default-features = false }
-# The Rust 1.85 releases (Droidtop/tracker#867). games-scan by rev ee121ab, the commit tagged lib-games v0.3.1,
-# because lib-saves v0.2.1 names it by that rev and cargo counts a rev and a tag as two sources; it becomes
-# tag = "v0.3.1" with the next lib-saves that names the tag.
-droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", rev = "ee121ab997b76c3f24951aae6ffe49d670d822da" }
-droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", tag = "v0.2.1" }
-droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", tag = "v0.2.2" }
+# The lib-sync 0.2 releases (Droidtop/tracker#573): lib-games 0.4, lib-saves 0.3, lib-plugins 0.3. Each is named by the
+# rev of its ci/lib-sync-02 commit until that library lands and CI tags it; then by its tag. lib-saves names games-scan
+# the same way, and cargo counts a rev and a tag as two sources, so the two move together.
+droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", rev = "effbc9c7bfbd2365f1192ccbe7e1bb58289679a3" }
+droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", rev = "32661d006bb65c5de56d1f0e20408b824eb4241c" }
+droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", rev = "ecd7a6c298fb95e6d7bae0f374426cf775975542" }
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
 # this workspace is too.
