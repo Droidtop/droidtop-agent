@@ -2501,7 +2501,7 @@ dependencies = [
 [[package]]
 name = "games-scan"
 version = "0.4.0"
-source = "git+https://github.com/Droidtop/lib-games?rev=e142335ac34d605eb072565e8278bc3a32afe46c#e142335ac34d605eb072565e8278bc3a32afe46c"
+source = "git+https://github.com/Droidtop/lib-games?tag=v0.4.0#e142335ac34d605eb072565e8278bc3a32afe46c"
 dependencies = [
  "dirs 5.0.1",
  "engines-detect",
@@ -5554,7 +5554,7 @@ dependencies = [
 [[package]]
 name = "plugins-contexts"
 version = "0.3.0"
-source = "git+https://github.com/Droidtop/lib-plugins?rev=fd6dec87d5de7650ddff0a325b89b9fb1c7c7e94#fd6dec87d5de7650ddff0a325b89b9fb1c7c7e94"
+source = "git+https://github.com/Droidtop/lib-plugins?tag=v0.3.0#fd6dec87d5de7650ddff0a325b89b9fb1c7c7e94"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
@@ -6884,7 +6884,7 @@ checksum = "c62751faa8bc286982334a082fe125184a29fc89d17775766e4f891b7d726980"
 [[package]]
 name = "saves-locate"
 version = "0.3.0"
-source = "git+https://github.com/Droidtop/lib-saves?rev=53dca8bb6595491d3d1c826e1076ba4ceb5cf887#53dca8bb6595491d3d1c826e1076ba4ceb5cf887"
+source = "git+https://github.com/Droidtop/lib-saves?rev=61af4353e9b02e5ea433a9c0d486f0205d643543#61af4353e9b02e5ea433a9c0d486f0205d643543"
 dependencies = [
  "dirs 5.0.1",
  "flate2",

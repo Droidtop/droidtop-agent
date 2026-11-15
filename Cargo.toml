@@ -24,9 +24,9 @@ net-remote = { git = "https://github.com/Droidtop/lib-net", tag = "v0.2.6", defa
 # The lib-sync 0.2 releases (Droidtop/tracker#573): lib-games 0.4, lib-saves 0.3, lib-plugins 0.3. Each is named by the
 # rev of its ci/lib-sync-02 commit until that library lands and CI tags it; then by its tag. lib-saves names games-scan
 # the same way, and cargo counts a rev and a tag as two sources, so the two move together.
-droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", rev = "e142335ac34d605eb072565e8278bc3a32afe46c" }
-droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", rev = "53dca8bb6595491d3d1c826e1076ba4ceb5cf887" }
-droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", rev = "fd6dec87d5de7650ddff0a325b89b9fb1c7c7e94" }
+droidtop-agent-scan = { package = "games-scan", git = "https://github.com/Droidtop/lib-games", tag = "v0.4.0" }
+droidtop-agent-saves = { package = "saves-locate", git = "https://github.com/Droidtop/lib-saves", rev = "61af4353e9b02e5ea433a9c0d486f0205d643543" }
+droidtop-agent-contexts = { package = "plugins-contexts", git = "https://github.com/Droidtop/lib-plugins", tag = "v0.3.0" }
 # windowcast's device identity and pairing, used as they are (docs/DESIGN.md
 # section 3). Pinned by commit; both crates are GPL-3.0-only, which is why
 # this workspace is too.
