@@ -6,8 +6,10 @@ release carries until its number is written in.
 
 ## Unreleased
 
-- On lib-sync 0.2 (Droidtop/tracker#573), with lib-games 0.4, lib-saves 0.3 and lib-plugins 0.3, the libraries' lib-sync 0.2
-  releases. Nothing in the agent changes; its crates build unchanged against them.
+- On lib-sync 0.2.1 (Droidtop/tracker#573), with lib-games 0.4, lib-saves 0.3 and lib-plugins 0.3, the libraries' lib-sync
+  0.2 releases, and lib-net v0.2.6 for the WebDAV share. Rust 1.91 is the oldest the workspace builds with (was 1.85, the
+  window 1.88): the newest versioned rustc in Ubuntu's noble-updates and jammy-updates, which Pythia builds with (owner,
+  2026-11-12). The lock takes the newest compatible version of every dependency.
 - A game streams from away through the agent's own WireGuard tunnel (Droidtop/tracker#113, docs/DESIGN.md section
   22): on Windows, the embedded windowcast host serves a handheld over the tunnel's side link (signaling) and its
   datagrams (media), with windowcast's `serve_over`. The handheld's half, in droidtop's library, is next.

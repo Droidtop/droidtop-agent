@@ -12,8 +12,8 @@ name = "droidtop_agent_service"
 path = "src/lib.rs"
 
 [features]
-# Store and forward through a WebDAV share (src/webdav.rs), over lib-net's share client. Off by default
-# because lib-net needs Rust 1.89 and Pythia's build holds 1.85; the agent and the app turn it on.
+# Store and forward through a WebDAV share (src/webdav.rs), over lib-net's share client. Off by default, so
+# Pythia's build does not take lib-net; the agent and the app turn it on.
 webdav = ["dep:net-remote"]
 
 [dependencies]
