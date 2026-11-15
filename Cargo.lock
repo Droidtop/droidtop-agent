@@ -6884,7 +6884,7 @@ checksum = "c62751faa8bc286982334a082fe125184a29fc89d17775766e4f891b7d726980"
 [[package]]
 name = "saves-locate"
 version = "0.3.0"
-source = "git+https://github.com/Droidtop/lib-saves?rev=61af4353e9b02e5ea433a9c0d486f0205d643543#61af4353e9b02e5ea433a9c0d486f0205d643543"
+source = "git+https://github.com/Droidtop/lib-saves?tag=v0.3.0#61af4353e9b02e5ea433a9c0d486f0205d643543"
 dependencies = [
  "dirs 5.0.1",
  "flate2",
