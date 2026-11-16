@@ -113,7 +113,7 @@ impl Frame {
         Ok(match head[0] {
             CHALLENGE if len == 32 => Frame::Challenge(body.try_into().expect("32 bytes")),
             HELLO if len == 96 => Frame::Hello { key: id(&body[..32]), signature: body[32..].try_into().expect("64 bytes") },
-            ALLOW if len % 32 == 0 => Frame::Allow(body.chunks(32).map(id).collect()),
+            ALLOW if len.is_multiple_of(32) => Frame::Allow(body.chunks(32).map(id).collect()),
             SEND if len >= 36 => Frame::Send {
                 to: id(&body[..32]),
                 flow: u32::from_be_bytes(body[32..36].try_into().expect("4")),
